@@ -43,6 +43,49 @@ afterEach(() => {
 })
 
 describe('desktop external plugin profile', () => {
+  it('enables the curated offline-shipped bundles for a new Desktop profile', async () => {
+    const { manager } = setup()
+    await manager.applyRelease()
+    const manifest = JSON.parse(readFileSync(join(manager.paths.profile, 'package.json'), 'utf8')) as {
+      dependencies: Record<string, string>
+      dsh: { profile: { bundles: string[] } }
+    }
+    const bundles = [
+      '@deepseek-ai/dsh-base',
+      '@deepseek-ai/dsh-web-app',
+      '@deepseek-ai/dsh-experimental-agent-team-profile',
+      '@deepseek-ai/dsh-experimental-auto-review',
+      '@deepseek-ai/dsh-experimental-session-search',
+      '@deepseek-ai/dsh-experimental-plugin-market-bundle',
+      '@deepseek-ai/dsh-experimental-session-titles-bundle',
+      '@deepseek-ai/dsh-personalized-recommendations',
+      '@deepseek-ai/dsh-experimental-tool-worktree',
+      '@deepseek-ai/dsh-experimental-forge-bundle',
+      '@deepseek-ai/dsh-experimental-inspector-profile',
+    ]
+    expect(manifest.dsh.profile.bundles).toEqual(bundles)
+    expect(manifest.dependencies).toEqual({})
+    const cli = JSON.parse(readFileSync(new URL('../../cli/package.json', import.meta.url), 'utf8')) as {
+      dependencies: Record<string, string>
+    }
+    for (const bundle of bundles) expect(cli.dependencies).toHaveProperty(bundle)
+  })
+
+  it('keeps a disabled curated bundle off after later launches', async () => {
+    const { manager } = setup()
+    await manager.applyRelease()
+    const path = join(manager.paths.profile, 'package.json')
+    const manifest = JSON.parse(readFileSync(path, 'utf8')) as {
+      dsh: { profile: { bundles: string[] } }
+    }
+    manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter(
+      name => name !== '@deepseek-ai/dsh-experimental-auto-review',
+    )
+    writeFileSync(path, JSON.stringify(manifest))
+    await manager.applyRelease()
+    expect(readFileSync(path, 'utf8')).toBe(JSON.stringify(manifest))
+  })
+
   it('preserves installed packages, profile state, and the lockfile when preparing a launch', async () => {
     const { manager } = setup()
     await manager.applyRelease()
@@ -120,8 +163,7 @@ describe('desktop external plugin profile', () => {
       dsh: { profile: { bundles: string[] } }
     }
     expect(manifest.dependencies.plugin).toBe('1.0.0')
-    expect(manifest.dsh.profile.bundles).not.toContain('plugin')
-    expect(manifest.dsh.profile.bundles).toContain('@deepseek-ai/dsh-web-app')
+    expect(manifest.dsh.profile.bundles).toEqual(['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'])
     await manager.applyRelease()
     expect(readFileSync(patch, 'utf8')).toContain('[]')
   })
