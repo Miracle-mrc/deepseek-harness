@@ -681,6 +681,38 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'cloudConnections',
+    summary: 'Owns short-lived local OAuth callbacks and MCP tool registration.',
+    description: 'Owns short-lived local OAuth callbacks and MCP tool registration. It starts without connecting to either cloud service, even when bundled by Desktop.',
+    methods: [
+      {
+        signature: '@Remote async list(): Promise<CloudConnectionView[]>',
+        description: 'Current connection facts, including tool-level selection after OAuth.',
+        parameters: [],
+        returns: 'Credential-free provider status and available tool selections.',
+        throws: ['If the owning plugin is stopping.'],
+      },
+      {
+        signature: '@Remote async start(providerId: string, awsRegion: string): Promise<CloudSignIn>',
+        description: 'Begin a browser OAuth grant. The browser URL is returned without waiting for login; the loopback callback completes the attempt asynchronously.',
+        parameters: [{ name: 'providerId', description: 'AWS or Supabase.' }, { name: 'awsRegion', description: 'Region of the AWS-managed MCP endpoint.' }],
+        returns: 'Browser authorization page.',
+      },
+      {
+        signature: '@Remote async confirm(providerId: string, selected: string[]): Promise<CloudConnectionView[]>',
+        description: 'Confirm the selected subset of tools after OAuth. Tool names not offered by the connected MCP server are refused; no IAM/database privilege is granted by toggling a tool here.',
+        parameters: [{ name: 'providerId', description: 'Provider to enable.' }, { name: 'selected', description: 'Model-visible raw MCP tool names.' }],
+        returns: 'Updated connection facts.',
+      },
+      {
+        signature: '@Remote async disconnect(providerId: string): Promise<CloudConnectionView[]>',
+        description: 'Remove the local OAuth grant and every associated model tool. External token revocation is controlled by the identity provider, not this action.',
+        parameters: [{ name: 'providerId', description: 'Provider to disconnect.' }],
+        returns: 'Updated connection facts.',
+      },
+    ],
+  },
+  {
     key: 'commands',
     summary: 'Human-command registry.',
     description: 'Human-command registry. Plain-context definitions are global; definitions registered through a command-injected child of an agent context shadow globals for that agent.',
@@ -5714,6 +5746,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ClientArtifactBaseline',
     declaration: 'export interface ClientArtifactBaseline {\n    readonly path: string;\n    readonly mtimeMs: number;\n    readonly ctimeMs: number;\n    readonly size: number;\n}',
+  },
+  {
+    name: 'CloudConnectionView',
+    declaration: 'export interface CloudConnectionView {\n    provider: CloudProvider;\n    status: \'not-connected\' | \'authorizing\' | \'choose-permissions\' | \'connected\' | \'failed\';\n    tools: Array<{\n        name: string;\n        description: string;\n    }>;\n    enabledTools: string[];\n    error?: string;\n}',
+  },
+  {
+    name: 'CloudProvider',
+    declaration: 'export type CloudProvider = \'aws\' | \'supabase\';',
+  },
+  {
+    name: 'CloudSignIn',
+    declaration: 'export interface CloudSignIn {\n    url: string;\n}',
   },
   {
     name: 'CollectedOutput',

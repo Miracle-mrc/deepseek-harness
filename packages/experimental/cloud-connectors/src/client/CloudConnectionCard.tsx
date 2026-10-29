@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CloudConnectionView } from '../types.ts'
-import type { CloudProvider } from '../catalog.ts'
+import { AWS_MCP_REGIONS, type CloudProvider } from '../catalog.ts'
 import { defaultToolSelection, permissionCategory } from '../consent.ts'
 import { NS } from './locales.ts'
 import css from './CloudConnectionCard.module.css'
@@ -29,7 +29,7 @@ export type CloudConnectionCardProps = PropsRuntime<'plugins.item'>
 
 /**
  * Render a connection which remains disabled until browser login AND tool approval.
- * Selecting all only checks tool boxes; it cannot extend provider-side IAM/RLS.
+ * Selecting all only checks tool boxes; it cannot extend provider-side permissions.
  */
 export function CloudConnectionCard(props: CloudConnectionCardProps) {
   const { provider, actions, t } = props
@@ -40,13 +40,19 @@ export function CloudConnectionCard(props: CloudConnectionCardProps) {
   const [error, setError] = useState('')
   const [pendingLink, setPendingLink] = useState('')
   const toolsKey = useRef('')
+  const readSequence = useRef(0)
+  const appliedSequence = useRef(0)
+  const actionInFlight = useRef(false)
 
   useEffect(() => {
     let live = true
     const refresh = async () => {
+      if (actionInFlight.current) return
+      const sequence = ++readSequence.current
       try {
         const all = await actions.list()
-        if (!live) return
+        if (!live || sequence <= appliedSequence.current) return
+        appliedSequence.current = sequence
         const current = all.find(item => item.provider === provider)
         if (current === undefined) return
         setConnection(current)
@@ -61,7 +67,10 @@ export function CloudConnectionCard(props: CloudConnectionCardProps) {
           toolsKey.current = ''
         }
       } catch {
-        if (live) setError(t('loadError'))
+        if (live && sequence > appliedSequence.current) {
+          appliedSequence.current = sequence
+          setError(t('loadError'))
+        }
       }
     }
     void refresh()
@@ -75,36 +84,62 @@ export function CloudConnectionCard(props: CloudConnectionCardProps) {
   const elevated = connection?.tools.filter(tool => permissionCategory(provider, tool.name) !== 'other') ?? []
   const elevatedNames = elevated.map(tool => tool.name)
   const elevatedEnabled = elevatedNames.every(name => selected.includes(name))
-  const signIn = () => {
-    // Opening a blank tab in this user gesture avoids browser popup blocking.
-    const tab = window.open('about:blank', '_blank')
-    if (tab !== null) tab.opener = null
+  const beginAction = () => {
+    if (actionInFlight.current) return false
+    actionInFlight.current = true
+    // A command supersedes reads issued before it, including delayed failures.
+    appliedSequence.current = ++readSequence.current
     setError('')
     setWorking(true)
+    return true
+  }
+  const finishAction = () => {
+    appliedSequence.current = ++readSequence.current
+    actionInFlight.current = false
+    setWorking(false)
+  }
+  const signIn = () => {
+    if (!beginAction()) return
+    toolsKey.current = ''
+    // Reserve a Web popup in this gesture; Desktop deliberately denies blank tabs.
+    const tab = window.open('about:blank', '_blank')
+    if (tab !== null) tab.opener = null
+    setPendingLink('')
     void actions.start(provider, region).then(({ url }) => {
+      // The URL crosses the Host wire boundary before entering a browser surface.
+      const target = new URL(url)
+      if (target.protocol !== 'https:' || target.username || target.password) {
+        throw new Error('Invalid authorization URL')
+      }
       setPendingLink(url)
-      if (tab !== null && !tab.closed) tab.location.replace(url)
+      if (tab !== null) {
+        // A user-closed popup stays closed; the manual link remains available.
+        if (!tab.closed) tab.location.replace(url)
+      } else {
+        // Desktop sends HTTP(S) window opens to its existing system-browser handler.
+        // A Web popup blocker may also return null, so retain the manual link.
+        window.open(url, '_blank', 'noopener,noreferrer')
+      }
     }).catch(() => {
       if (tab !== null && !tab.closed) tab.close()
       setError(t('connectError'))
-    }).finally(() => { setWorking(false) })
+    }).finally(finishAction)
   }
   const confirm = () => {
-    setWorking(true)
-    setError('')
+    if (!beginAction()) return
     void actions.confirm(provider, selected).then((all) => {
       setConnection(all.find(item => item.provider === provider))
       setPendingLink('')
-    }).catch(() => { setError(t('confirmError')) }).finally(() => { setWorking(false) })
+    }).catch(() => { setError(t('confirmError')) }).finally(finishAction)
   }
   const disconnect = () => {
-    setWorking(true)
-    setError('')
+    if (!beginAction()) return
     void actions.disconnect(provider).then((all) => {
       setConnection(all.find(item => item.provider === provider))
       setPendingLink('')
+      toolsKey.current = ''
       setSelected([])
-    }).catch(() => { setError(t('disconnectError')) }).finally(() => { setWorking(false) })
+    }).catch(() => { setError(t('disconnectError')) }).finally(finishAction)
   }
 
   return (
@@ -114,11 +149,7 @@ export function CloudConnectionCard(props: CloudConnectionCardProps) {
       {provider === 'aws' && status === 'not-connected' && (
         <label className={css.field}>{t('awsRegion')}
           <select value={region} onChange={(event) => { setRegion(event.target.value) }}>
-            <option value="us-east-1">US East (N. Virginia)</option>
-            <option value="us-west-2">US West (Oregon)</option>
-            <option value="ap-southeast-1">Asia Pacific (Singapore)</option>
-            <option value="ap-southeast-2">Asia Pacific (Sydney)</option>
-            <option value="ap-northeast-1">Asia Pacific (Tokyo)</option>
+            {AWS_MCP_REGIONS.map(value => <option key={value} value={value}>{t(`region.${value}`)}</option>)}
           </select>
         </label>
       )}
@@ -133,6 +164,7 @@ export function CloudConnectionCard(props: CloudConnectionCardProps) {
         <div className={css.permissions}>
           <h3>{t('permissionsTitle')}</h3>
           <p>{t('permissionsHint')}</p>
+          <p>{t(provider === 'aws' ? 'awsToolsHint' : 'supabaseToolsHint')}</p>
           {elevatedNames.length > 0 && (
             <label className={css.tool}>
               <input type="checkbox" checked={elevatedEnabled} onChange={(event) => {

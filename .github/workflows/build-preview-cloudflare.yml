@@ -1,7 +1,8 @@
 name: Build PR preview
 
-# Every push to a pull request publishes that pull request's preview to
-# Cloudflare Pages under its own branch alias, behind Cloudflare Access. The
+# Upstream pushes publish the pull request's preview to Cloudflare Pages under
+# its own branch alias, behind Cloudflare Access. The personal fork retains the
+# required build without publishing to the inherited upstream project. The
 # upload carries build products only: the workflow never grants the deployment
 # platform access to this repository's sources. This lane also owns the
 # aggregate test and script type checks that the required Linux consumers no
@@ -99,6 +100,7 @@ jobs:
           cp apps/web/dist/preview.html apps/web/dist/index.html
 
       - name: Upload to Cloudflare Pages
+        if: github.repository != 'Miracle-mrc/deepseek-harness'
         id: upload
         continue-on-error: true
         env:
@@ -125,6 +127,7 @@ jobs:
       # Accept-Encoding is sent because a browser sends it; the assertion is
       # about what the platform does with a body that is already compressed.
       - name: Verify the protected deployment serves the image
+        if: github.repository != 'Miracle-mrc/deepseek-harness'
         id: verify
         continue-on-error: true
         env:
@@ -166,6 +169,7 @@ jobs:
       # idempotent: a pull request opened before this workflow existed never
       # sees an `opened` event, and every later push must not restate the URL.
       - name: Comment the preview URL
+        if: github.repository != 'Miracle-mrc/deepseek-harness'
         id: comment
         continue-on-error: true
         env:

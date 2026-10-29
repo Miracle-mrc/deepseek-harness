@@ -33,6 +33,8 @@ MCP 服务器需要主动配置。在目标 Cordis 作用域中，为每台服�
 
 协议协商遵循 SDK 支持的修订版；产品没有强制指定协议修订版的设置。[配置目录](../config-catalog.zh.md#deepseek-aidsh-mcp-client) 列出客户端接受的字段和默认值。
 
+可选的[云服务连接包](../../packages/experimental/cloud-connectors/README.zh.md)为固定的 AWS 和 Supabase 端点提供独立的 `ctx.cloudConnections` 服务。它负责浏览器 OAuth、设备本地授权和显式的逐工具确认，不配置通用 MCP 客户端，也不发布共享资源工具。其连接状态与浏览器跳转类型由包 README 维护。
+
 -----
 
 <a id="responsibilities-and-scope"></a>
@@ -118,6 +120,50 @@ interface McpResourceProvider {
 ## Cordis API
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.zh.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
+
+<a id="ctxcloudconnections--cloudconnections"></a>
+
+### `ctx.cloudConnections` — `CloudConnections`
+
+Owns short-lived local OAuth callbacks and MCP tool registration. It starts without connecting to either cloud service, even when bundled by Desktop.
+
+```ts cordis-catalog
+/**
+ * Current connection facts, including tool-level selection after OAuth.
+ * @returns Credential-free provider status and available tool selections.
+ * @throws If the owning plugin is stopping.
+ */
+@Remote async list(): Promise<CloudConnectionView[]>
+
+/**
+ * Begin a browser OAuth grant. The browser URL is returned without waiting
+ * for login; the loopback callback completes the attempt asynchronously.
+ * @param providerId - AWS or Supabase.
+ * @param awsRegion - Region of the AWS-managed MCP endpoint.
+ * @returns Browser authorization page.
+ */
+@Remote async start(providerId: string, awsRegion: string): Promise<CloudSignIn>
+
+/**
+ * Confirm the selected subset of tools after OAuth. Tool names not offered
+ * by the connected MCP server are refused; no IAM/database privilege is
+ * granted by toggling a tool here.
+ * @param providerId - Provider to enable.
+ * @param selected - Model-visible raw MCP tool names.
+ * @returns Updated connection facts.
+ */
+@Remote async confirm(providerId: string, selected: string[]): Promise<CloudConnectionView[]>
+
+/**
+ * Remove the local OAuth grant and every associated model tool. External
+ * token revocation is controlled by the identity provider, not this action.
+ * @param providerId - Provider to disconnect.
+ * @returns Updated connection facts.
+ */
+@Remote async disconnect(providerId: string): Promise<CloudConnectionView[]>
+```
+
+Source: [`packages/experimental/cloud-connectors/src/index.ts`](../../packages/experimental/cloud-connectors/src/index.ts)
 
 <a id="ctxmcpresources--mcpresourceruntime"></a>
 

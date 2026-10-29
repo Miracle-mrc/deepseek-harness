@@ -33,6 +33,8 @@ MCP servers are opt-in. Configure one `@deepseek-ai/dsh-mcp-client` entry per se
 
 Protocol negotiation follows the SDK's supported revisions; there is no product setting that forces a protocol revision. The [configuration catalog](../config-catalog.md#deepseek-aidsh-mcp-client) lists accepted client fields and defaults.
 
+The optional [cloud connectors package](../../packages/experimental/cloud-connectors/README.md) provides a separate `ctx.cloudConnections` service for the fixed AWS and Supabase endpoints. It owns browser OAuth, device-local grants and explicit per-tool confirmation; it does not configure general MCP clients or publish the shared resource tools. The package README owns its connection-state and browser-handoff types.
+
 -----
 
 <a id="responsibilities-and-scope"></a>
@@ -118,6 +120,50 @@ MCP prompt templates, human-input elicitation, task-based execution, and resourc
 ## Cordis API
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
+
+<a id="ctxcloudconnections--cloudconnections"></a>
+
+### `ctx.cloudConnections` — `CloudConnections`
+
+Owns short-lived local OAuth callbacks and MCP tool registration. It starts without connecting to either cloud service, even when bundled by Desktop.
+
+```ts cordis-catalog
+/**
+ * Current connection facts, including tool-level selection after OAuth.
+ * @returns Credential-free provider status and available tool selections.
+ * @throws If the owning plugin is stopping.
+ */
+@Remote async list(): Promise<CloudConnectionView[]>
+
+/**
+ * Begin a browser OAuth grant. The browser URL is returned without waiting
+ * for login; the loopback callback completes the attempt asynchronously.
+ * @param providerId - AWS or Supabase.
+ * @param awsRegion - Region of the AWS-managed MCP endpoint.
+ * @returns Browser authorization page.
+ */
+@Remote async start(providerId: string, awsRegion: string): Promise<CloudSignIn>
+
+/**
+ * Confirm the selected subset of tools after OAuth. Tool names not offered
+ * by the connected MCP server are refused; no IAM/database privilege is
+ * granted by toggling a tool here.
+ * @param providerId - Provider to enable.
+ * @param selected - Model-visible raw MCP tool names.
+ * @returns Updated connection facts.
+ */
+@Remote async confirm(providerId: string, selected: string[]): Promise<CloudConnectionView[]>
+
+/**
+ * Remove the local OAuth grant and every associated model tool. External
+ * token revocation is controlled by the identity provider, not this action.
+ * @param providerId - Provider to disconnect.
+ * @returns Updated connection facts.
+ */
+@Remote async disconnect(providerId: string): Promise<CloudConnectionView[]>
+```
+
+Source: [`packages/experimental/cloud-connectors/src/index.ts`](../../packages/experimental/cloud-connectors/src/index.ts)
 
 <a id="ctxmcpresources--mcpresourceruntime"></a>
 

@@ -14,8 +14,11 @@ export interface OAuthCallback {
 
 /** Bound, single-use local HTTP listener for one OAuth attempt. */
 export class OAuthLoopback {
+  /** Random state required before accepting a callback for this attempt. */
   readonly state = randomUUID()
+  /** Exact loopback redirect URI to register with the OAuth provider. */
   readonly url: string
+  /** One verified response; rejects on provider refusal or cancellation. */
   readonly result: Promise<OAuthCallback>
   private readonly server: Server
   private settle!: (callback: OAuthCallback) => void
@@ -32,7 +35,12 @@ export class OAuthLoopback {
     })
   }
 
-  /** Bind the callback on a random loopback port, never on a public interface. */
+  /**
+   * Bind the callback on a random loopback port, never on a public interface.
+   * @param signal - Cancels the unfinished callback and closes its listener.
+   * @returns The bound callback receiver; the caller must await close during cleanup.
+   * @throws If the local HTTP listener cannot be bound.
+   */
   static async listen(signal: AbortSignal): Promise<OAuthLoopback> {
     const server = createServer()
     await new Promise<void>((resolve, reject) => {
@@ -43,15 +51,16 @@ export class OAuthLoopback {
       })
     })
     const address = server.address() as AddressInfo
-    const callback = new OAuthLoopback(server, `http://127.0.0.1:${address.port}/oauth/callback`)
+    const origin = `http://127.0.0.1:${address.port}`
+    const callback = new OAuthLoopback(server, `${origin}/oauth/callback`)
     // The authorization flow may fail before it starts awaiting `result`;
     // install a rejection observer so early aborts never become unhandled.
     void callback.result.catch(() => undefined)
     server.on('request', (request, response) => {
-      const url = new URL(request.url ?? '/', callback.url)
-      // Reject all other paths, requests, and states. The callback itself never
-      // echoes the OAuth code, state, or identity-provider error to the browser.
-      if (request.method !== 'GET' || url.pathname !== '/oauth/callback'
+      const url = URL.parse(request.url ?? '/', callback.url)
+      // Invalid targets must not terminate or consume the pending sign-in.
+      // Responses never echo the OAuth code, state, or identity-provider error.
+      if (url === null || url.origin !== origin || request.method !== 'GET' || url.pathname !== '/oauth/callback'
         || url.searchParams.get('state') !== callback.state || callback.settled) {
         response.writeHead(400, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }).end('Invalid authorization callback')
         return

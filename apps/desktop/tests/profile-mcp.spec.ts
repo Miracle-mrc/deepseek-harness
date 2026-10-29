@@ -31,7 +31,7 @@ it('retains one shared resource consumer in the Desktop Web profile', () => {
     expect(rows.find(row => row.id === 'auto-review')).toMatchObject({ name: '@deepseek-ai/dsh-experimental-auto-review' })
     expect(rows.find(row => row.id === 'forge')).toMatchObject({ name: '@deepseek-ai/dsh-experimental-forge' })
     expect(rows.find(row => row.id === 'experimental-inspector')).toMatchObject({
-      name: '@deepseek-ai/dsh-experimental-inspector', config: { captureFetch: true },
+      name: '@deepseek-ai/dsh-experimental-inspector', config: { captureFetch: false },
     })
     expect(warnings).toEqual([])
   } finally {

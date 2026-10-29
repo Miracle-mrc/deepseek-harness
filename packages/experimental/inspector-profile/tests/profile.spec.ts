@@ -1,4 +1,4 @@
-/** The optional Developer Tools bundle enables both inspectors, including fetch capture. */
+/** Developer tools enable the inspectors without capturing credential-bearing requests. */
 
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
@@ -24,7 +24,7 @@ describe('Inspector profile bundle', () => {
     })).toEqual([{ insert: [
       {
         id: 'experimental-inspector', name: '@deepseek-ai/dsh-experimental-inspector',
-        disabled: false, config: { captureFetch: true },
+        disabled: false, config: { captureFetch: false },
       },
       { id: 'session-inspector', name: '@deepseek-ai/dsh-experimental-session-inspector' },
       { id: 'client-ui-stats', name: '@deepseek-ai/dsh-experimental-client-ui-stats' },

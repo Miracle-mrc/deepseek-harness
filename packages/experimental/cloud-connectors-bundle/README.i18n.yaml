@@ -11,12 +11,24 @@
 /deepseek-ai-dsh-experimental-cloud-connectors-bundle/summary:
   en: 34f5e8d6d8b22159
   zh: b81f3800e0b3d261
+/deepseek-ai-dsh-experimental-cloud-connectors-bundle/table-of-contents:
+  en: 33cbafb327028d09
+  zh: d5d0da52776b2d25
 /deepseek-ai-dsh-experimental-cloud-connectors-bundle/use-this-package:
-  en: 7a57c748637e8c32
-  zh: f37297ff1f39191e
+  en: 44c47f333d9a3e48
+  zh: 9b8be1eb9296ede2
 /deepseek-ai-dsh-experimental-cloud-connectors-bundle/security-boundary:
-  en: 3b164ac0ac25df3d
-  zh: d1b315b9a909a3f9
+  en: 619e3c00b194667e
+  zh: c95fed4469a04a7a
 /deepseek-ai-dsh-experimental-cloud-connectors-bundle/model-experience:
-  en: 7193039f224f326e
-  zh: a8b78bf4a70b88a6
+  en: b57901a2ecc48d82
+  zh: 5d9d3c015298b4cb
+/deepseek-ai-dsh-experimental-cloud-connectors-bundle/model-experience/kv-cache-effect:
+  en: 5d05ba08b8bdc0dc
+  zh: 1897a1b8d43147f2
+/deepseek-ai-dsh-experimental-cloud-connectors-bundle/known-limitations-and-deferred-work:
+  en: ec794f4c1749efe6
+  zh: 5d424bc0bb0583a9
+/deepseek-ai-dsh-experimental-cloud-connectors-bundle/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: 6c5f9788c6536776
