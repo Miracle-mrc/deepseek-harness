@@ -27,6 +27,12 @@ it('retains one shared resource consumer in the Desktop Web profile', () => {
     expect(rows.filter(row => row.name === '@deepseek-ai/dsh-mcp-client')).toEqual([])
     expect(rows.find(row => row.id === 'webserver')).toMatchObject({ name: '@deepseek-ai/dsh-host-webserver' })
     expect(rows.find(row => row.id === 'webserver')?.disabled).not.toBe(true)
+    expect(rows.find(row => row.id === 'agent-team')).toMatchObject({ name: '@deepseek-ai/dsh-experimental-agent-team' })
+    expect(rows.find(row => row.id === 'auto-review')).toMatchObject({ name: '@deepseek-ai/dsh-experimental-auto-review' })
+    expect(rows.find(row => row.id === 'forge')).toMatchObject({ name: '@deepseek-ai/dsh-experimental-forge' })
+    expect(rows.find(row => row.id === 'experimental-inspector')).toMatchObject({
+      name: '@deepseek-ai/dsh-experimental-inspector', config: { captureFetch: true },
+    })
     expect(warnings).toEqual([])
   } finally {
     rmSync(home, { recursive: true, force: true })
