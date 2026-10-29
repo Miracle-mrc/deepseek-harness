@@ -1,0 +1,17 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types",
+    "tsBuildInfoFile": "lib/tsconfig.host.tsbuildinfo"
+  },
+  "include": ["src/*.ts"],
+  "references": [
+    { "path": "../../../vendor/cordis" },
+    { "path": "../../credentials/credentials" },
+    { "path": "../../credentials/authorization" },
+    { "path": "../../mcp/mcp-client" },
+    { "path": "../../core/tools" },
+    { "path": "../../typert/protocol" }
+  ]
+}

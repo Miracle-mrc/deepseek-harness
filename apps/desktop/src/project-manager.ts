@@ -40,6 +40,7 @@ const DESKTOP_FIRST_RUN_BUNDLES: readonly string[] = [
   '@deepseek-ai/dsh-experimental-tool-worktree',
   '@deepseek-ai/dsh-experimental-forge-bundle',
   '@deepseek-ai/dsh-experimental-inspector-profile',
+  '@deepseek-ai/dsh-experimental-cloud-connectors-bundle',
 ]
 const WORKSPACE_SETTINGS = 'nodeLinker: hoisted\nautoInstallPeers: false\n'
 function writeJson(path: string, value: unknown): void {

@@ -62,6 +62,7 @@ describe('desktop external plugin profile', () => {
       '@deepseek-ai/dsh-experimental-tool-worktree',
       '@deepseek-ai/dsh-experimental-forge-bundle',
       '@deepseek-ai/dsh-experimental-inspector-profile',
+      '@deepseek-ai/dsh-experimental-cloud-connectors-bundle',
     ]
     expect(manifest.dsh.profile.bundles).toEqual(bundles)
     expect(manifest.dependencies).toEqual({})
