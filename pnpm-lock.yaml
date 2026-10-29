@@ -9311,9 +9311,6 @@ importers:
       '@deepseek-ai/dsh-credentials':
         specifier: workspace:*
         version: link:../../credentials/credentials
-      '@deepseek-ai/dsh-mcp-client':
-        specifier: workspace:*
-        version: link:../../mcp/mcp-client
       '@deepseek-ai/dsh-tools':
         specifier: workspace:*
         version: link:../../core/tools
@@ -9363,6 +9360,9 @@ importers:
       '@deepseek-ai/dsh-llm':
         specifier: workspace:*
         version: link:../../llm/llm
+      '@deepseek-ai/dsh-mcp-client':
+        specifier: workspace:*
+        version: link:../../mcp/mcp-client
       '@deepseek-ai/dsh-system-prompt':
         specifier: workspace:*
         version: link:../../core/system-prompt

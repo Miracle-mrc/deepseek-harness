@@ -19,19 +19,21 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /** Only local UI and Remote contributions are injected; neither provider connects on mount. */
 export const inject = ['remote', 'slots', 'locale']
 
+/** Preserve sanitized Host errors while unwrapping one Cloud Remote reply. */
+function unwrapCloudReply<T>(reply: { ok: true; value: T } | { ok: false; error: { message: string } }): T {
+  if (reply.ok) return reply.value
+  throw new Error(reply.error.message)
+}
+
 /** Register two official plugin cards, each explicitly connected by the user. */
 function registerUi(ctx: Context): void {
   const t = ctx.locale.bind(NS)
   ctx.effect(() => ctx.locale.register(NS, { zh, en, ja, es, fr, de, ru, pt }), 'cloud-connectors: locale')
-  const unwrap = <T>(result: { ok: true; value: T } | { ok: false; error: { message: string } }): T => {
-    if (!result.ok) throw new Error(result.error.message)
-    return result.value
-  }
   const actions: CloudConnectionActions = {
-    list: async () => unwrap(await ctx.remote.cloudConnections.list()),
-    start: async (provider, region) => unwrap(await ctx.remote.cloudConnections.start(provider, region)),
-    confirm: async (provider, tools) => unwrap(await ctx.remote.cloudConnections.confirm(provider, tools)),
-    disconnect: async provider => unwrap(await ctx.remote.cloudConnections.disconnect(provider)),
+    list: async () => unwrapCloudReply(await ctx.remote.cloudConnections.list()),
+    start: async (provider, region) => unwrapCloudReply(await ctx.remote.cloudConnections.start(provider, region)),
+    confirm: async (provider, tools) => unwrapCloudReply(await ctx.remote.cloudConnections.confirm(provider, tools)),
+    disconnect: async provider => unwrapCloudReply(await ctx.remote.cloudConnections.disconnect(provider)),
   }
   for (const provider of ['aws', 'supabase'] as CloudProvider[]) {
     ctx.effect(() => ctx.slots.inject('plugins.item', () => ctx.slots.register({

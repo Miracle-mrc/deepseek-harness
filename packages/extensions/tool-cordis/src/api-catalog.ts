@@ -683,7 +683,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   {
     key: 'cloudConnections',
     summary: 'Owns short-lived local OAuth callbacks and MCP tool registration.',
-    description: 'Owns short-lived local OAuth callbacks and MCP tool registration. It starts without connecting to either cloud service, even when bundled by Desktop.',
+    description: 'Owns short-lived local OAuth callbacks and MCP tool registration. It starts without connecting to either cloud service when the Harness home has no saved grants.',
     methods: [
       {
         signature: '@Remote async list(): Promise<CloudConnectionView[]>',

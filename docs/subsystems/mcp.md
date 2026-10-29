@@ -125,7 +125,7 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 
 ### `ctx.cloudConnections` — `CloudConnections`
 
-Owns short-lived local OAuth callbacks and MCP tool registration. It starts without connecting to either cloud service, even when bundled by Desktop.
+Owns short-lived local OAuth callbacks and MCP tool registration. It starts without connecting to either cloud service when the Harness home has no saved grants.
 
 ```ts cordis-catalog
 /**

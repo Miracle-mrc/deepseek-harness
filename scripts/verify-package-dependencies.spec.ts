@@ -241,6 +241,9 @@ describe('package dependency scope', () => {
     expect(PACKAGE_DEPENDENCY_POLICY.safeHostDependencyExports['@deepseek-ai/schemastery']).toEqual(['default'])
     expect(PACKAGE_DEPENDENCY_POLICY.safeHostDependencyExports['@deepseek-ai/dsh-session/types']).toBeUndefined()
     expect(PACKAGE_DEPENDENCY_POLICY.safeHostDependencyExports['@deepseek-ai/dsh-typert-protocol']).toBeUndefined()
+    expect(PACKAGE_DEPENDENCY_POLICY.peerRequiredHostExports['@deepseek-ai/dsh-mcp-client']).toEqual([
+      'createMcpToolDefinition', 'publicToolName',
+    ])
     expect(PACKAGE_DEPENDENCY_POLICY.peerRequiredHostExports['@deepseek-ai/dsh-scope']).toEqual([
       'carrierKeyOf', 'createScope', 'scopeOf', 'scopeTarget',
     ])
