@@ -8,7 +8,7 @@ import type { BrowserAuth } from '@deepseek-ai/dsh-client-connection/src/browser
 import open from 'open'
 import WebSocket, { type RawData } from 'ws'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { apply, Config, inject, name, startInspector } from '../src/index.ts'
+import { apply, Config, inject, name, resolveInspectorOptions, startInspector } from '../src/index.ts'
 import { isPlainObject } from '../src/shared/json.ts'
 import { INSPECTOR_BOOTSTRAP_PATH } from '../src/shared/web.ts'
 
@@ -30,6 +30,15 @@ describe('experimental Inspector Host plugin', () => {
     context = undefined
     vi.restoreAllMocks()
     vi.clearAllMocks()
+  })
+
+  it('leaves Host fetch capture off unless the caller explicitly enables it', () => {
+    expect(Config({}).captureFetch).toBe(false)
+    expect(resolveInspectorOptions().captureFetch).toBe(false)
+    for (const captureFetch of [false, true]) {
+      expect(Config({ captureFetch }).captureFetch).toBe(captureFetch)
+      expect(resolveInspectorOptions({ captureFetch }).captureFetch).toBe(captureFetch)
+    }
   })
 
   it('starts the Worker, provides ctx.inspector, injects Client bootstrap, and disposes', async () => {
@@ -175,7 +184,7 @@ describe('experimental Inspector Host plugin', () => {
       get: () => nativeFetch,
     })
     try {
-      await expect(startInspector({ port })).rejects.toThrow('globalThis.fetch is an accessor')
+      await expect(startInspector({ port, captureFetch: true })).rejects.toThrow('globalThis.fetch is an accessor')
     } finally {
       if (descriptor === undefined) Reflect.deleteProperty(globalThis, 'fetch')
       else Object.defineProperty(globalThis, 'fetch', descriptor)
