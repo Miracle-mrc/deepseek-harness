@@ -39,9 +39,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.2.0",
-    "@deepseek-ai/dsh-authorization": "workspace:*",
     "@deepseek-ai/dsh-credentials": "workspace:*",
-    "@deepseek-ai/dsh-tools": "workspace:*",
     "@deepseek-ai/dsh-typert-protocol": "workspace:*",
     "zod": "4.4.3"
   },
@@ -50,6 +48,7 @@
     "@deepseek-ai/cordis-plugin-include": "workspace:~",
     "@deepseek-ai/cordis-plugin-loader": "workspace:~",
     "@deepseek-ai/dsh-api-remotes": "workspace:*",
+    "@deepseek-ai/dsh-authorization": "workspace:*",
     "@deepseek-ai/dsh-client-locale": "workspace:*",
     "@deepseek-ai/dsh-client-test-runtime": "workspace:*",
     "@deepseek-ai/dsh-client-ui-plugin-manager": "workspace:*",
@@ -61,6 +60,7 @@
     "@deepseek-ai/dsh-mcp-client": "workspace:*",
     "@deepseek-ai/dsh-system-prompt": "workspace:*",
     "@deepseek-ai/dsh-tool-executor-native": "workspace:*",
+    "@deepseek-ai/dsh-tools": "workspace:*",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "@testing-library/react": "^16.3.3"
