@@ -601,7 +601,21 @@ describe('experimental Inspector real Worker', () => {
     })).error?.message).toContain('Client native debugging is unavailable')
   }, 15_000)
 
-  it('projects full Host fetch data through the Network domain', async () => {
+  it('keeps Host inspection available without installing fetch capture by default', async () => {
+    const nativeFetch = globalThis.fetch
+    inspector = await startInspector({ port: 0 })
+    expect(globalThis.fetch).toBe(nativeFetch)
+    cdp = await TestCdpClient.connect(inspector.endpoint.webSocketDebuggerUrl)
+    const evaluated = await cdp.call('Runtime.evaluate', { expression: '1 + 1', returnByValue: true })
+    expect(evaluated.result?.result).toMatchObject({ type: 'number', value: 2 })
+    await cdp.close()
+    cdp = undefined
+    await inspector.close()
+    inspector = undefined
+    expect(globalThis.fetch).toBe(nativeFetch)
+  })
+
+  it('projects full Host fetch data through the Network domain when capture is explicitly enabled', async () => {
     server = createServer((request, response) => {
       let body = ''
       request.setEncoding('utf8')
@@ -613,7 +627,7 @@ describe('experimental Inspector real Worker', () => {
     })
     await new Promise<void>((resolve) => { server!.listen(0, '127.0.0.1', () => { resolve() }) })
     const port = (server.address() as import('node:net').AddressInfo).port
-    inspector = await startInspector({ port: 0 })
+    inspector = await startInspector({ port: 0, captureFetch: true })
     cdp = await TestCdpClient.connect(inspector.endpoint.webSocketDebuggerUrl)
     await cdp.call('Network.enable')
 
@@ -655,7 +669,7 @@ describe('experimental Inspector real Worker', () => {
     })
     await new Promise<void>((resolve) => { server!.listen(0, '127.0.0.1', () => { resolve() }) })
     const port = (server.address() as import('node:net').AddressInfo).port
-    inspector = await startInspector({ port: 0 })
+    inspector = await startInspector({ port: 0, captureFetch: true })
     cdp = await TestCdpClient.connect(inspector.endpoint.webSocketDebuggerUrl)
     await cdp.call('Network.enable')
 
@@ -728,7 +742,7 @@ describe('experimental Inspector real Worker', () => {
     })
     await new Promise<void>((resolve) => { server!.listen(0, '127.0.0.1', () => { resolve() }) })
     const port = (server.address() as import('node:net').AddressInfo).port
-    inspector = await startInspector({ port: 0 })
+    inspector = await startInspector({ port: 0, captureFetch: true })
     cdp = await TestCdpClient.connect(inspector.endpoint.webSocketDebuggerUrl)
     await cdp.call('Network.enable')
     const abort = new AbortController()

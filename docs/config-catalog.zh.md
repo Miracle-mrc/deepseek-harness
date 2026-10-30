@@ -1194,7 +1194,7 @@ export interface Config {
 - `source`: [`packages/experimental/inspector/src/index.ts:66`](../packages/experimental/inspector/src/index.ts)
 
 ```ts config-catalog
-/** Host plugin configuration. Fetch capture is enabled by default. */
+/** Host plugin configuration. Fetch capture requires explicit opt-in. */
 export interface Config extends Omit<InspectorOptions, 'clientOrigins'> {
   /** Browser origins allowed to open the Client ingest WebSocket. */
   clientOrigins?: string[]
@@ -1208,7 +1208,7 @@ export interface InspectorOptions {
   readonly port?: number
   /** Additional exact browser origins admitted to the Client ingest socket. */
   readonly clientOrigins?: readonly string[]
-  /** Whether to observe calls made through the current global fetch function. */
+  /** Whether to observe calls made through the current global fetch function; off unless explicitly enabled. */
   readonly captureFetch?: boolean
   /** Maximum request-body prefix retained for one fetch. */
   readonly maxRequestBodyBytes?: number
