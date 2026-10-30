@@ -139,7 +139,7 @@ jobs:
   # persistent pnpm store and tool caches make them redundant (and saving here
   # would poison the hosted cache namespace with self-hosted paths).
   serial-linux-selfhosted:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && github.repository != 'Miracle-mrc/deepseek-harness'
     name: serial / linux (self-hosted standby)
     runs-on: [self-hosted, linux, x64, vm-backup]
     steps:
@@ -233,7 +233,7 @@ jobs:
   # (and saving here would poison the hosted cache namespace with self-hosted
   # paths).
   serial-windows:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && github.repository != 'Miracle-mrc/deepseek-harness'
     name: serial / windows (self-hosted standby)
     runs-on: [self-hosted, dsh-win-ci, windows]
     timeout-minutes: 120
@@ -287,7 +287,7 @@ jobs:
   # Manual, bounded comparison of the actual critical Linux and Windows lanes.
   # The named pools are restricted at the organization level to this repository.
   larger-runner-benchmark:
-    if: github.event_name == 'workflow_dispatch' && inputs.suite == 'larger-runner-benchmark'
+    if: github.event_name == 'workflow_dispatch' && inputs.suite == 'larger-runner-benchmark' && github.repository != 'Miracle-mrc/deepseek-harness'
     # Default measures the repository's own fleet tiers; under the matching
     # platform's blacksmith failover value the tiers Blacksmith offers (up to
     # 32 vCPU) move onto their Blacksmith equivalents, while the 64/96-core
@@ -398,7 +398,7 @@ jobs:
   # complete unsharded primary aggregate with bounded in-runner parallelism;
   # Windows runs both blocking build targets concurrently through run-gates.
   consolidated-runner-benchmark:
-    if: github.event_name == 'workflow_dispatch' && inputs.suite == 'consolidated-runner-benchmark'
+    if: github.event_name == 'workflow_dispatch' && inputs.suite == 'consolidated-runner-benchmark' && github.repository != 'Miracle-mrc/deepseek-harness'
     # Default measures the repository's own fleet tiers; under the matching
     # platform's blacksmith failover value the tiers Blacksmith offers (up to
     # 32 vCPU) move onto their Blacksmith equivalents, while the 64/96-core

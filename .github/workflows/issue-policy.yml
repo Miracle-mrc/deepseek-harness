@@ -14,6 +14,8 @@ permissions:
 jobs:
   policy:
     name: Issue policy
+    # The personal fork has Issues disabled and no upstream Project/App access.
+    if: ${{ github.repository != 'Miracle-mrc/deepseek-harness' }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out trusted policy
