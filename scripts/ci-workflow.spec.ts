@@ -238,27 +238,23 @@ describe('CI workflow', () => {
       .toBe("steps.upload.outcome == 'failure' || steps.verify.outcome == 'failure' || steps.comment.outcome == 'failure'")
   })
 
-  it('skips upstream Issue and Project automation only in the personal fork', () => {
-    const workflows = [
-      ['issue-policy.yml', 'policy'],
-      ['issue-lifecycle.yml', 'lifecycle'],
-    ] as const
+  it('preserves an unconditional policy gate and skips lifecycle automation only in the personal fork', () => {
+    const policy = workflowJob(loadWorkflow('.github/workflows/issue-policy.yml'), 'policy')
+    expect(policy.if).toBeUndefined()
+    expect(policy['continue-on-error']).toBeUndefined()
+
     const event = { action: 'opened', review: { state: '' }, changes: { body: null } }
-    for (const [file, name] of workflows) {
-      const job = workflowJob(loadWorkflow('.github/workflows/' + file), name)
-      if (typeof job.if !== 'string') throw new TypeError(`${file} must guard upstream-only automation`)
-      const condition = job.if.trim().replace(/^\$\{\{\s*|\s*\}\}$/g, '')
-      for (const repository of ['Miracle-mrc/deepseek-harness', 'deepseek-harness/deepseek-harness', 'another-owner/deepseek-harness']) {
-        const selected = runInNewContext(condition, {
-          github: { repository, event_name: 'pull_request', event },
-        }, { timeout: 1000 })
-        expect(selected, `${file} in ${repository}`).toBe(repository !== 'Miracle-mrc/deepseek-harness')
-      }
-      expect(job['continue-on-error']).toBeUndefined()
-    }
     const lifecycle = workflowJob(loadWorkflow('.github/workflows/issue-lifecycle.yml'), 'lifecycle')
     if (typeof lifecycle.if !== 'string') throw new TypeError('Issue lifecycle must retain its original filters')
-    const editedBody = runInNewContext(lifecycle.if, {
+    const condition = lifecycle.if.trim().replace(/^\$\{\{\s*|\s*\}\}$/g, '')
+    for (const repository of ['Miracle-mrc/deepseek-harness', 'deepseek-harness/deepseek-harness', 'another-owner/deepseek-harness']) {
+      const selected: unknown = runInNewContext(condition, {
+        github: { repository, event_name: 'pull_request', event },
+      }, { timeout: 1000 })
+      expect(selected, `issue-lifecycle.yml in ${repository}`).toBe(repository !== 'Miracle-mrc/deepseek-harness')
+    }
+    expect(lifecycle['continue-on-error']).toBeUndefined()
+    const editedBody: unknown = runInNewContext(lifecycle.if, {
       github: { repository: 'deepseek-harness/deepseek-harness', event_name: 'pull_request', event: { ...event, action: 'edited' } },
     }, { timeout: 1000 })
     expect(editedBody).toBe(false)
@@ -275,7 +271,7 @@ describe('CI workflow', () => {
       const job = workflowJob(master, name)
       if (typeof job.if !== 'string') throw new TypeError(`${name} must guard upstream-only runners`)
       for (const repository of ['Miracle-mrc/deepseek-harness', 'deepseek-harness/deepseek-harness']) {
-        const selected = runInNewContext(job.if, {
+        const selected: unknown = runInNewContext(job.if, {
           github: { repository, event_name: eventName, ref: 'refs/heads/master' },
           inputs: { suite },
         }, { timeout: 1000 })
@@ -1632,7 +1628,7 @@ describe('Issue lifecycle workflow', () => {
     expect(preflightStep?.run).toContain('if [ -f .github/issue-management/selective-preflight.json ]; then')
     expect(preflightStep?.run).toContain('node .github/issue-management/policy.mjs pr-preflight')
     expect(preflightStep?.if).toBeUndefined()
-    expect(policyJob.if).toBe("${{ github.repository != 'Miracle-mrc/deepseek-harness' }}")
+    expect(policyJob.if).toBeUndefined()
     expect(validateStep?.if).toBe("${{ steps.preflight.outputs.legacy-automated != 'true' }}")
 
     expect(tokenStep).toMatchObject({
