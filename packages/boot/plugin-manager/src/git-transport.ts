@@ -56,13 +56,14 @@ async function readable(repository: string, dir: string, options: GitTransportOp
 
 /**
  * Choose how pnpm clones an HTTP(S) Git repository that {@link sshGitSpec} has an SSH form for: probe the spec's URL,
- * and when HTTP(S) cannot read it, probe the SSH form.
+ * and when HTTP(S) cannot read it, probe the SSH form. An already-cancelled call starts neither probe.
  * @param spec The parsed installation address.
  * @param dir The profile directory where installation runs.
  * @param options The deadline of each probe, cancellation and the installer's environment.
  * @returns The SSH form when only SSH can read the repository; otherwise the spec unchanged.
  */
 export async function chooseGitTransport(spec: ParsedInstallSpec, dir: string, options: GitTransportOptions): Promise<string> {
+  if (options.signal.aborted) return spec.spec
   const ssh = sshGitSpec(spec)
   if (ssh === undefined) return spec.spec
   const strip = (value: string): string => value.replace(/^git\+/i, '').replace(/#.*$/s, '')

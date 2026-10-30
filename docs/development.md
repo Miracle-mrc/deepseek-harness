@@ -161,6 +161,8 @@ The keyless [CI workflow](../.github/workflows/ci.yml) groups independent gates 
 
 The `Miracle-mrc/deepseek-harness` fork runs required PR jobs on GitHub-hosted Ubuntu 24.04 and Windows 2025 even when upstream failover variables are set. It keeps the PR preview build but omits upstream Cloudflare publication, deployment verification, and preview comments. The fork owner has disabled Issue policy and lifecycle workflows in GitHub Actions because this fork has no upstream Project/App access; the lifecycle job also has a fork-specific guard, while the policy job retains its unconditional enforcement contract if re-enabled. Upstream-only self-hosted standby checks and fleet benchmarks do not run there; required PR verdicts and coverage checks remain active. Leave the upstream `DSH_CI_FAILOVER_*` variables unset in this fork.
 
+Python runtime CI in this fork skips only live API preflight and smoke tests when `DEEPSEEK_API_KEY_EXTERNAL` is unset. Builds, installed-wheel keyless tests, and platform checks remain required; the run summary identifies the skipped live checks. Trusted CI events with a configured key still run live tests, and other repositories retain the strict missing-key preflight.
+
 The credential-free dsh dependency-layout and dsh/vendor pack rehearsals use the existing Linux self-hosted pool only when `DSH_CI_FAILOVER_LINUX=selfhosted` and the event is a trusted master push or same-repository, non-fork, non-Dependabot pull request. All other cases, including manual dispatch, use `ubuntu-24.04`; manual publication stays hosted. See the [release rehearsal runner reference](../.agents/notes/implemented/process/2026-07-26-ci-failover-runbook.md) for persistent-store isolation and fallback limits.
 
 ### Daily commands

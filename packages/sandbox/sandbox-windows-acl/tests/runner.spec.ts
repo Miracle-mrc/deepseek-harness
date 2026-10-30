@@ -539,29 +539,111 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
     writeFileSync(join(granted, 'file.txt'), 'x')
     writeFileSync(join(child, 'deep.txt'), 'x')
     const grant = AclWriteGrant.create(workspaceWriteSid(granted))
-    grant.add(granted, true)
     try {
+      const quote = (path: string): string => `'${path.replaceAll("'", "''")}'`
       const probe = `
-$ErrorActionPreference='SilentlyContinue'
+$ErrorActionPreference='Stop'
 Add-Type -Namespace P -Name F -MemberDefinition @'
 [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode, EntryPoint="CreateFileW")]
-public static extern IntPtr CreateFileW(string n, uint a, uint s, IntPtr sa, uint d, uint f, IntPtr t);
-[DllImport("kernel32.dll", SetLastError=true)]
-public static extern bool CloseHandle(IntPtr h);
-'@ | Out-Null
-function TryOpen([string]$label, [string]$path) {
-  $h = [P.F]::CreateFileW($path, 0x10000000, 7, [IntPtr]::Zero, 3, 0x02000000, [IntPtr]::Zero)
-  if ($h -eq [IntPtr]::new(-1)) { "$($label): DENIED" } else { [void][P.F]::CloseHandle($h); "$($label): OK" }
+private static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(
+  string n, uint a, uint s, IntPtr sa, uint d, uint f, IntPtr t);
+public static bool CanOpen(string path) {
+  using (var handle = CreateFileW(path, 0x10000000, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero)) {
+    if (!handle.IsInvalid) { return true; }
+    int error = Marshal.GetLastWin32Error();
+    if (error == 5) { return false; }
+    throw new System.ComponentModel.Win32Exception(error, "FullControl access check: " + path);
+  }
 }
-TryOpen 'FILE' '${join(granted, 'file.txt')}'
-TryOpen 'NESTED-FILE' '${join(child, 'deep.txt')}'
-TryOpen 'DIRECTORY' '${child}'
+[StructLayout(LayoutKind.Sequential)]
+public struct Luid { public uint Low; public int High; }
+[DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+private static extern bool LookupPrivilegeValueW(string system, string name, out Luid id);
+[DllImport("advapi32.dll", SetLastError=true)]
+private static extern bool GetTokenInformation(IntPtr token, int infoClass, IntPtr info, uint length, out uint returned);
+public static bool PrivilegeEnabled(IntPtr token, string name) {
+  Luid id;
+  if (!LookupPrivilegeValueW(null, name, out id)) {
+    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), name);
+  }
+  uint length;
+  GetTokenInformation(token, 3, IntPtr.Zero, 0, out length);
+  if (length < 4) {
+    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), name);
+  }
+  IntPtr buffer = Marshal.AllocHGlobal(checked((int)length));
+  try {
+    if (!GetTokenInformation(token, 3, buffer, length, out length)) {
+      throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), name);
+    }
+    int count = Marshal.ReadInt32(buffer);
+    for (int i = 0; i < count; i++) {
+      IntPtr entry = IntPtr.Add(buffer, 4 + i * 12);
+      if (unchecked((uint)Marshal.ReadInt32(entry)) == id.Low && Marshal.ReadInt32(entry, 4) == id.High) {
+        return (Marshal.ReadInt32(entry, 8) & 2) != 0;
+      }
+    }
+    return false;
+  } finally { Marshal.FreeHGlobal(buffer); }
+}
+'@ | Out-Null
+$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = [System.Security.Principal.WindowsPrincipal]::new($identity)
+$diagnostics = @{
+  caller = @{
+    sid = $identity.User.Value
+    administratorEnabled = $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+    backupEnabled = [P.F]::PrivilegeEnabled($identity.Token, 'SeBackupPrivilege')
+    restoreEnabled = [P.F]::PrivilegeEnabled($identity.Token, 'SeRestorePrivilege')
+    takeOwnershipEnabled = [P.F]::PrivilegeEnabled($identity.Token, 'SeTakeOwnershipPrivilege')
+  }
+  objects = @(@(${quote(granted)}, ${quote(child)}, ${quote(join(granted, 'file.txt'))}, ${quote(join(child, 'deep.txt'))}) | ForEach-Object {
+    $path = $_
+    $acl = Get-Acl -LiteralPath $path
+    $index = 0
+    @{
+      path = $path
+      owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+      protected = $acl.AreAccessRulesProtected
+      sddl = $acl.Sddl
+      entries = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | ForEach-Object {
+        @{
+          index = $index; sid = $_.IdentityReference.Value; rights = [int]$_.FileSystemRights
+          type = [string]$_.AccessControlType; inherited = $_.IsInherited
+          inheritance = [int]$_.InheritanceFlags; propagation = [int]$_.PropagationFlags
+        }
+        $index++
+      })
+    }
+  })
+}
+'ACL_DIAGNOSTICS ' + ($diagnostics | ConvertTo-Json -Depth 6 -Compress)
+function TryOpen([string]$label, [string]$path) {
+  if ([P.F]::CanOpen($path)) { "$($label): OK" } else { "$($label): DENIED" }
+}
+TryOpen 'FILE' ${quote(join(granted, 'file.txt'))}
+TryOpen 'NESTED-FILE' ${quote(join(child, 'deep.txt'))}
+TryOpen 'DIRECTORY' ${quote(child)}
 `
-      const result = spawnSync('pwsh', ['-NoLogo', '-NonInteractive', '-NoProfile', '-Command', probe], { encoding: 'utf8', timeout: 60_000 })
-      expect(result.status, `stderr: ${result.stderr}`).toBe(0)
-      expect(result.stdout).toContain('FILE: OK')
-      expect(result.stdout).toContain('NESTED-FILE: OK')
-      expect(result.stdout).toContain('DIRECTORY: DENIED')
+      const runProbe = () => spawnSync('pwsh', ['-NoLogo', '-NonInteractive', '-NoProfile', '-Command', probe], { encoding: 'utf8', timeout: 60_000 })
+      const before = runProbe()
+      const beforeDetails = `before grant:\n${before.stdout}\nstderr: ${before.stderr}`
+      expect(before.error, beforeDetails).toBeUndefined()
+      expect(before.signal, beforeDetails).toBeNull()
+      expect(before.status, beforeDetails).toBe(0)
+      expect(before.stdout, beforeDetails).toContain('FILE: OK')
+      expect(before.stdout, beforeDetails).toContain('NESTED-FILE: OK')
+      expect(before.stdout, beforeDetails).toContain('DIRECTORY: OK')
+
+      grant.add(granted, true)
+      const result = runProbe()
+      const details = `${beforeDetails}\nafter grant:\n${result.stdout}\nstderr: ${result.stderr}`
+      expect(result.error, details).toBeUndefined()
+      expect(result.signal, details).toBeNull()
+      expect(result.status, details).toBe(0)
+      expect(result.stdout, details).toContain('FILE: OK')
+      expect(result.stdout, details).toContain('NESTED-FILE: OK')
+      expect(result.stdout, details).toContain('DIRECTORY: DENIED')
     } finally {
       grant.dispose()
       rmSync(granted, { recursive: true, force: true })

@@ -1427,6 +1427,69 @@ describe('Python release workflows', () => {
     expect(JSON.stringify(manylinuxSmoke)).toContain('-e DSH_TELEMETRY_DISABLED')
   })
 
+  it('makes only the personal fork live API checks optional without a configured key', () => {
+    const workflow = loadWorkflow('.github/workflows/build-exe-for-python-sdk.yml')
+    const build = workflowJob(workflow, 'build')
+    if (!isRecord(build.env) || !Array.isArray(build.steps)) throw new TypeError('Python wheel CI must declare its live API selection')
+    const enabled = build.env.DSH_PYTHON_REAL_API_ENABLED
+    expect(enabled).toBe("${{ github.repository != 'Miracle-mrc/deepseek-harness' || secrets.DEEPSEEK_API_KEY_EXTERNAL != '' }}")
+    if (typeof enabled !== 'string') throw new TypeError('The live API selection must be an expression')
+    const steps = build.steps.filter(isRecord)
+    const cases = [
+      ['Miracle-mrc/deepseek-harness', '', true, 'push', false, 'maintainer', false],
+      ['Miracle-mrc/deepseek-harness', 'configured', true, 'push', false, 'maintainer', true],
+      ['deepseek-harness/deepseek-harness', '', true, 'push', false, 'maintainer', true],
+      ['another-owner/deepseek-harness', '', true, 'push', false, 'maintainer', true],
+      ['Miracle-mrc/another-repository', '', true, 'push', false, 'maintainer', true],
+      ['Miracle-mrc/deepseek-harness', '', true, 'pull_request', false, 'maintainer', false],
+      ['Miracle-mrc/deepseek-harness', 'configured', true, 'pull_request', false, 'maintainer', true],
+      ['deepseek-harness/deepseek-harness', '', true, 'pull_request', false, 'maintainer', true],
+      ['Miracle-mrc/deepseek-harness', 'configured', true, 'pull_request', true, 'maintainer', false],
+      ['deepseek-harness/deepseek-harness', 'configured', true, 'pull_request', true, 'maintainer', false],
+      ['deepseek-harness/deepseek-harness', 'configured', true, 'pull_request', false, 'dependabot[bot]', false],
+      ['Miracle-mrc/deepseek-harness', 'configured', true, 'pull_request', false, 'dependabot[bot]', false],
+      ['Miracle-mrc/deepseek-harness', 'configured', false, 'workflow_dispatch', false, 'maintainer', false],
+      ['deepseek-harness/deepseek-harness', '', false, 'workflow_dispatch', false, 'maintainer', false],
+    ] as const
+    for (const [repository, key, ci, eventName, fork, login, expected] of cases) {
+      const github = { repository, event_name: eventName, event: { pull_request: { head: { repo: { fork } }, user: { login } } } }
+      const selection: unknown = runInNewContext(enabled.trim().slice(3, -2), {
+        github, secrets: { DEEPSEEK_API_KEY_EXTERNAL: key },
+      }, { timeout: 1000 })
+      const env = { DSH_PYTHON_REAL_API_ENABLED: String(selection) }
+      for (const os of ['Linux', 'macOS', 'Windows']) {
+        const context = { github, env, inputs: { ci }, runner: { os } }
+        for (const platform of ['POSIX', 'Windows']) {
+          const selectedPlatform = (os === 'Windows') === (platform === 'Windows')
+          for (const name of ['Preflight installed-wheel real API test', 'Run installed-wheel real API black-box test']) {
+            const step = steps.find(candidate => candidate.name === `${name} (${platform})`)
+            if (typeof step?.if !== 'string') throw new TypeError(`${name} must select trusted CI events`)
+            expect(step['continue-on-error']).toBeUndefined()
+            expect(runInNewContext(step.if, context, { timeout: 1000 }), `${repository} key=${key !== ''} ${eventName} ${os} ${name}`)
+              .toBe(expected && selectedPlatform)
+          }
+        }
+        const notice = steps.find(step => step.name === 'Report keyless fork validation')
+        if (typeof notice?.if !== 'string') throw new TypeError('Keyless fork validation must report skipped live checks')
+        expect(runInNewContext(notice.if, context, { timeout: 1000 })).toBe(ci && repository === 'Miracle-mrc/deepseek-harness' && key === '')
+      }
+    }
+    for (const platform of ['POSIX', 'Windows']) {
+      const preflight = steps.find(step => step.name === `Preflight installed-wheel real API test (${platform})`)
+      expect(preflight?.run).toContain('DEEPSEEK_API_KEY_EXTERNAL is empty')
+      expect(preflight?.run).toContain(platform === 'POSIX' ? 'exit 1' : 'throw ')
+      const keyless = steps.find(step => step.name === `Run installed-wheel keyless black-box tests (${platform})`)
+      expect(keyless?.if).toBe(platform === 'POSIX' ? "runner.os != 'Windows'" : "runner.os == 'Windows'")
+      expect(keyless?.['continue-on-error']).toBeUndefined()
+    }
+    expect(build).not.toHaveProperty('if')
+    expect(build).not.toHaveProperty('continue-on-error')
+    expect(steps.find(step => step.name === 'Build single-exe')).not.toHaveProperty('if')
+    expect(steps.find(step => step.name === 'Build release-shaped runtime wheel')).not.toHaveProperty('if')
+    expect(steps.find(step => step.name === 'Run wheel in a manylinux 2.28 container')?.if).toBe("runner.os == 'Linux'")
+    expect(steps.find(step => step.name === 'Check macOS payload architecture and deployment target')?.if).toBe("runner.os == 'macOS'")
+  })
+
   it('uses the shared macOS deployment-target check in GitLab', () => {
     const workflow = loadWorkflow('.gitlab-ci.yml')
     const runtimeWheel = workflow['.runtime-wheel']

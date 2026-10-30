@@ -73,6 +73,8 @@ The program is the body of an async Python function. Top-level await and return 
 
 帧为 `boot`／`run`（宿主 → 子进程）与 `boot-ack`／`call`／`log`／`done` （子进程 → 宿主），以及每个 `call` 对应一个 `reply`（宿主 → 子进程）。`log` 帧的 `truncated` 标志标记的就是子进程账本自己的截断标记帧，因此宿主在与子进程相同的点停止捕获，而不是从自己的预算推断。`log` 帧的 `open` 标志标记由显式 flush 提交的未结束行：宿主把下一个 log 帧合并进同一条目，因此 `print('a', end='', flush=True); print('b')` 读回为一条 `'ab'` 条目而不是假换行（拆分计费算术在 fd-3 协议 Agent Note 的 wire-contract 段）。合并的唯一例外是截断：当后续超预算帧触发账本时，已计费的前缀作为独立条目先提交，截断 marker 跟在后面（marker 保持末位，无重复计费）。`done.error.kind` 为 `exception`、`invalid-output`、`output-limit` 或模型代码返回后 CPU 检查产生的 `timeout` 之一；墙钟截止、中止与基底死亡在宿主侧观察。
 
+正常结算时，bootstrap 发送 `done`，然后以有界分片丢弃宿主的剩余字节，直到宿主关闭通道或终止子进程。它不会将这些字节分发给 binding 回调。保持双工通道开启可在宿主回复受到反压时保留完成帧；进程组拆卸仍由宿主负责。
+
 ### 无损 JSON 跨越
 
 完成值与 binding 实参以精确 JSON 跨越：值无递归序列化，因此低于字节预算的深层载荷存活，而不会死在 `JSON.stringify` 的栈上限；超出安全范围的整型 double 以精确数字跨越，而不是被静默取整的 token；`src/protocol.ts` 中的计量器在任何其他代码读取载荷之前强制字节预算与数字无损性。
@@ -90,6 +92,7 @@ The program is the body of an async Python function. Top-level await and return 
 | [`py/bootstrap.py`](py/bootstrap.py) | 子进程侧：fd-3 通道、程序执行、binding 分发、账本与结算 |
 | [`py/protocol.py`](py/protocol.py) | Python 侧：`PROTOCOL_FD`、`TypedDict` 帧镜像、`log_truncation_marker` |
 | [`tests/runtime.spec.ts`](tests/runtime.spec.ts) | 真实子进程套件：预算、隔离、敌意帧、名称重绑 |
+| [`tests/bootstrap-settlement.spec.ts`](tests/bootstrap-settlement.spec.ts) | 回复反压与宿主断连时的 bootstrap 关闭行为 |
 | [`tests/protocol-mirror.e2e.ts`](tests/protocol-mirror.e2e.ts) | 对照真实 `python3` 的跨语言镜像测试 |
 
 </details>

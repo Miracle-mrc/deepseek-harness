@@ -137,17 +137,25 @@ it('ends an in-flight HTTPS probe on cancellation and keeps the spec', async () 
   run.mockClear()
   const choosing = choose(SPEC, 60000)
   await requested.promise
+  const probe = run.mock.results[0]
+  if (probe?.type !== 'return') throw new Error('expected a running Git probe')
+  let closed = false
+  const closing = new Promise<void>((resolve) => {
+    probe.value.nodeChildProcess.once('close', () => { closed = true; resolve() })
+  })
+  onTestFinished(async () => { controller.abort(); await closing })
   controller.abort()
   expect(await choosing).toBe(SPEC)
+  expect(closed).toBe(true)
   expect(run).toHaveBeenCalledTimes(1)
   expect(run.mock.calls[0]?.[1]).toEqual(['-c', 'core.askPass=', 'ls-remote', '--exit-code', '--', 'https://git.example/team/sub/plugin.git', 'HEAD'])
 })
 
-it('does not probe SSH after cancellation', async () => {
+it('does not start a probe after cancellation', async () => {
   const { controller, choose } = await fixture()
   const run = vi.mocked(subprocess.execa)
   run.mockClear()
   controller.abort()
   expect(await choose(SPEC)).toBe(SPEC)
-  expect(run).toHaveBeenCalledTimes(1)
+  expect(run.mock.calls.length).toBe(0)
 })
