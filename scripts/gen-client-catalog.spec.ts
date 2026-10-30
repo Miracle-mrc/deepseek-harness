@@ -8,6 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
+import { COVERAGE_TEST_TIMEOUT_ENV, parseCoverageTestTimeout } from './coverage-partitions.ts'
 import { collectSlotEntries, oversizedSlotReports, resolveSlotEntries, validateSlotContracts } from './gen-client-catalog.ts'
 import type { SlotDeclaration, SlotRegistration, TypeDeclaration } from './slot-walk.ts'
 
@@ -236,7 +237,9 @@ describe('the per-slot report budget', () => {
 })
 
 describe('the real workspace surface', () => {
-  it('collects every declared slot with a teachable contract', { timeout: 30_000 }, () => {
+  // Whole-workspace scans retain their local allowance and any larger lane budget.
+  const timeout = Math.max(30_000, parseCoverageTestTimeout(process.env[COVERAGE_TEST_TIMEOUT_ENV]) ?? 0)
+  it('collects every declared slot with a teachable contract', { timeout }, () => {
     const entries = collectSlotEntries(process.cwd())
     expect(entries.length).toBeGreaterThan(30)
     for (const entry of entries) {
