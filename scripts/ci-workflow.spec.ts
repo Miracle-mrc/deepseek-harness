@@ -341,6 +341,28 @@ describe('CI workflow', () => {
     expect(steps[preparation]).not.toHaveProperty('continue-on-error', true)
   })
 
+  it('requires the stalled Git probe case in the blocking native Windows lane', () => {
+    const native = workflowJob(loadWorkflow('.github/workflows/ci-windows.yml'), 'windows-native-tests')
+    if (!Array.isArray(native.steps)) throw new TypeError('Native Windows job must define steps')
+    const probe = native.steps.filter(isRecord).find(step => step.name === 'Verify stalled Git probe on Windows')
+    expect(probe).toMatchObject({
+      shell: 'pwsh',
+      run: [
+        'pnpm exec vitest run',
+        'packages/boot/plugin-market/tests/repository-cache.spec.ts',
+        "-t '^reports a stalled Git version probe as unavailable before initializing a repository$'",
+        '--maxWorkers 1',
+        '--no-file-parallelism',
+        '--testTimeout 90000',
+      ].join(' '),
+    })
+    expect(probe).not.toHaveProperty('if')
+    expect(probe).not.toHaveProperty('continue-on-error')
+    expect(native).not.toHaveProperty('continue-on-error')
+    const verdict = workflowJob(loadWorkflow('.github/workflows/ci-windows.yml'), 'windows-checks-passed')
+    expect(verdict.needs).toContain('windows-native-tests')
+  })
+
   it.each(['ci.yml', 'ci-master.yml', 'e2e.yml', 'release.yml', 'release-vendor.yml'])(
     '%s cancels superseded validation runs without crossing workflow or ref boundaries', (name) => {
       const workflow = loadWorkflow('.github/workflows/' + name)

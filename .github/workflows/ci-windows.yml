@@ -241,6 +241,15 @@ jobs:
           packages/workflow/workflow-ptc/tests/workflow-ptc.spec.ts
           packages/experimental/tool-ralph/tests/integration.spec.ts
           packages/subprocess/subprocess-local/tests/process-exit.spec.ts
+      - name: Verify stalled Git probe on Windows
+        shell: pwsh
+        run: >-
+          pnpm exec vitest run
+          packages/boot/plugin-market/tests/repository-cache.spec.ts
+          -t '^reports a stalled Git version probe as unavailable before initializing a repository$'
+          --maxWorkers 1
+          --no-file-parallelism
+          --testTimeout 90000
 
   # Stable required check for the Windows lanes, with the same semantics as
   # ci.yml's "all checks passed": every blocking job in THIS workflow is
