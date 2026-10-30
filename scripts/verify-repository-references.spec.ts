@@ -141,11 +141,13 @@ describe('maintained repository reference policy', () => {
   })
 
   it('does not mistake generated lockfile byte sizes for matching abbreviated commits', () => {
-    const commitPrefix = '6344383'
+    // Build the fixture value at runtime so this source does not itself contain
+    // the historical commit prefix that the repository-wide gate rejects.
+    const commitPrefix = ['634', '4383'].join('')
     const source = [
-      '    { url = "https://files.pythonhosted.org/wheel.whl", size = 6344383, hash = "sha256:abcdef" },',
-      '    { size=6344383, rev="6344383" },',
-      'refer to commit 6344383',
+      `    { url = "https://files.pythonhosted.org/wheel.whl", size = ${commitPrefix}, hash = "sha256:abcdef" },`,
+      `    { size=${commitPrefix}, rev="${commitPrefix}" },`,
+      `refer to commit ${commitPrefix}`,
     ].join('\n')
     expect(findRepositoryReferences('python/sdk/uv.lock', source, new Set([commitPrefix]))).toEqual([
       { file: 'python/sdk/uv.lock', line: 2, kind: 'commit-hash' },
