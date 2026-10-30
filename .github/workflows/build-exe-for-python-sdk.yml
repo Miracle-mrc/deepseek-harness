@@ -28,7 +28,7 @@ on:
         default: false
     secrets:
       DEEPSEEK_API_KEY_EXTERNAL:
-        description: Real DeepSeek API key for trusted installed-wheel pull-request tests.
+        description: Real DeepSeek API key for trusted installed-wheel CI tests.
         required: false
   workflow_dispatch:
     inputs:
@@ -158,6 +158,9 @@ jobs:
   build:
     needs: [plan, sdk-wheel]
     name: ${{ matrix.target }}
+    env:
+      # Only the personal fork permits keyless CI; upstream preflights stay strict.
+      DSH_PYTHON_REAL_API_ENABLED: ${{ github.repository != 'Miracle-mrc/deepseek-harness' || secrets.DEEPSEEK_API_KEY_EXTERNAL != '' }}
     runs-on: >-
       ${{ inputs.release && matrix.target == 'node24-macos-x64' && 'macos-15-large'
           || inputs.release && matrix.target == 'node24-macos-arm64' && 'macos-15-xlarge'
@@ -382,9 +385,15 @@ jobs:
             Pop-Location
           }
 
+      - name: Report keyless fork validation
+        if: inputs.ci && github.repository == 'Miracle-mrc/deepseek-harness' && env.DSH_PYTHON_REAL_API_ENABLED != 'true'
+        run: >-
+          node -e "require('node:fs').appendFileSync(process.env.GITHUB_STEP_SUMMARY, 'Live DeepSeek API checks skipped: this fork has no DEEPSEEK_API_KEY_EXTERNAL. Build, installed-wheel keyless tests and platform checks remain required.\n')"
+
       - name: Preflight installed-wheel real API test (POSIX)
         if: >-
           inputs.ci
+          && env.DSH_PYTHON_REAL_API_ENABLED == 'true'
           && runner.os != 'Windows'
           && (github.event_name != 'pull_request'
               || !(github.event.pull_request.head.repo.fork
@@ -401,6 +410,7 @@ jobs:
       - name: Preflight installed-wheel real API test (Windows)
         if: >-
           inputs.ci
+          && env.DSH_PYTHON_REAL_API_ENABLED == 'true'
           && runner.os == 'Windows'
           && (github.event_name != 'pull_request'
               || !(github.event.pull_request.head.repo.fork
@@ -416,6 +426,7 @@ jobs:
       - name: Run installed-wheel real API black-box test (POSIX)
         if: >-
           inputs.ci
+          && env.DSH_PYTHON_REAL_API_ENABLED == 'true'
           && runner.os != 'Windows'
           && (github.event_name != 'pull_request'
               || !(github.event.pull_request.head.repo.fork
@@ -436,6 +447,7 @@ jobs:
       - name: Run installed-wheel real API black-box test (Windows)
         if: >-
           inputs.ci
+          && env.DSH_PYTHON_REAL_API_ENABLED == 'true'
           && runner.os == 'Windows'
           && (github.event_name != 'pull_request'
               || !(github.event.pull_request.head.repo.fork

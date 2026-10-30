@@ -166,6 +166,8 @@ keyless [CI 工作流](../.github/workflows/ci.yml) 将独立门禁分组到若�
 
 `Miracle-mrc/deepseek-harness` fork 的必需 PR job 使用 GitHub 托管的 Ubuntu 24.04 和 Windows 2025 运行器，即使设置了上游的故障转移变量也是如此。该 fork 保留 PR 预览构建，但跳过上游 Cloudflare 发布、部署验证及预览评论。由于无法访问上游 Project/App，fork 所有者已在 GitHub Actions 中停用 Issue policy 和 Issue lifecycle 工作流；lifecycle job 还带有仅针对 fork 的保护条件，而 policy job 在重新启用时仍保持无条件执行的校验约束。仅用于上游的自托管备用检查和专用运行器基准测试不会执行；必需的 PR 结果检查与覆盖率检查仍然执行。此 fork 应保持上游 `DSH_CI_FAILOVER_*` 变量未设置。
 
+此 fork 的 Python 运行时 CI 仅在未设置 `DEEPSEEK_API_KEY_EXTERNAL` 时跳过真实 API 预检和冒烟测试。构建、已安装 wheel 包的不带密钥测试及平台检查仍为必需项；运行摘要会标明跳过的真实 API 检查。已配置密钥的受信任 CI 事件仍执行真实 API 测试，其他仓库仍保留缺少密钥时失败的严格预检。
+
 不带凭据的 dsh 依赖布局检查与 dsh/vendor 打包演练仅在 `DSH_CI_FAILOVER_LINUX=selfhosted`，且事件为受信任的 master 推送或同仓库、非 fork、非 Dependabot 拉取请求时使用现有 Linux 自托管池。其余情况（包括手动触发）均使用 `ubuntu-24.04`；手动发布仍使用托管运行器。持久化存储隔离与回退限制见[发布演练运行器说明](../.agents/notes/implemented/process/2026-07-26-ci-failover-runbook.zh.md)。
 
 ### 日常命令
