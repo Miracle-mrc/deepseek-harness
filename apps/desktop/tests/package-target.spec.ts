@@ -87,6 +87,23 @@ describe('desktop package target', () => {
       .toThrow(/cannot use --prepare-only/u)
   })
 
+  it.each([
+    ['win-x64', 'win32', 'x64'], ['mac-arm64', 'darwin', 'arm64'], ['mac-x64', 'darwin', 'x64'],
+  ] as const)('selects unsigned fork-preview packaging for %s', (target, platform, arch) => {
+    for (const flags of [[], ['--unsigned'], ['--dir'], ['--check']]) {
+      expect(parseDesktopPackageInvocation([target, '--fork-preview', ...flags], platform, arch))
+        .toMatchObject({ forkPreview: true, unsigned: true, prepareOnly: false, skipNotarization: false })
+    }
+    expect(parseDesktopPackageInvocation([target], platform, arch).forkPreview).toBe(false)
+    for (const flag of ['--prepare-only', '--skip-notarization']) {
+      expect(() => parseDesktopPackageInvocation([target, '--fork-preview', flag], platform, arch))
+        .toThrow('--fork-preview cannot use --prepare-only or --skip-notarization')
+    }
+    for (const flag of ['--signed', '--notarize']) {
+      expect(() => parseDesktopPackageInvocation([target, '--fork-preview', flag], platform, arch)).toThrow()
+    }
+  })
+
   it('removes ambient certificate inputs for unsigned builds and overrides an inherited signing mode', () => {
     const environment = {
       DSH_DESKTOP_APP_ID: 'com.example.desktop',

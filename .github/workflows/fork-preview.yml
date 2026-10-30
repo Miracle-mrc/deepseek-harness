@@ -1,0 +1,29 @@
+name: Fork packaging smoke
+
+on:
+  pull_request:
+    paths:
+      - 'apps/desktop/**'
+      - 'apps/cli/**'
+      - 'python/**'
+      - 'native/**'
+      - 'scripts/*python*'
+      - 'scripts/fork-preview*'
+      - 'scripts/release/**'
+      - '.github/workflows/**'
+      - 'patches/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    if: github.repository == 'Miracle-mrc/deepseek-harness'
+    uses: ./.github/workflows/fork-preview-build.yml

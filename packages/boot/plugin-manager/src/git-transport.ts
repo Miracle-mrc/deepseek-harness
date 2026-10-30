@@ -68,6 +68,7 @@ export async function chooseGitTransport(spec: ParsedInstallSpec, dir: string, o
   if (ssh === undefined) return spec.spec
   const strip = (value: string): string => value.replace(/^git\+/i, '').replace(/#.*$/s, '')
   if (await readable(strip(spec.spec), dir, options)) return spec.spec
+  // oxlint-disable-next-line typescript/no-unnecessary-condition -- The signal can abort while the HTTPS probe is awaited.
   if (options.signal.aborted || !await readable(strip(ssh), dir, options)) return spec.spec
   return ssh
 }

@@ -250,12 +250,24 @@ jobs:
           --maxWorkers 1
           --no-file-parallelism
           --testTimeout 90000
+      - name: Check fork Windows ACL, Git, and Node baselines
+        if: github.repository == 'Miracle-mrc/deepseek-harness'
+        shell: pwsh
+        run: >-
+          pnpm exec vitest run
+          packages/sandbox/sandbox-windows-acl/tests/diagnose-script.spec.ts
+          packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts
+          packages/boot/plugin-manager/tests/git-transport.spec.ts
+          packages/ptc-runtime/ptc-runtime-node/tests/runtime.spec.ts
+          --maxWorkers 1
+          --no-file-parallelism
+          --testTimeout 90000
+          --retry 0
 
   # Stable required check for the Windows lanes, with the same semantics as
   # ci.yml's "all checks passed": every blocking job in THIS workflow is
-  # listed in `needs`. windows-coverage stays outside the verdict, so its
-  # per-file result remains visible without blocking. The bookkeeping job
-  # follows the Linux failover switch like the CI verdict.
+  # listed in `needs`, including per-file coverage. The bookkeeping job follows
+  # the Linux failover switch like the CI verdict.
   windows-checks-passed:
     name: windows checks passed
     runs-on: >-
@@ -265,7 +277,7 @@ jobs:
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "linux", "x64", "vm-backup"]')
           || 'ubuntu-latest' }}
-    needs: [windows-build, windows-native-tests]
+    needs: [windows-build, windows-coverage, windows-native-tests]
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     steps:
       - name: Fail if any needed job did not succeed

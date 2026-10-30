@@ -61,7 +61,8 @@ jobs:
             runner: seatbelt
     name: sandbox e2e (${{ matrix.runner }}, ${{ matrix.os }})
     runs-on: >-
-      ${{ matrix.runner == 'bwrap' && vars.DSH_CI_FAILOVER_LINUX == 'blacksmith'
+      ${{ github.repository == 'Miracle-mrc/deepseek-harness' && matrix.os
+          || matrix.runner == 'bwrap' && vars.DSH_CI_FAILOVER_LINUX == 'blacksmith'
           && 'blacksmith-4vcpu-ubuntu-2404'
           || matrix.os }}
     timeout-minutes: 20

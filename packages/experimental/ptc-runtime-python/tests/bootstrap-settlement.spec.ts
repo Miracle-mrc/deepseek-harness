@@ -109,8 +109,9 @@ describe('Python bootstrap completion shutdown', () => {
     expect(writeError ?? undefined).toBeUndefined()
 
     proto.resume()
+    const message: unknown = expect.stringContaining('ValueError: fixture failure')
     expect(await beforeClose(done.promise)).toEqual(verdict === 'exception'
-      ? { type: 'done', error: { kind: 'exception', message: expect.stringContaining('ValueError: fixture failure') } }
+      ? { type: 'done', error: { kind: 'exception', message } }
       : { type: 'done', value: 'done' })
     // EOF also releases the child if its host disappears without a signal.
     proto.end()

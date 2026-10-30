@@ -94,6 +94,8 @@ export default defineConfig([
     fixedExtension: false,
     dts: false,
     clean: false,
+    // The installer ships main.js alone; lazy update modules must remain inside that file.
+    outputOptions: { codeSplitting: false },
     deps: { neverBundle: ['electron'] },
   },
   ...(['preload-app', 'preload-welcome', 'preload-platform-account', 'preload-mandatory', 'preload-update-dialog'] as const).map(name => ({

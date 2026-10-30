@@ -34,7 +34,7 @@ it('selects packages manually and gates production secrets with the production E
     package_run_attempt: { type: 'string', required: false, default: '' },
   } })
   expect(workflow.permissions).toEqual({ contents: 'read', actions: 'read' })
-  expect(workflow.jobs.route?.if).toBeUndefined()
+  expect(workflow.jobs.route?.if).toBe("github.repository != 'Miracle-mrc/deepseek-harness'")
   const publish = workflow.jobs.publish!
   expect(publish.defaults).toBeUndefined()
   expect(publish.steps.find(step => step.id === 'key')?.run).toBe('node apps/desktop/scripts/read-desktop-app-key.mjs')
