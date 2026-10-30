@@ -140,6 +140,21 @@ describe('maintained repository reference policy', () => {
     expect(scanRepositoryReferences(fixture.root)).toEqual([])
   })
 
+  it('does not mistake generated lockfile byte sizes for matching abbreviated commits', () => {
+    // Build the fixture value at runtime so this source does not itself contain
+    // the historical commit prefix that the repository-wide gate rejects.
+    const commitPrefix = ['634', '4383'].join('')
+    const source = [
+      `    { url = "https://files.pythonhosted.org/wheel.whl", size = ${commitPrefix}, hash = "sha256:abcdef" },`,
+      `    { size=${commitPrefix}, rev="${commitPrefix}" },`,
+      `refer to commit ${commitPrefix}`,
+    ].join('\n')
+    expect(findRepositoryReferences('python/sdk/uv.lock', source, new Set([commitPrefix]))).toEqual([
+      { file: 'python/sdk/uv.lock', line: 2, kind: 'commit-hash' },
+      { file: 'python/sdk/uv.lock', line: 3, kind: 'commit-hash' },
+    ])
+  })
+
   it('accepts a prefix that two available commits share and rejects a longer unique prefix', (test) => {
     const fixture = repository(test)
     const [first, second] = collidingCommitBodies(fixture.tree, 7).map(body =>

@@ -163,8 +163,28 @@ for (const [file, jobIds] of [['release.yml', ['dependencies', 'pack']], ['relea
   })
 }
 
-it.each(['release-publish.yml', 'release-vendor-publish.yml'])('keeps %s manual and entirely hosted', (file) => {
+it.each(['release-publish.yml', 'release-vendor-publish.yml'])('keeps %s manual and hosted on forks', (file) => {
   const publish = workflow(file)
   expect(Object.keys(publish.on)).toEqual(['workflow_dispatch'])
-  for (const job of Object.values(publish.jobs)) expect(job['runs-on']).toBe(hosted)
+  for (const [jobName, job] of Object.entries(publish.jobs)) {
+    const selector = job['runs-on']
+    if (typeof selector !== 'string') throw new TypeError(`${file} / ${jobName} must select a runner`)
+    if (!selector.startsWith('${{')) {
+      expect(selector).toBe(hosted)
+      continue
+    }
+    expect(evaluate(selector, {
+      ...trustedPush,
+      'github.repository': 'Miracle-mrc/deepseek-harness',
+      'github.event_name': 'workflow_dispatch',
+    })).toBe(hosted)
+    expect(evaluate(selector, {
+      ...trustedPush,
+      'github.event_name': 'workflow_dispatch',
+      'vars.DSH_CI_FAILOVER_LINUX': '',
+    })).toBe(hosted)
+    // Publishing in upstream may still opt in to its private maintenance pool.
+    expect(evaluate(selector, { ...trustedPush, 'github.event_name': 'workflow_dispatch' }))
+      .toEqual(selfhosted)
+  }
 })

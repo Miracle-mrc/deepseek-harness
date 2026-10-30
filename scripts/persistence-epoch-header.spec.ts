@@ -2,6 +2,7 @@
 import { resolve } from 'node:path'
 import { expect, it } from 'vitest'
 import { assertV4RowAdmission } from '@deepseek-ai/dsh-session-format-v3-to-v4'
+import { COVERAGE_TEST_TIMEOUT_ENV, parseCoverageTestTimeout } from './coverage-partitions.ts'
 import { extractPersistenceSchema } from './persistence-schema.ts'
 import { classifyPersistenceChange } from './persistence-changes.ts'
 import { canonicalizeSchema, schemaDigest } from './persistence-schema-model.ts'
@@ -15,7 +16,9 @@ function property(nodes: readonly SchemaNode[], index: number, name: string): nu
   return field.type
 }
 
-it('requires compatibility review before request headers can carry retired system text', { timeout: 60_000 }, () => {
+// Whole-workspace scans retain their local allowance and any larger lane budget.
+const timeout = Math.max(60_000, parseCoverageTestTimeout(process.env[COVERAGE_TEST_TIMEOUT_ENV]) ?? 0)
+it('requires compatibility review before request headers can carry retired system text', { timeout }, () => {
   const inventory = extractPersistenceSchema(resolve(import.meta.dirname, '..'))
   const before = inventory.roots.find(root => root.key === 'event:request/header')
   if (before === undefined) throw new Error('generated schema omits request/header')

@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { DetailFailure } from '@deepseek-ai/dsh-plugin-detail'
 import { RepositoryCache, type RepositoryCacheOptions } from '../src/repository-cache.ts'
@@ -149,12 +149,30 @@ it('reports an unreachable host as a network failure, a failed local command as 
   await expect(broken).rejects.toThrow('git update-ref')
   await expect(broken).rejects.not.toBeInstanceOf(DetailFailure)
   expect(readdirSync(join(root, 'cache'))).toEqual([])
-  // Git that cannot answer `git --version` within the deadline cannot run.
   const other = repository('t2', { 'README.md': 'x' })
-  await expectRejection(cache({ timeoutMs: 1 }).read(other.url, other.commit, 'README.md', 100, signal), { reason: 'git-unavailable' }, 'timed out')
   vi.stubEnv('PATH', join(root, 'no-git'))
   const missing = cache().read(other.url, other.commit, 'README.md', 100, signal)
   await expectRejection(missing, { reason: 'git-unavailable' }, 'git --version')
+  expect(readdirSync(join(root, 'cache'))).toEqual([])
+})
+
+it('reports a stalled Git version probe as unavailable before initializing a repository', async () => {
+  const source = repository('stalled-version', { 'README.md': 'x' })
+  const bin = join(root, 'git-bin')
+  mkdirSync(bin)
+  const fixture = fileURLToPath(new URL('./fixtures/git-version-stall.mjs', import.meta.url))
+  const windows = process.platform === 'win32'
+  const command = [process.execPath, fixture].map(value => windows
+    ? `"${value.replaceAll('%', '%%')}"`
+    : `'${value.replaceAll("'", "'\\''")}'`).join(' ')
+  writeFileSync(join(bin, windows ? 'git.cmd' : 'git'), windows
+    ? `@echo off\r\n${command} %*\r\n`
+    : `#!/bin/sh\nexec ${command} "$@"\n`, { mode: 0o755 })
+  vi.stubEnv('PATH', bin)
+  const repositories = cache({ timeoutMs: 1000 })
+  await expectRejection(repositories.read(source.url, source.commit, 'README.md', 100, signal),
+    { reason: 'git-unavailable' }, 'git --version: Command timed out')
+  await repositories.settled()
   expect(readdirSync(join(root, 'cache'))).toEqual([])
 })
 

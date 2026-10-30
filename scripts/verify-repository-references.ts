@@ -12,6 +12,9 @@ const organizationUrl = new RegExp(`\\bgithub\\.com/${organization}(?![a-z0-9-])
 // The independent kit repository owns the engine source and documentation.
 const kitRepositoryUrl = new RegExp(`\\bgithub\\.com/${organization}/libreoffice-kit(?:\\.git)?(?=/|[^a-zA-Z0-9_.-]|$)`, 'g')
 const commitCandidate = /(?<![a-z0-9])[\da-f]{7,40}(?![a-z0-9])/gi
+// Generated lockfile byte sizes can coincidentally match all-digit abbreviated
+// commit IDs. Keep the commit check for other values on the same source line.
+const lockfileByteSize = /\bsize\s*=\s*\d{7,40}(?=\s*[,}])/g
 const excludedPrefixes = ['vendor/', '.agents/notes/archived/']
 const gitOutputLimit = 64 * 1024 * 1024
 // One 41-byte line per object; 1.2 million objects produce about 49 MiB.
@@ -29,6 +32,11 @@ export interface RepositoryReference {
 
 function isMaintained(file: string): boolean {
   return !excludedPrefixes.some(prefix => file.startsWith(prefix))
+}
+
+function commitCandidates(source: string): string[] {
+  return [...source.replace(lockfileByteSize, 'size = <bytes>').matchAll(commitCandidate)]
+    .map(match => match[0].toLowerCase())
 }
 
 /**
@@ -49,7 +57,7 @@ export function findRepositoryReferences(
     if (organizationUrl.test(canonicalReferenceText(line).replace(kitRepositoryUrl, ''))) {
       references.push({ file, line: index + 1, kind: 'organization-url' })
     }
-    if ([...line.matchAll(commitCandidate)].some(match => commits.has(match[0].toLowerCase()))) {
+    if (commitCandidates(line).some(candidate => commits.has(candidate))) {
       references.push({ file, line: index + 1, kind: 'commit-hash' })
     }
   }
@@ -110,8 +118,7 @@ export function uniquePrefixMatch(objects: readonly string[], prefix: string): s
  * @returns Lowercase candidates that name exactly one available object, which is a commit.
  */
 export function repositoryCommits(repoRoot: string, sources: Iterable<string>): Set<string> {
-  const candidates = [...new Set([...sources].flatMap(source =>
-    [...source.matchAll(commitCandidate)].map(match => match[0].toLowerCase())))]
+  const candidates = [...new Set([...sources].flatMap(commitCandidates))]
   if (candidates.length === 0) return new Set()
   // Git resolves prefixes across all available objects, including unreachable and alternate ones;
   // one listing of those objects replaces one Git prefix lookup per candidate.

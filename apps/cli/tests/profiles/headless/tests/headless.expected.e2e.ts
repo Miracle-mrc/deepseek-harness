@@ -96,7 +96,7 @@ async function expectHeadlessStream(normalized: string, expectedPath: string): P
   expect(parseJsonl(normalized)).toEqual(parseJsonl(expected))
 }
 
-/** Serve one deterministic DeepSeek-compatible response while retaining its request body. */
+/** Serve deterministic responses, optionally holding completion until the title request arrives. */
 async function deepseekDefaultsServer(
   options: { waitForTitleRequest?: boolean; piAiCompatibility?: true } = {},
 ): Promise<DeepSeekDefaultsServer> {
@@ -836,8 +836,8 @@ describe('headless stream-json snapshots', () => {
     `)
   }, LOADER_SMOKE_TEST_TIMEOUT_MS)
 
-  it('keeps provider comments alive and sends DeepSeek defaults through the one-shot app', async () => {
-    const server = await deepseekDefaultsServer()
+  it('accepts provider comments and sends DeepSeek defaults through the one-shot app', async () => {
+    const server = await deepseekDefaultsServer({ waitForTitleRequest: true })
     try {
       const result = await runLoaderSmoke({
         label: 'DeepSeek adapter defaults headless stream-json snapshot',
@@ -893,8 +893,14 @@ describe('headless stream-json snapshots', () => {
     }
   }, LOADER_SMOKE_TEST_TIMEOUT_MS)
 
-  it('keeps the compatibility stream open until the title request arrives', async () => {
-    const server = await deepseekDefaultsServer({ waitForTitleRequest: true, piAiCompatibility: true })
+  it.each([
+    ['Messages', undefined, 'event: message_stop'],
+    ['Chat Completions', true, 'data: [DONE]'],
+  ] as const)('keeps the %s stream open until the title request arrives', async (_format, piAiCompatibility, terminal) => {
+    const server = await deepseekDefaultsServer({
+      waitForTitleRequest: true,
+      ...piAiCompatibility === true ? { piAiCompatibility } : {},
+    })
     try {
       const response = await fetch(server.url, {
         method: 'POST',
@@ -923,8 +929,8 @@ describe('headless stream-json snapshots', () => {
           if (chunk.done) break
           body += decoder.decode(chunk.value)
         }
-        expect(body).toContain('data: [DONE]')
-        expect(await title.text()).toContain('data: [DONE]')
+        expect(body).toContain(terminal)
+        expect(await title.text()).toContain(terminal)
       } finally {
         await reader.cancel()
       }
