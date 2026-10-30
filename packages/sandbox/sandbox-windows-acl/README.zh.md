@@ -63,7 +63,7 @@ sandbox.dispose() // revokes the revocable (temp) grant and label, keeps the sta
 rmSync(tempDir, { recursive: true, force: true })
 ```
 
-工作区的安全描述符改动以常驻方式授予——`dispose()` 保留它们，因为它们是跨实例的复用缓存——而不同的临时 SID 以可回收方式授予。每次授权就是一次调用，同时携带能力 SID 允许 ACE、环境性删除拒绝与 Low 禁止上调标签。服务端对应实现是 `AclWriteGrant` 类：每个目录一次 `add(path, standing)`，`dispose()` 撤销可回收路径并释放各 SID。
+工作区的安全描述符改动以常驻方式授予——`dispose()` 保留它们，因为它们是跨实例的复用缓存——而不同的临时 SID 以可回收方式授予。策略更新会在完成所需的 DACL 规范化之后，一起应用能力 SID 允许 ACE、环境性删除拒绝与 Low 禁止上调标签。服务端对应实现是 `AclWriteGrant` 类：每个目录一次 `add(path, standing)`，`dispose()` 撤销可回收路径并释放各 SID。
 
 ### 隔离给你带来什么
 
@@ -98,6 +98,8 @@ rmSync(tempDir, { recursive: true, force: true })
 ### 机制
 
 调用者令牌被复制为 `WRITE_RESTRICTED` 受限令牌，其 restricting SIDs 携带彼此独立的工作区与私有临时目录能力，该令牌还会被降级为 Low 完整性。Windows 执行两次访问检查——先对正常 SID，再对 restricting SID——并且只在两次检查都通过时才授予写类访问；与此同时，内核的强制完整性检查会拒绝对任何未标记为 Low 的对象进行写类访问。写 SID 交叉检查只覆盖对象自身的那次访问检查：Windows 也可以依据父目录的 `FILE_DELETE_CHILD` 权限批准写入或删除，而这项权限不需要任何 restricting SID 副署，因此只带交叉检查的令牌不仅能删除其环境用户 SID 所控制的任何文件，还能删除**另一个授权根目录**内的文件——那里的 Low 标签恰好能通过完整性检查。所以每次授权还会向 world SID 拒绝 `FILE_DELETE_CHILD`，使能力 ACE 的 DELETE 位成为授权根目录内唯一的删除授权来源，并在同一次 `SetNamedSecurityInfoW` 调用中把该目录标记为 Low。工作区 SID 由规范工作区路径确定性派生（`workspaceWriteSid`），因此工作区根目录的安全描述符改动每台机器每个工作区只物化一次，之后每次会话、调用或重启都命中精确 ACE／精确拒绝／精确标签跳过。每个活跃的会话/工作区对则获得一个随机私有临时目录，以及一个从该路径派生的 SID（`tempWriteSid`），因此各会话共享预期的工作区权限，却不会继承彼此的临时目录权限。每个策略专用 Win32 调用和 [`dsh-win32-process`](../../subprocess/win32-process/README.zh.md) 提供的进程原语都有检查；失败抛出携带 API 名、精确错误码、系统文本与失败上下文的 `Win32Error`——从构造上 fail-closed。
+
+在该策略更新之前，`grantWrite` 会在每个根目录的锁内检查 DACL 控制标志。对于缺少 `SE_DACL_AUTO_INHERITED` 的 DACL，它先重新应用现有 DACL，不添加策略 ACE、不改动完整性标签，也不覆盖 DACL 保护设置。随后重新读取安全描述符，要求已设置自动继承且 DACL 原有保护状态不变。已使用自动继承的 DACL 会跳过这一步规范化。锁会一直持有到策略更新完成；任何 Win32 调用或验证失败都会中止授权。
 
 ### 模式与令牌列表
 

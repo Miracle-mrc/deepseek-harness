@@ -10,7 +10,7 @@ import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wri
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vitest'
 
 import { resolvePwshPath } from '@deepseek-ai/dsh-pwsh-local'
 import { AclWriteGrant, tempWriteSid, workspaceWriteSid } from '../src/index.ts'
@@ -446,14 +446,26 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
     // FILE_DELETE_CHILD right, which the capability intersection never reaches.
     // The grant denies that right, leaving the capability DELETE bit as the
     // only delete authority inside a granted root.
+    const createGrant = (sid: string): AclWriteGrant => {
+      const grant = AclWriteGrant.create(sid)
+      onTestFinished(() => { grant.dispose() })
+      return grant
+    }
+    const nestedParent = (root: string): string => {
+      const child = join(root, 'inherited-child')
+      mkdirSync(child)
+      return child
+    }
     const otherWorkspace = join(scratchRoot, 'other-workspace')
     const otherTemp = join(scratchRoot, 'other-temp')
     mkdirSync(otherWorkspace)
     mkdirSync(otherTemp)
+    const otherWorkChild = nestedParent(otherWorkspace)
+    const otherTempChild = nestedParent(otherTemp)
     const otherWorkspaceSid = workspaceWriteSid(otherWorkspace)
     const otherTempSid = tempWriteSid(otherTemp)
-    const otherWorkspaceGrant = AclWriteGrant.create(otherWorkspaceSid)
-    const otherTempGrant = AclWriteGrant.create(otherTempSid)
+    const otherWorkspaceGrant = createGrant(otherWorkspaceSid)
+    const otherTempGrant = createGrant(otherTempSid)
     otherWorkspaceGrant.add(otherWorkspace, true)
     otherTempGrant.add(otherTemp)
     // Session A's own roots, granted the same way, run through the runner.
@@ -461,46 +473,50 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
     const ownTemp = join(scratchRoot, 'own-temp')
     mkdirSync(ownWorkspace)
     mkdirSync(ownTemp)
+    const ownWorkChild = nestedParent(ownWorkspace)
+    const ownTempChild = nestedParent(ownTemp)
     const ownWorkspaceSid = workspaceWriteSid(ownWorkspace)
     const ownTempSid = tempWriteSid(ownTemp)
-    const ownWorkspaceGrant = AclWriteGrant.create(ownWorkspaceSid)
-    const ownTempGrant = AclWriteGrant.create(ownTempSid)
+    const ownWorkspaceGrant = createGrant(ownWorkspaceSid)
+    const ownTempGrant = createGrant(ownTempSid)
     ownWorkspaceGrant.add(ownWorkspace, true)
     ownTempGrant.add(ownTemp)
-    try {
-      const victims = {
-        ownWork: join(ownWorkspace, 'victim.txt'),
-        otherWork: join(otherWorkspace, 'victim.txt'),
-        ownTemp: join(ownTemp, 'victim.txt'),
-        otherTemp: join(otherTemp, 'victim.txt'),
-      }
-      for (const path of Object.values(victims)) writeFileSync(path, 'delete me')
-      const probe = [
-        "$ErrorActionPreference='SilentlyContinue';",
-        ...Object.entries(victims).map(([name, path]) =>
-          `try{[System.IO.File]::Delete('${path}');'${name}: DELETED'}catch{'${name}: DENIED'};`),
-      ].join('')
-      const result = runRunner([
-        '--workspace', ownWorkspace, '--temp', ownTemp, '--mode', 'workspace-write',
-        '--write-sid', ownWorkspaceSid, '--temp-write-sid', ownTempSid,
-        '--', 'pwsh', '/NoLogo', '/NonInteractive', '/NoProfile', '/Command', probe,
-      ])
-      expect(result.status, `stderr: ${result.stderr}`).toBe(0)
-      expect(result.stdout).toContain('ownWork: DELETED')
-      expect(result.stdout).toContain('ownTemp: DELETED')
-      expect(result.stdout).toContain('otherWork: DENIED')
-      expect(result.stdout).toContain('otherTemp: DENIED')
-      expect(existsSync(victims.otherWork)).toBe(true)
-      expect(existsSync(victims.otherTemp)).toBe(true)
-      expect(existsSync(victims.ownWork)).toBe(false)
-      expect(existsSync(victims.ownTemp)).toBe(false)
-    } finally {
-      ownWorkspaceGrant.dispose()
-      ownTempGrant.dispose()
-      otherWorkspaceGrant.dispose()
-      otherTempGrant.dispose()
-      rmSync(ownTemp, { recursive: true, force: true })
-      rmSync(otherTemp, { recursive: true, force: true })
+    const victims = {
+      ownWork: join(ownWorkspace, 'victim.txt'),
+      otherWork: join(otherWorkspace, 'victim.txt'),
+      ownTemp: join(ownTemp, 'victim.txt'),
+      otherTemp: join(otherTemp, 'victim.txt'),
+      ownWorkInherited: join(ownWorkChild, 'victim.txt'),
+      otherWorkInherited: join(otherWorkChild, 'victim.txt'),
+      ownTempInherited: join(ownTempChild, 'victim.txt'),
+      otherTempInherited: join(otherTempChild, 'victim.txt'),
+    }
+    for (const path of Object.values(victims)) writeFileSync(path, 'delete me')
+    const probe = [
+      "$ErrorActionPreference='SilentlyContinue';",
+      ...Object.entries(victims).map(([name, path]) =>
+        `try{[System.IO.File]::Delete('${path}');'${name}: DELETED'}catch{'${name}: DENIED'};`),
+    ].join('')
+    const result = runRunner([
+      '--workspace', ownWorkspace, '--temp', ownTemp, '--mode', 'workspace-write',
+      '--write-sid', ownWorkspaceSid, '--temp-write-sid', ownTempSid,
+      '--', 'pwsh', '/NoLogo', '/NonInteractive', '/NoProfile', '/Command', probe,
+    ])
+    expect(result.error, `stderr: ${result.stderr}`).toBeUndefined()
+    expect(result.signal, `stderr: ${result.stderr}`).toBeNull()
+    expect(result.status, `stderr: ${result.stderr}`).toBe(0)
+    expect(result.stdout).toContain('ownWork: DELETED')
+    expect(result.stdout).toContain('ownTemp: DELETED')
+    expect(result.stdout).toContain('otherWork: DENIED')
+    expect(result.stdout).toContain('otherTemp: DENIED')
+    expect(existsSync(victims.otherWork)).toBe(true)
+    expect(existsSync(victims.otherTemp)).toBe(true)
+    expect(existsSync(victims.ownWork)).toBe(false)
+    expect(existsSync(victims.ownTemp)).toBe(false)
+    for (const [name, path] of Object.entries(victims)) {
+      const own = name.startsWith('own')
+      expect(result.stdout, `victim: ${name}`).toContain(`${name}: ${own ? 'DELETED' : 'DENIED'}`)
+      expect(existsSync(path), `victim: ${name}`).toBe(!own)
     }
   }, 60_000)
 

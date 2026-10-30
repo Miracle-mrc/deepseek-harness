@@ -345,11 +345,16 @@ describe.skipIf(!isWin32)('ACL editing', () => {
     const apply = vi.spyOn(api, 'setNamedSecurityInfoW')
     try {
       grantWrite(api, dir, capabilitySid, lowSid, world)
-      expect(apply).toHaveBeenCalledTimes(1)
+      // The filesystem owns the initial inheritance format: legacy DACLs need
+      // a neutral write before the policy update; current DACLs need only the update.
+      const policy = abi.DACL_SECURITY_INFORMATION | abi.LABEL_SECURITY_INFORMATION
+      expect([[policy], [abi.DACL_SECURITY_INFORMATION, policy]])
+        .toContainEqual(apply.mock.calls.map(call => call[2]))
+      const initialApplies = apply.mock.calls.length
       // The exact ACE, deny, and label now stand (the per-session grant
       // surviving from a previous server lifetime): the second grant is a read only.
       grantWrite(api, dir, capabilitySid, lowSid, world)
-      expect(apply).toHaveBeenCalledTimes(1)
+      expect(apply).toHaveBeenCalledTimes(initialApplies)
       const aces = readDirectAces(api, dir)
       expect(aces.filter(ace => ace.sid === 'S-1-4-4242-2')).toHaveLength(1)
       expect(aces.filter(ace => ace.sid === 'S-1-1-0')).toHaveLength(1)
