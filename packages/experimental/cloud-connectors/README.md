@@ -100,6 +100,8 @@ The [Host service](src/index.ts) owns authorization attempts, credential reconci
 
 The [AWS CLI adapter](src/aws-cli.ts) runs fixed argument lists without a shell and obtains MCP-scoped bearer tokens. The [Supabase OAuth provider](src/oauth-provider.ts) uses SDK discovery, dynamic registration, and refresh. The [endpoint catalog](src/catalog.ts) fixes the two provider URLs and supported AWS regions; callers cannot substitute another endpoint. The [MCP subsystem reference](../../../docs/subsystems/mcp.md#ctxcloudconnections--cloudconnections) owns the generated service-method reference.
 
+The [local callback receiver](src/oauth-loopback.ts) releases browser connections when sign-in finishes or is cancelled, after flushing any callback response already queued for delivery.
+
 </details>
 
 -----

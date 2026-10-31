@@ -100,6 +100,8 @@ Supabase 刷新会在令牌交换期间持有共享凭据存储锁，防止多�
 
 [AWS CLI 适配器](src/aws-cli.ts)不经过 shell，使用固定参数列表运行命令并获取限定于 MCP 的 bearer 令牌。[Supabase OAuth 提供方](src/oauth-provider.ts)使用 SDK 发现、动态注册和刷新。[端点目录](src/catalog.ts)固定两个提供方网址及受支持的 AWS 区域，调用方不能替换端点。[MCP 子系统参考](../../../docs/subsystems/mcp.zh.md#ctxcloudconnections--cloudconnections)提供生成的服务方法参考。
 
+[本地回调接收器](src/oauth-loopback.ts)在登录完成或取消时释放浏览器连接；已排队等待发送的回调响应会先完成写入，再关闭连接。
+
 </details>
 
 -----
