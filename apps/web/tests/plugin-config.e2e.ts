@@ -316,14 +316,14 @@ describe('web e2e: plugin configuration pages', () => {
 
     await expect.poll(async () => (await settingsDocument()).includes('timeoutMs: 12000'), { timeout: 10_000 })
       .toBe(true)
+    // The exact Save label returns after the Host reconciles the persisted edit.
+    await expect.poll(() => save.isDisabled(), { timeout: 5_000 }).toBe(true)
     expect(scaffold.ctx.shell.resolve({ command: 'true' }).timeoutMs).toBe(12000)
     expect(entry.fiber === fiber).toBe(true)
     // Presence in the user layer is what the badge reports, and the reset is
     // offered only for a field that has one.
     await expect.poll(() => panel.getByText('已覆盖').count(), { timeout: 5_000 }).toBe(1)
     expect(await panel.getByRole('button', { name: '恢复默认' }).count()).toBe(1)
-    // A settled form offers no save to repeat.
-    await expect.poll(() => save.isDisabled(), { timeout: 5_000 }).toBe(true)
     expect(tripwire.pageErrors).toEqual([])
   }, 60_000)
 
