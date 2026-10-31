@@ -706,7 +706,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: '@Remote async cancel(providerId: string, attemptId: CloudAttemptId): Promise<CloudConnectionView[]>',
-        description: 'Cancel only the caller\'s admitted operation; never disconnect another login.',
+        description: 'Cancel only the caller\'s admitted operation; never disconnect another login. A saved login without a live catalog remains unavailable and offers retry.',
         parameters: [{ name: 'providerId', description: 'Provider of the sign-in operation.' }, { name: 'attemptId', description: 'Identity returned by start(); a stale identity is a no-op.' }],
         returns: 'State after the owned authorization runner has stopped.',
       },

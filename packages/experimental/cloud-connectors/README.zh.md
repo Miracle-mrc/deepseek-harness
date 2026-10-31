@@ -34,7 +34,7 @@ kind: "package-reference"
 
 ### AWS 前置条件与登录
 
-在运行 Harness Host 的计算机上安装最新的 [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)。集成会拒绝低于 2.32.0 的版本，并要求提供 `signin create-o-auth2-token-with-iam` 命令，因此较旧的 v2 版本仍可能需要更新。选择 AWS MCP 区域、CLI 配置文件和登录方式。默认配置文件为 `dsh-cloud`；使用专用配置文件可将此登录与其他 CLI 用途分开。
+在运行 Harness Host 的计算机上安装最新的 [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)。集成会拒绝低于 2.32.0 的版本，并要求提供 [`signin create-oauth2-token-with-iam` 命令](https://docs.aws.amazon.com/cli/latest/reference/signin/create-oauth2-token-with-iam.html)，因此较旧的 v2 版本仍可能需要更新。选择 AWS MCP 区域、CLI 配置文件和登录方式。默认配置文件为 `dsh-cloud`；使用专用配置文件可将此登录与其他 CLI 用途分开。
 
 | 方式 | 行为 |
 |---|---|
@@ -52,7 +52,7 @@ Supabase 连接固定的托管端点 `https://mcp.supabase.com/mcp`。[托管 MC
 
 浏览器可以运行在另一台计算机上。AWS `login` 使用上述私密浏览器响应；SSO 使用公开设备验证码。Supabase 通常返回 Host 上的一次性 `127.0.0.1` 回调。如果浏览器无法访问该回调，请从地址栏复制完整的失败回调网址，粘贴到**浏览器回调网址（可选）**。Host 会校验来源、路径和 state，仅接受一次，并在 OAuth 交换中保留 issuer。不要将授权响应或回调网址放入 agent 对话或命令参数。
 
-终端通过隐藏输入读取私密响应；[`--secret-stdin`](../cloud-connectors-cli/README.zh.md#use-this-package)可显式启用非终端输入。取消登录只会停止本次尝试，不会断开其他调用方已保存的连接。这些流程不提供公网回调中继。
+终端通过隐藏输入读取私密响应；[`--secret-stdin`](../cloud-connectors-cli/README.zh.md#use-this-package)可显式启用非终端输入。取消登录只会停止本次尝试，不会断开其他调用方已保存的连接。如果取消后仍有已保存的登录但没有活动连接，卡片会提供**重试**；连接成功前云工具保持不可用，未确认的工具选择仍需明确批准。这些流程不提供公网回调中继。
 
 ### 凭据与断开连接
 

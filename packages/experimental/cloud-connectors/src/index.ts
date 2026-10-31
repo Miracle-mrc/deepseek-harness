@@ -295,6 +295,7 @@ export class CloudConnections extends TypertRemoteService {
 
   /**
    * Cancel only the caller's admitted operation; never disconnect another login.
+   * A saved login without a live catalog remains unavailable and offers retry.
    * @param providerId - Provider of the sign-in operation.
    * @param attemptId - Identity returned by start(); a stale identity is a no-op.
    * @returns State after the owned authorization runner has stopped.
@@ -302,10 +303,20 @@ export class CloudConnections extends TypertRemoteService {
   @Remote
   async cancel(providerId: string, attemptId: CloudAttemptId): Promise<CloudConnectionView[]> {
     this.assertActive()
-    const attempt = this.attempts.get(providerOf(providerId))
+    const provider = providerOf(providerId)
+    const attempt = this.attempts.get(provider)
     if (attempt?.id === attemptId) {
       attempt.controller.abort()
       await attempt.done
+      await this.enqueue(provider, async () => {
+        if (this.attempts.has(provider)) return
+        const record = await this.home.credentials.modifyRecord(cloudCredentialKey(provider), () => Promise.resolve(undefined))
+        const grant = parseConnectionGrant(provider, record)
+        const live = this.live.get(provider)
+        if (grant !== undefined && live?.grantId !== grant.grantId) {
+          this.failed.set(provider, 'connection-failed')
+        }
+      })
     }
     return await this.list()
   }

@@ -156,6 +156,7 @@ Owns browser authorization, AWS CLI sign-in, and MCP tool registration. It start
 
 /**
  * Cancel only the caller's admitted operation; never disconnect another login.
+ * A saved login without a live catalog remains unavailable and offers retry.
  * @param providerId - Provider of the sign-in operation.
  * @param attemptId - Identity returned by start(); a stale identity is a no-op.
  * @returns State after the owned authorization runner has stopped.
