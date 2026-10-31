@@ -29,6 +29,7 @@ import { assertBuiltBenchmarkRuntime } from '../support/built-worker.ts'
 import { serializeRecord } from '../../packages/storage/storage-json/src/format.ts'
 import { ANCHOR_COUNT } from './corpus-shape.ts'
 import { createBenchmarkSessionController } from './session-controller.ts'
+import { readProcessPeakRssBytes } from './process-peak-rss.ts'
 import {
   anchorHeader,
   corpusSessionId,
@@ -127,7 +128,7 @@ async function memory(): Promise<CorpusMemory> {
   return {
     heapUsedMb: megabytes(usage.heapUsed),
     rssMb: megabytes(usage.rss),
-    peakRssMb: Math.round(process.resourceUsage().maxRSS / 102.4) / 10,
+    peakRssMb: megabytes(await readProcessPeakRssBytes()),
   }
 }
 
