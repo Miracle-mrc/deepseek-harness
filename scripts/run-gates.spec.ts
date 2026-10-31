@@ -528,19 +528,30 @@ describe('gate graph validation', () => {
     }
   })
 
-  it('runs the Windows built-bin smoke after other observational gates settle', () => {
-    const observational = withPnpmEntrypoint(() => gatesForMode('ci-windows-observational-ready'))
-    const builtBin = observational.find(gate => gate.id === 'built-bin-smoke')
+  it.each(['ci-windows-complete', 'ci-windows-observational-ready'] as const)(
+    'orders Windows diagnostics, CLI help, then built-bin smoke in %s', (mode) => {
+      const gates = withPnpmEntrypoint(() => gatesForMode(mode))
+      const help = gates.find(gate => gate.id === 'cli-help')
+      const builtBin = gates.find(gate => gate.id === 'built-bin-smoke')
 
-    expect(builtBin?.after).toEqual(
-      observational.filter(gate => gate.id !== 'built-bin-smoke').map(gate => gate.id),
-    )
-
-    const completeBuiltBin = withPnpmEntrypoint(() => gatesForMode('ci-windows-complete'))
-      .find(gate => gate.id === 'built-bin-smoke')
-    expect(completeBuiltBin?.after).toContain('windows-site')
-    expect(completeBuiltBin?.after).not.toContain('docs-site-build')
-  })
+      expect(help?.after?.toSorted()).toEqual(
+        gates.filter(gate => gate.id !== 'cli-help' && gate.id !== 'built-bin-smoke').map(gate => gate.id).sort(),
+      )
+      expect(help?.needs ?? []).toEqual([])
+      expect(builtBin?.after?.toSorted()).toEqual(
+        gates.filter(gate => gate.id !== 'built-bin-smoke').map(gate => gate.id).sort(),
+      )
+      if (mode === 'ci-windows-complete') {
+        expect(help?.after).toContain('windows-site')
+        expect(help?.after).not.toContain('docs-site-build')
+        expect(builtBin?.after).toContain('windows-site')
+        expect(builtBin?.after).not.toContain('docs-site-build')
+      } else {
+        expect(help?.after).not.toContain('build')
+        expect(builtBin?.after).not.toContain('build')
+      }
+    },
+  )
 
   it('reuses the Windows build without dropping diagnostics or rebuilding the workspace', () => {
     const ready = withPnpmEntrypoint(() => gatesForMode('ci-windows-observational-ready'))
@@ -567,22 +578,33 @@ describe('gate graph validation', () => {
     expect(complete.find(gate => gate.id === 'coverage')).toBeDefined()
   })
 
-  it('runs built Windows smoke after failed diagnostics settle on an existing build', async () => {
-    const ready = withPnpmEntrypoint(() => gatesForMode('ci-windows-observational-ready'))
-    const settled = new Set<string>()
-    const results = await runGates(ready, 8, async (subject) => {
-      if (subject.id === 'built-bin-smoke') {
-        expect(settled.size).toBe(ready.length - 1)
-        expect(settled.has('doc-graphs')).toBe(true)
-      }
-      settled.add(subject.id)
-      return resultFor(subject, subject.id === 'doc-graphs' ? 'failed' : 'passed')
-    })
+  it.each(['ci-windows-complete', 'ci-windows-observational-ready'] as const)(
+    'runs Windows CLI help and built smoke after failed diagnostics settle in %s', async (mode) => {
+      const gates = withPnpmEntrypoint(() => gatesForMode(mode))
+      const settled = new Set<string>()
+      const settledAtStartup = new Map<string, string[]>()
+      const attempted: string[] = []
+      const results = await runGates(gates, 8, async (subject) => {
+        attempted.push(subject.id)
+        if (subject.id === 'cli-help' || subject.id === 'built-bin-smoke') {
+          settledAtStartup.set(subject.id, [...settled])
+        }
+        return resultFor(subject, subject.id === 'doc-graphs' ? 'failed' : 'passed')
+      }, result => settled.add(result.gate.id))
 
-    expect(results.filter(result => result.status === 'failed').map(result => result.gate.id)).toEqual(['doc-graphs'])
-    expect(results.find(result => result.gate.id === 'built-bin-smoke')?.status).toBe('passed')
-    expect(results.some(result => result.status === 'skipped')).toBe(false)
-  })
+      expect(settledAtStartup.get('cli-help')?.sort()).toEqual(
+        gates.filter(gate => gate.id !== 'cli-help' && gate.id !== 'built-bin-smoke').map(gate => gate.id).sort(),
+      )
+      expect(settledAtStartup.get('built-bin-smoke')?.sort()).toEqual(
+        gates.filter(gate => gate.id !== 'built-bin-smoke').map(gate => gate.id).sort(),
+      )
+      expect(attempted.sort()).toEqual(gates.map(gate => gate.id).sort())
+      expect(results.filter(result => result.status === 'failed').map(result => result.gate.id)).toEqual(['doc-graphs'])
+      expect(results.find(result => result.gate.id === 'cli-help')?.status).toBe('passed')
+      expect(results.find(result => result.gate.id === 'built-bin-smoke')?.status).toBe('passed')
+      expect(results.some(result => result.status === 'skipped')).toBe(false)
+    },
+  )
 
   it.each([undefined, '3'])('provisions Electron before Windows coverage with partition count %s', async (partitions) => {
     const gates = withEnv('DSH_COVERAGE_PARTITIONS', partitions, () =>

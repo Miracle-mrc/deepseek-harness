@@ -650,7 +650,12 @@ function ciWindowsObservationalGates(): Gate[] {
     }),
   ]
   return [
-    ...predecessors,
+    ...predecessors.map(gate => gate.id === 'cli-help' ? {
+      ...gate,
+      // Source help starts parallel CLI children with bounded deadlines too.
+      // Let the other Windows diagnostics settle before those children start.
+      after: predecessors.filter(peer => peer.id !== 'cli-help').map(peer => peer.id),
+    } : gate),
     {
       ...builtBinSmokeGate(['build', 'electron-install']),
       // This smoke starts real application children with bounded startup
