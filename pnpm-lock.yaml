@@ -9369,6 +9369,9 @@ importers:
       '@deepseek-ai/dsh-mcp-client':
         specifier: workspace:*
         version: link:../../mcp/mcp-client
+      '@deepseek-ai/dsh-remote-mock':
+        specifier: workspace:*
+        version: link:../../test-support/remote-mock
       '@deepseek-ai/dsh-system-prompt':
         specifier: workspace:*
         version: link:../../core/system-prompt

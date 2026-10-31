@@ -31,7 +31,7 @@ kind: "package-bundle"
 dsh plugin --profile cloud enable --empty @deepseek-ai/dsh-experimental-cloud-connectors-cli
 ```
 
-`--empty` 会在自定义 profile 不存在时初始化它，且不添加默认组合包；已有 profile 会保留配置层与设置。启用操作会在该 profile 中选中组合包声明的补丁。请将此完整终端应用与 agent 和 Web profile 分开。通过标准启动器运行命令：
+此完整应用声明 `dsh.bundle.standalone: true`，必须是 profile 中唯一选中的组合包，不能与 base、Web 或 Desktop 共用组合包栈。`--empty` 会在自定义 profile 不存在时初始化它，且不添加默认组合包；已有 profile 会被保留，并在写入前拒绝冲突的组合包选择。若 `cloud` 已选择其他组合包，请使用新的自定义 profile。普通 profile、主目录和 `--patch` 覆盖层仍然可用。通过标准启动器运行命令：
 
 ```sh
 dsh cloud --help

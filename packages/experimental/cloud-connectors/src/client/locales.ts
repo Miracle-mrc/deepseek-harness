@@ -84,7 +84,7 @@ export const en: Record<CloudConnectionLocaleKey, string> = {
 
 /** Simplified Chinese connection status, controls and consent. */
 export const zh: Record<CloudConnectionLocaleKey, string> = {
-  ...en,
+  awsTitle: 'AWS', supabaseTitle: 'Supabase',
   awsSummary: '连接 AWS 账户并启用经确认的 MCP 工具。',
   supabaseSummary: '连接 Supabase 账户并启用经确认的 MCP 工具。',
   'status.not-connected': '未连接',

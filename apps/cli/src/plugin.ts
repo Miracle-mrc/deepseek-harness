@@ -2,18 +2,30 @@
 import { runPluginCommand, runProfilePnpm, setProfileVersionExemption, type PackageOperationOptions } from '@deepseek-ai/dsh-plugin-manager/operations'
 import { INSTALL_ANCHOR } from './profile-boot.ts'
 import {
-  assertBundlePlatform, evaluatePluginCompatibility, initProfile, pluginCompatibilityWarning, readProfileCompatibility,
-  readProfileManifest, resolveBundleDir, resolveProfileDir, writeProfileBundles, type ProfileContext,
+  assertBundlePlatform, assertBundleSelection, evaluatePluginCompatibility, initProfile, pluginCompatibilityWarning,
+  readProfileCompatibility, readProfileManifest, resolveBundleDir, resolveProfileDir, writeProfileBundles, type ProfileContext,
 } from '@deepseek-ai/dsh-app-boot'
 import { PROFILE_TEMPLATES, DEFAULT_PROFILE_BUNDLES, OPTIONAL_BUNDLES } from '@deepseek-ai/dsh-official-bundles'
 import { withFileLock } from '@deepseek-ai/dsh-atomic-write'
 import { existsSync, statSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 
 function requireDesktopProfile(dir: string): void {
   if (!existsSync(join(dir, 'package.json'))) {
     throw new Error('Open DeepSeek Harness Desktop once to initialize its profile, then fully quit it before running dsh plugin --profile desktop.')
+  }
+}
+
+/** Accept local and hoisted installation packages without admitting NODE_PATH or global package fallbacks. */
+function installationBundleDirectory(packageName: string, bundleDir: string): boolean {
+  const selected = resolve(bundleDir)
+  let directory = dirname(INSTALL_ANCHOR)
+  while (true) {
+    if (basename(directory) !== 'node_modules' && selected === join(directory, 'node_modules', packageName)) return true
+    const parent = dirname(directory)
+    if (parent === directory) return false
+    directory = parent
   }
 }
 
@@ -32,8 +44,15 @@ async function enableBundleCommand(profile: string, args: readonly string[]): Pr
     if (bundleName === undefined) throw new Error('usage: dsh plugin --profile <name> enable [--empty] <carried-optional-bundle>')
     if (!OPTIONAL_BUNDLES.includes(bundleName)) throw new Error('enable requires an optional bundle carried by this dsh installation')
     const selectedBundle = bundleName
+    const declared = readProfileManifest('dsh', dirname(INSTALL_ANCHOR)).dependencies?.[selectedBundle]
+    if (typeof declared !== 'string' || declared.trim() === '') {
+      throw new Error('enable requires an optional bundle declared by this dsh installation')
+    }
     // The second anchor deliberately repeats the installation, never a profile-local replacement.
     const bundleDir = resolveBundleDir('dsh', bundleName, INSTALL_ANCHOR, dirname(INSTALL_ANCHOR))
+    if (!installationBundleDirectory(selectedBundle, bundleDir)) {
+      throw new Error('the optional bundle is not installed in this dsh installation')
+    }
     const installed = readProfileManifest('dsh', bundleDir)
     const patch = installed.dsh?.bundle?.patch
     if (installed.name !== bundleName || typeof patch !== 'string' || patch.trim() === ''
@@ -49,15 +68,22 @@ async function enableBundleCommand(profile: string, args: readonly string[]): Pr
       for (const warning of compatibility.warnings) process.stderr.write(`dsh: warning: ${warning}\n`)
       const issue = evaluatePluginCompatibility(installed, compatibility.exemptions)
       if (issue !== undefined && !issue.exempted) throw new Error(pluginCompatibilityWarning(issue))
-      if (!existsSync(join(dir, 'package.json'))) {
-        initProfile(dir, empty ? [] : PROFILE_TEMPLATES[profile]?.bundles ?? DEFAULT_PROFILE_BUNDLES)
-      }
-      const manifest = readProfileManifest('dsh', dir)
-      const bundles = manifest.dsh?.profile?.bundles ?? []
-      if (!Array.isArray(bundles) || bundles.some(value => typeof value !== 'string')) {
+      const initialized = existsSync(join(dir, 'package.json'))
+      const manifest = initialized ? readProfileManifest('dsh', dir) : undefined
+      const bundles: unknown = manifest?.dsh?.profile?.bundles
+        ?? (initialized || empty ? [] : PROFILE_TEMPLATES[profile]?.bundles ?? DEFAULT_PROFILE_BUNDLES)
+      if (!Array.isArray(bundles) || !bundles.every((value): value is string => typeof value === 'string')) {
         throw new Error('the profile bundle list must contain only package names; repair its package.json before enabling a bundle')
       }
-      if (!bundles.includes(selectedBundle)) writeProfileBundles(dir, manifest, [...bundles, selectedBundle])
+      const selectedNames = bundles.includes(selectedBundle) ? bundles : [...bundles, selectedBundle]
+      for (const name of selectedNames) {
+        const selected = name === selectedBundle
+          ? installed
+          : readProfileManifest('dsh', resolveBundleDir('dsh', name, INSTALL_ANCHOR, dir))
+        assertBundleSelection(name, selected.dsh?.bundle?.standalone, selectedNames)
+      }
+      if (manifest === undefined) initProfile(dir, selectedNames)
+      else if (!bundles.includes(selectedBundle)) writeProfileBundles(dir, manifest, selectedNames)
       process.stdout.write(`dsh: enabled ${selectedBundle} in profile ${profile}\n`)
       return Promise.resolve()
     }, { waitMs: 120000 })

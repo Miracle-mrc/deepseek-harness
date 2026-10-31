@@ -23,7 +23,7 @@ import {
   evaluatePluginCompatibility, readProfileCompatibility, readProfileVersionExemptions,
   setProfileVersionExemption, validatePluginVersionExemption, PROFILE_COMPATIBILITY_FILENAME,
   getDshRuntimeVersion, ResolutionRestartRequired,
-  assertBundlePlatform, UnsupportedBundlePlatformError,
+  assertBundlePlatform, UnsupportedBundlePlatformError, assertBundleSelection, UnsupportedBundleSelectionError,
 } from '@deepseek-ai/dsh-app-boot'
 import { OPTIONAL_BUNDLES, OFFICIAL_ON_DEMAND_CATALOG, PROTECTED_PLUGINS } from '@deepseek-ai/dsh-official-bundles'
 import type {} from '@deepseek-ai/dsh-hmr'
@@ -109,6 +109,7 @@ function messageOf(error: unknown): string { return error instanceof Error ? err
 /** An expected refusal keeps its code; anything else becomes an operation error carrying its exact diagnostic. */
 function managementError(error: unknown): ManagementError {
   if (error instanceof UnsupportedBundlePlatformError) return { code: 'unsupported-platform' }
+  if (error instanceof UnsupportedBundleSelectionError) return { code: 'standalone-bundle' }
   if (!(error instanceof ManagementFailure)) return { code: 'operation-error', diagnostic: messageOf(error) }
   return { code: error.code, ...error.incompatible === undefined ? {} : { incompatible: error.incompatible } }
 }
@@ -495,6 +496,10 @@ export class PluginManager extends TypertRemoteService {
     const manifest = readProfileManifest('dsh', this.profile.dir)
     const exemptions = readProfileVersionExemptions(this.profile.dir)
     const selected = bundleSelection(manifest)
+    const standalone = selected.filter((name) => {
+      try { return bundleManifest(name, this.profile.dir, this.profile.installAnchor)?.dsh?.bundle?.standalone === true }
+      catch { return false /* An unreadable selected bundle reports its own inventory diagnostic below. */ }
+    })
     const recorded = manifest.dependencies ?? {}
     const dependencies = Object.keys(recorded)
     const installation = JSON.parse(readFileSync(this.profile.installAnchor, 'utf8')) as InstallationManifest
@@ -558,8 +563,14 @@ export class PluginManager extends TypertRemoteService {
         let platformError: ManagementError | undefined
         try { assertBundlePlatform(info.dsh?.bundle?.platforms, process.platform) }
         catch (error) { platformError = managementError(error) }
+        let selectionError: ManagementError | undefined
+        try {
+          const proposed = enabled ? selected : [...selected, name]
+          assertBundleSelection(name, info.dsh?.bundle?.standalone, proposed)
+          for (const existing of standalone) assertBundleSelection(existing, true, proposed)
+        } catch (error) { selectionError = managementError(error) }
         if (platformError?.code === 'unsupported-platform') listing = { listedByDefault: false }
-        const error = platformError ?? targetError
+        const error = platformError ?? selectionError ?? targetError
         bundles.push({ name, official, availability, ...listing, ...target, ...(version === undefined ? {} : { version }),
           ...(info.description === undefined || info.description === '' ? {} : { description: info.description }),
           ...meta === undefined ? {} : { meta },
@@ -1157,11 +1168,18 @@ export class PluginManager extends TypertRemoteService {
   private async selectBundle(name: string, enabled: boolean): Promise<void> {
     const manifest = readProfileManifest('dsh', this.profile.dir)
     const previous = bundleSelection(manifest)
+    const bundles = enabled ? [...previous, ...previous.includes(name) ? [] : [name]] : previous.filter(item => item !== name)
     if (enabled || !previous.includes(name)) {
       const metadata = bundleManifest(name, this.profile.dir, this.profile.installAnchor)
       if (metadata === undefined) throw new ManagementFailure('not-bundle')
       if (enabled) {
         assertBundlePlatform(metadata.dsh?.bundle?.platforms, process.platform)
+        assertBundleSelection(name, metadata.dsh?.bundle?.standalone, bundles)
+        for (const selected of bundles) {
+          if (selected === name) continue
+          const existing = bundleManifest(selected, this.profile.dir, this.profile.installAnchor)
+          assertBundleSelection(selected, existing?.dsh?.bundle?.standalone, bundles)
+        }
         const compatibility = evaluatePluginCompatibility(metadata, readProfileVersionExemptions(this.profile.dir))
         if (compatibility !== undefined && !compatibility.exempted) throw new ManagementFailure('incompatible-version', [incompatiblePlugin(compatibility)])
         this.bundleRows(name)
@@ -1170,7 +1188,6 @@ export class PluginManager extends TypertRemoteService {
     if (!enabled && previous.includes(name)) {
       if (this.protectsManager(name)) throw new ManagementFailure('management-required')
     }
-    const bundles = enabled ? [...previous, ...previous.includes(name) ? [] : [name]] : previous.filter(item => item !== name)
     if (JSON.stringify(previous) === JSON.stringify(bundles)) return
     manifest.dsh = { ...manifest.dsh, profile: { ...manifest.dsh?.profile, bundles } }
     await saveManifest(this.profile.dir, manifest)

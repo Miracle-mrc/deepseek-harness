@@ -6,6 +6,8 @@ This reference defines the profile, plugin-management, and config-dump command m
 
 The [generated command help](../../../docs/cli-help.md) contains complete launcher, plugin-management, and shipped-profile help. Run `pnpm run gen-cli-help` to refresh it; `pnpm run verify-cli-help` checks it against the current CLI.
 
+<a id="profile-boot"></a>
+
 ## Profile boot
 
 `dsh <name>` abbreviates `dsh --profile <name>` and boots the profile at `$DSH_HOME/profiles/<name>`. The shorthand name must immediately follow `dsh`; `plugin` remains the plugin-management command, so boot a profile with that name using `dsh --profile plugin`. The effective tree is composed over an empty root by applying, in order: each bundle patch named in the profile manifest's `dsh.profile.bundles` list, the profile's own `cordis.patch.yml`, the home-level `$DSH_HOME/cordis.patch.yml` (machine-local preferences shared by every profile, so it outranks the per-profile layer), and each `--patch <path>` overlay in argv order. Later layers win per row; a patch replaces the targeted row's complete `config` value rather than deep-merging keys, and may insert new rows. The final YAML composition controls whether `dsh-hmr` watches configuration; without HMR, changes require restart. A parse, schema, resolution, or plugin boot failure is reported and exits nonzero. SIGINT and SIGTERM dispose the mounted root before exit.
@@ -82,6 +84,8 @@ New directories and files request modes `0700` and `0600` on POSIX. The CLI prin
 ## Plugin management
 
 `dsh plugin --profile <name> enable [--empty] <bundle>` selects an optional bundle carried by the installation without invoking pnpm or a registry. It validates the installed bundle, platform, and version compatibility before selecting its patch under the profile lock. `--empty` initializes a missing custom profile without default bundles; an existing profile retains its layers, metadata, and patch. The [cloud command bundle](../../../packages/experimental/cloud-connectors-cli/README.md) uses this path for a dedicated terminal application.
+
+A bundle declaring `dsh.bundle.standalone: true` must be the only selected profile bundle. `enable` rejects a mixed selection before writing the profile manifest. `--empty` does not reset an existing profile, so use a new custom profile when its current layers conflict. A manually mixed profile skips the standalone layer at boot and reports the reason; [app boot](../../../packages/boot/app-boot/README.md#profiles) owns this policy. Profile, home, and argv patch overlays remain available.
 
 Package operations use `dsh plugin --profile <name> <args...>`. They initialize the profile when missing (shipped template, or `@deepseek-ai/dsh-base` alone for other names), then forward `<args...>` to `pnpm` with the profile directory as working directory — `add`, `remove`, `why`, `update`, and other pnpm verbs remain available; pnpm must be on PATH. Relative path specs (`.`, `../plugin`, and their `file:`/`link:` forms) are anchored to the invoking directory first, so `add .` from a plugin checkout installs that checkout, not the profile. After every successful run, `dsh.profile.bundles` is reconciled against the installed state: each dependency resolving to a package whose manifest declares `"dsh": { "bundle": { "patch": "./cordis.patch.yml" } }` joins the layer stack (so an `update` that gains the declaration activates it), a bundle-less dependency stays plain with a one-time warning, and a removed dependency leaves the stack.
 

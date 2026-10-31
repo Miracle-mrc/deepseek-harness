@@ -4,6 +4,8 @@
 
 [boot 包组](../../packages/boot/README.zh.md)负责 launcher 提供的 profile 访问与插件管理器。[插件管理器](../../packages/boot/plugin-manager/README.zh.md)文档说明持久化、重载与包操作行为。
 
+[`DshBundleManifest`](../../packages/util/package-manifest/README.zh.md)声明由包拥有的组合包元数据。其可选布尔值 `standalone` 为 true 时，要求该组合包是 profile 中唯一选中的组合包。[App boot](../../packages/boot/app-boot/README.zh.md#profiles)在加载其补丁前校验此选择；用户补丁层仍然可用。
+
 ## 管理记录
 
 `PluginEntryId` 标识一个 Loader 条目；调用方从 `listPlugins` 获取，不自行拼接 patch id。

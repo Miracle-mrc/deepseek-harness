@@ -31,7 +31,7 @@ Create the custom `cloud` profile and enable the bundle carried by the installat
 dsh plugin --profile cloud enable --empty @deepseek-ai/dsh-experimental-cloud-connectors-cli
 ```
 
-`--empty` initializes a missing custom profile without default bundles; an existing profile keeps its layers and settings. Enablement selects the bundle's declared patch in that profile. Keep this complete terminal application separate from agent and Web profiles. Run its commands through the normal launcher:
+This complete application declares `dsh.bundle.standalone: true` and must be the profile's only selected bundle. It cannot share a bundle stack with base, Web, or Desktop. `--empty` initializes a missing custom profile without default bundles; it preserves an existing profile and rejects conflicting bundle selections before writing them. Use a new custom profile if `cloud` already selects other bundles. Ordinary profile, home, and `--patch` overlays remain allowed. Run its commands through the normal launcher:
 
 ```sh
 dsh cloud --help

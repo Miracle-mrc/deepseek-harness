@@ -57,6 +57,10 @@ profile 导入插件前，DSH 会将其声明的 DSH 版本要求与 `getDshRunt
 
 组合包可以用 `dsh.bundle.platforms` 声明非空的 Node Host 平台名称列表，例如 `["darwin"]`。启动器在读取组合包 patch 前验证此声明。Host 不受支持时会跳过整个配置层，保留已保存的选择，并通过 `skippedBundles` 报告原因；其他配置层继续生效。省略此字段时允许所有平台。值必须是 Node 平台名，`macos` 等别名无效。浏览器所在机器的平台不决定 Host 是否受支持。
 
+`dsh.bundle.standalone: true` 要求此组合包是 `dsh.profile.bundles` 中唯一的条目。省略或 false 允许叠加配置层；其他值属于无效元数据。`loadProfileDirectory` 在加载组合包补丁前检查选择。手动混合的 profile 会跳过该 standalone 配置层，保留已保存的选择，并通过 `skippedBundles` 报告原因；其他符合条件的配置层保持原有顺序。这可防止完整应用组合包挂载到 Web 或 Desktop 组合包栈中。profile、主目录和 `--patch` 覆盖层仍然可用。[CLI 启用命令](../../../apps/cli/reference/README.zh.md#plugin-management)在写入选择前检查同一规则。
+
+pnpm 之后的自动启用由 `reconcileProfilePlugins` 根据完整的拟选组合包列表校验 standalone 元数据，再保存选择。拒绝时保留已安装的依赖，原有组合包选择保持不变。
+
 你的机器本地偏好同样位于 harness home 中：
 
 - **`.env`**——你的普通环境层：调用目录的文件优先于 harness home 的文件，两者都低于继承环境。在文件中设置的进程启动变量（如 `PATH`、`DSH_*`、`XDG_*`）会被拒绝：请改为导出这些变量。四个代理名（`HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY`）只从 harness home 的文件接受，绝不从调用目录的文件接受——后者随 clone 一起到来。对于只想加载某个目录 `.env` 的非产品 bin，文件缺失不影响启动，文件无法加载时输出一行带标签的警告。

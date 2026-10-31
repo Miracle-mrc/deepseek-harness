@@ -47,12 +47,13 @@ const manifest: DshPackageManifest = {
 
 `DshBundleManifest.listedByDefault` 为可选布尔值，默认为 true。false 使随安装提供的组合包在 profile 启用或安装它之前不出现在默认 GUI 列表中；管理清单仍保持完整。[插件管理页](../../client/ui-plugin-manager/README.zh.md#use-this-package)管理展示与显式启用入口。
 
-以下元数据字段均可选。省略时，格式版本或兼容的宿主版本保持未声明状态；读取方不推断默认值。
+以下元数据字段均可选。省略行为与校验由读取方负责；这些声明不提供运行时默认值。
 
 | 字段 | 含义 |
 |---|---|
 | `dsh.manifestVersion` | manifest（元数据清单）格式标识；声明的格式为 `1`，独立于 npm 包版本和 Session 格式版本。 |
 | `dsh.bundle.platforms` | 可选的非空 Node Host 平台名称列表，例如 `["darwin"]`；省略时允许所有操作系统。启动器和插件管理器在组合或选择该组合包前检查此字段。 |
+| `dsh.bundle.standalone` | 可选布尔值。true 要求此组合包是 `dsh.profile.bundles` 中唯一的条目；省略或 false 允许叠加配置层。[App boot](../../boot/app-boot/README.zh.md#profiles)负责组装检查；用户补丁层仍然可用。 |
 | `engines.dsh` | 作者声明的兼容 DSH 版本，使用 SemVer 范围，也可填写精确的预发布版本。此字段与 `engines.node`、`engines.npm` 并列；engines 对象可省略 `dsh`。 |
 
 `LocalizedText` 携带字面文本或带必需英文回退值的语言映射。`PluginLocalizedMeta` 携带已安装插件的可选展示标题、描述、从包根 `package.json.icon` 或导出的 `<标识>/icon` 解析的图片 data URL，以及元信息诊断。[App boot](../../boot/app-boot/README.zh.md) 读取这些值；本包只提供其类型。
@@ -67,7 +68,7 @@ const manifest: DshPackageManifest = {
 <details>
 <summary>实现细节——点击展开</summary>
 
-包根仅重新导出 [`src/types.ts`](src/types.ts) 中的声明。本包
+包根仅重新导出 [`src/types.ts`](src/types.ts) 中的声明。
 
 </details>
 
@@ -93,7 +94,7 @@ const manifest: DshPackageManifest = {
 <a id="known-limitations-and-deferred-work"></a>
 
 - **仅提供静态类型。** 消费方读取并校验所需的 JSON 字段，再将共享声明适配为运行时数据。本包不提供解析器、getter helper、文件检查或默认值。
-- **兼容性仅作声明。** 当前安装器和加载器不强制检查 `dsh.manifestVersion` 或 `engines.dsh`；声明范围不会拒绝不兼容的宿主，也不会校验 SemVer 语法。
+- **运行时策略由读取方负责。** 本包不强制检查 manifest 版本、兼容性范围或组合包组装。[App boot](../../boot/app-boot/README.zh.md#profiles)与 Plugin Manager 负责相应的运行时检查。
 
 <a id="dev-note"></a>
 ### 开发备注

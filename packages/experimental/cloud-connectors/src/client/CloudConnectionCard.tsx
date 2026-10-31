@@ -184,6 +184,7 @@ export function CloudConnectionCard(props: CloudConnectionCardProps) {
   const awsProfile = profile ?? connection?.awsProfile ?? ''
   const awsMethod = method ?? connection?.awsMethod ?? 'login'
   const checkingProfile = status === 'authorizing' && provider === 'aws' && awsMethod === 'existing'
+  const prompt = connection?.prompt
   const canConnect = status === 'not-connected' || status === 'failed'
   const showPermissions = status === 'choose-permissions' || (status === 'connected' && editingPermissions)
   const link = working === 'cancel' ? undefined : authorizationTarget(connection?.authorizationUrl) ?? pendingLink
@@ -249,23 +250,13 @@ export function CloudConnectionCard(props: CloudConnectionCardProps) {
       setPendingLink('')
     }).catch(() => { if (isCurrent(action)) setError('confirmError') }).finally(() => { finishAction(action) })
   }
-  const complete = (choice?: 'yes' | 'no') => {
-    const prompt = connection?.prompt
+  const complete = (promptId: CloudPromptId, response: string) => {
     const input = responseInput.current
-    if (prompt === undefined) return
-    let response: string
-    if (prompt.kind === 'select') {
-      if (choice === undefined) return
-      response = choice
-    } else {
-      if (input === null || !input.value.trim()) return
-      response = input.value.trim()
-    }
     const action = beginAction('complete')
     if (action === undefined) return
     // The response remains only in this request; clear the field before awaiting it.
     if (input !== null) input.value = ''
-    void actions.complete(provider, prompt.id, response).then((all) => {
+    void actions.complete(provider, promptId, response).then((all) => {
       if (!isCurrent(action)) return
       publish(all.find(item => item.provider === provider))
     }).catch(() => { if (isCurrent(action)) setError('responseError') }).finally(() => { finishAction(action) })
@@ -273,7 +264,6 @@ export function CloudConnectionCard(props: CloudConnectionCardProps) {
   const disconnect = () => {
     const action = beginAction('disconnect')
     if (action === undefined) return
-    if (responseInput.current !== null) responseInput.current.value = ''
     setPendingLink('')
     void actions.disconnect(provider).then((all) => {
       if (!isCurrent(action)) return
@@ -285,7 +275,14 @@ export function CloudConnectionCard(props: CloudConnectionCardProps) {
   const cancelAuthorization = () => {
     const authorization = browserAuthorization.current
     const attemptId = connection?.attemptId
-    if (authorization === undefined && attemptId === undefined) return
+    let requestCancellation: (() => Promise<CloudConnectionView[]>) | undefined
+    if (authorization !== undefined) {
+      // If cancellation beats admission, wait for its ID before cancelling that attempt.
+      requestCancellation = () => authorization.admission.then(result => actions.cancel(provider, result.attemptId))
+    } else if (attemptId !== undefined) {
+      requestCancellation = () => actions.cancel(provider, attemptId)
+    }
+    if (requestCancellation === undefined) return
     const action = beginAction('cancel')
     if (action === undefined) return
     if (authorization !== undefined) {
@@ -294,12 +291,7 @@ export function CloudConnectionCard(props: CloudConnectionCardProps) {
     }
     if (responseInput.current !== null) responseInput.current.value = ''
     setPendingLink('')
-    // If cancellation beats admission, wait for its ID before cancelling that attempt.
-    let request: Promise<CloudConnectionView[]>
-    if (authorization !== undefined) request = authorization.admission.then(result => actions.cancel(provider, result.attemptId))
-    else if (attemptId !== undefined) request = actions.cancel(provider, attemptId)
-    else return
-    void request.then((all) => {
+    void requestCancellation().then((all) => {
       if (!isCurrent(action)) return
       browserAuthorization.current = undefined
       publish(all.find(item => item.provider === provider))
@@ -340,8 +332,13 @@ export function CloudConnectionCard(props: CloudConnectionCardProps) {
         <a className={css.authorizationLink} href={link} aria-label={t('openBrowser')} target="_blank" rel="noopener noreferrer">{t('openBrowser')}<small>{link}</small></a>
       )}
       {connection?.code && status === 'authorizing' && <p>{t('verificationCode')} <strong>{connection.code}</strong></p>}
-      {connection?.prompt?.kind === 'secret' && status === 'authorizing' && (
-        <form key={connection.prompt.id} className={css.response} onSubmit={(event) => { event.preventDefault(); complete() }}>
+      {prompt?.kind === 'secret' && status === 'authorizing' && (
+        <form key={prompt.id} className={css.response} onSubmit={(event) => {
+          event.preventDefault()
+          const input = responseInput.current
+          if (input === null || !input.value.trim()) return
+          complete(prompt.id, input.value.trim())
+        }}>
           <p className={css.note}>{t(provider === 'aws' ? 'awsResponseHint' : 'supabaseResponseHint')}</p>
           <label className={css.field}>{t(provider === 'aws' ? 'awsResponse' : 'supabaseResponse')}
             <input ref={responseInput} type="password" autoComplete="off" spellCheck={false} required disabled={working !== undefined} />
@@ -349,11 +346,11 @@ export function CloudConnectionCard(props: CloudConnectionCardProps) {
           <button type="submit" className={css.primary} disabled={working !== undefined}>{t('submitResponse')}</button>
         </form>
       )}
-      {connection?.prompt?.kind === 'select' && status === 'authorizing' && (
+      {prompt?.kind === 'select' && status === 'authorizing' && (
         <div className={css.response}>
           <p>{t('replaceAwsLogin')}</p>
-          <button type="button" disabled={working !== undefined} onClick={() => { complete('yes') }}>{t('replaceAwsLoginYes')}</button>
-          <button type="button" disabled={working !== undefined} onClick={() => { complete('no') }}>{t('replaceAwsLoginNo')}</button>
+          <button type="button" disabled={working !== undefined} onClick={() => { complete(prompt.id, 'yes') }}>{t('replaceAwsLoginYes')}</button>
+          <button type="button" disabled={working !== undefined} onClick={() => { complete(prompt.id, 'no') }}>{t('replaceAwsLoginNo')}</button>
         </div>
       )}
       {(status === 'authorizing' || working === 'start') && (
@@ -390,15 +387,14 @@ export function CloudConnectionCard(props: CloudConnectionCardProps) {
           <button type="button" className={css.primary} disabled={working !== undefined} onClick={confirm}>{t(status === 'connected' ? 'savePermissions' : 'enableSelected')}</button>
         </div>
       )}
-      {status === 'connected' && (
-        <p>{t('enabledCount').replace('{count}', String(connection?.enabledTools.length ?? 0))}</p>
-      )}
-      {status === 'connected' && !editingPermissions && (
-        <button type="button" disabled={working !== undefined} onClick={() => {
-          if (connection === undefined) return
-          setSelected(connection.enabledTools)
-          setEditingPermissions(true)
-        }}>{t('editPermissions')}</button>
+      {connection?.status === 'connected' && (
+        <>
+          <p>{t('enabledCount').replace('{count}', String(connection.enabledTools.length))}</p>
+          {!editingPermissions && <button type="button" disabled={working !== undefined} onClick={() => {
+            setSelected(connection.enabledTools)
+            setEditingPermissions(true)
+          }}>{t('editPermissions')}</button>}
+        </>
       )}
       {(status === 'connected' || status === 'choose-permissions' || status === 'failed') && (
         <button type="button" disabled={working !== undefined} onClick={disconnect}>{t('disconnect')}</button>

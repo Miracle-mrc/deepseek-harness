@@ -10,6 +10,7 @@ import { chromium } from 'playwright'
 import { FiberState } from '@deepseek-ai/cordis'
 import { readProfileManifest } from '@deepseek-ai/dsh-app-boot'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { HIDDEN_BUNDLES } from '@deepseek-ai/dsh-official-bundles'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed, onTestFinished, vi } from 'vitest'
 import { join } from 'node:path'
 import {
@@ -849,11 +850,13 @@ describe('web e2e: plugin manager', () => {
     const bundles = await scaffold.ctx.pluginManager.listBundles()
     expect(bundles.some(bundle => bundle.name === '@deepseek-ai/dsh-experimental-terminal-bundle')).toBe(true)
     expect(await panel.getByRole('switch', { name: '启用 持久终端', exact: true }).count()).toBe(0)
+    expect(bundles.some(bundle => bundle.name === '@deepseek-ai/dsh-experimental-cloud-connectors-cli')).toBe(true)
+    expect(await panel.locator('[data-plugin-package="@deepseek-ai/dsh-experimental-cloud-connectors-cli"]').count()).toBe(0)
     // The More list also omits LiveShare until its rows run, so the offered count is one lower than
     // the eligible installed optional-bundle list.
     expect(await panel.locator('[data-plugin-group="more"] [data-plugin-package="@deepseek-ai/dsh-experimental-liveshare"]').count()).toBe(0)
     expect(await panel.locator('[data-plugin-group="more"] [data-plugin-package]').count())
-      .toBe(bundles.filter(bundle => bundle.name !== '@deepseek-ai/dsh-experimental-terminal-bundle'
+      .toBe(bundles.filter(bundle => !HIDDEN_BUNDLES.has(bundle.name)
         && bundle.name !== '@deepseek-ai/dsh-experimental-liveshare'
         && bundle.official && (bundle.listedByDefault !== false || bundle.enabled || bundle.installed)).length)
     for (const name of ['@deepseek-ai/dsh-cua-bundle', '@deepseek-ai/dsh-experimental-session-search', '@deepseek-ai/dsh-experimental-ralph-bundle']) {
@@ -870,6 +873,7 @@ describe('web e2e: plugin manager', () => {
       ['@deepseek-ai/dsh-experimental-voice-input-bundle', 1],
       ['@deepseek-ai/dsh-experimental-plugin-market-bundle', 1],
       ['@deepseek-ai/dsh-experimental-auto-review', 1],
+      ['@deepseek-ai/dsh-experimental-cloud-connectors-bundle', 1],
       ['@deepseek-ai/dsh-experimental-forge-bundle', 1],
       ['@deepseek-ai/dsh-personalized-recommendations', 1],
       ['@deepseek-ai/dsh-experimental-inspector-profile', 1],
@@ -1544,11 +1548,15 @@ describe('web e2e: startup-applied plugin management', () => {
         return (JSON.parse(text) as { dsh: { profile: { bundles: string[] } } }).dsh.profile.bundles
       }
       expect(mounted()?.fiber?.state).toBeUndefined()
-      await toggle.click()
+      const [notice, action] = await Promise.allSettled([
+        page.getByText('请重启 DSH 使更改生效。这个 profile 只在启动时应用更改。', { exact: true }).waitFor({ timeout: 10_000 }),
+        toggle.click(),
+      ])
+      if (action.status === 'rejected') throw action.reason
+      if (notice.status === 'rejected') throw notice.reason
       // The selection is saved and the switch turns on, but nothing mounts before the next start; a toast says so.
       await expect.poll(bundles, { timeout: PLUGIN_TOGGLE_SETTLE_MS }).toEqual([...SCAFFOLD_BUNDLES, '@fixture/bundle'])
       await expect.poll(() => toggle.getAttribute('aria-checked'), { timeout: PLUGIN_TOGGLE_SETTLE_MS }).toBe('true')
-      await page.getByText('请重启 DSH 使更改生效。这个 profile 只在启动时应用更改。', { exact: true }).waitFor({ timeout: 10_000 })
       expect(mounted()?.fiber?.state).toBeUndefined()
       // The pack's page lists its rows from their declarations, with no live entry to switch.
       await panel.getByRole('button', { name: '查看 @fixture/bundle' }).click()

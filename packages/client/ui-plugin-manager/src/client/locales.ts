@@ -285,6 +285,7 @@ export const zh = {
   reasonIncompatibleVersion: '{plugin} 与 DSH {runtime} 不兼容（要求 {requirements}），运行它可能导致崩溃或数据丢失。',
   reasonIncompatibleVersionUnnamed: '这个插件与当前 DSH 版本不兼容，运行它可能导致崩溃或数据丢失。',
   reasonUnsupportedPlatform: '此插件不支持运行 DSH 的主机操作系统',
+  reasonStandaloneBundle: '此组合包必须在独立的配置中运行。请使用它专用的 CLI 启动命令。',
   reasonIncompatibleInstall: '请安装与当前 DSH 兼容的插件版本。',
   reasonIncompatibleInstalled: '请卸载后重新安装与当前 DSH 兼容的版本。',
   reasonOperationError: 'Host 报告了一个错误',
@@ -580,6 +581,7 @@ export const en = {
   reasonIncompatibleVersion: '{plugin} is incompatible with DSH {runtime} (requires {requirements}); running it may cause crashes or data loss.',
   reasonIncompatibleVersionUnnamed: 'This plugin is incompatible with the running DSH version; running it may cause crashes or data loss.',
   reasonUnsupportedPlatform: 'This plugin does not support the operating system running DSH.',
+  reasonStandaloneBundle: 'This bundle requires its own profile. Start it with its dedicated CLI command.',
   reasonIncompatibleInstall: 'Install a plugin version compatible with this DSH.',
   reasonIncompatibleInstalled: 'Uninstall it and install a version compatible with this DSH.',
   reasonOperationError: 'The Host reported an error.',
@@ -595,6 +597,7 @@ export const en = {
 /** Japanese copy, checked against the English keys. */
 export const ja = {
   'reasonUnsupportedPlatform': 'このプラグインはDSHを実行しているホストOSに対応していません。',
+  reasonStandaloneBundle: 'このバンドルには専用のプロファイルが必要です。専用の CLI コマンドで起動してください。',
   'panel': 'プラグイン',
   'title': 'プラグイン',
   'intro': 'プラグインのインストール、有効化、設定',
@@ -887,6 +890,7 @@ export const ja = {
 /** Spanish dictionary, checked against the English keys. */
 export const es = {
   reasonUnsupportedPlatform: 'Este complemento no es compatible con el sistema operativo que ejecuta DSH.',
+  reasonStandaloneBundle: 'Este paquete requiere su propio perfil. Inícialo con su comando CLI dedicado.',
   panel: 'Complementos',
   title: 'Complementos',
   intro: 'Instalar, habilitar y configurar complementos',
@@ -1179,6 +1183,7 @@ export const es = {
 /** French dictionary, checked against the English keys. */
 export const fr = {
   reasonUnsupportedPlatform: 'Ce plugin ne prend pas en charge le système d’exploitation sur lequel DSH s’exécute.',
+  reasonStandaloneBundle: 'Ce bundle nécessite son propre profil. Lancez-le avec sa commande CLI dédiée.',
   panel: 'Plugins',
   title: 'Plugins',
   intro: 'Installer, activer et configurer les plugins',
@@ -1471,6 +1476,7 @@ export const fr = {
 /** German dictionary, checked against the English keys. */
 export const de = {
   reasonUnsupportedPlatform: 'Dieses Plugin unterstützt das Betriebssystem, auf dem DSH läuft, nicht.',
+  reasonStandaloneBundle: 'Dieses Bundle benötigt ein eigenes Profil. Starten Sie es mit dem dafür vorgesehenen CLI-Befehl.',
   panel: 'Plugins',
   title: 'Plugins',
   intro: 'Plugins installieren, aktivieren und konfigurieren',
@@ -1763,6 +1769,7 @@ export const de = {
 /** Russian dictionary, checked against the English keys. */
 export const ru = {
   reasonUnsupportedPlatform: 'Этот плагин не поддерживает операционную систему, в которой работает DSH.',
+  reasonStandaloneBundle: 'Этому пакету нужен отдельный профиль. Запустите его специальной командой CLI.',
   panel: 'Плагины',
   title: 'Плагины',
   intro: 'Установите, включите и настройте плагины',
@@ -2055,6 +2062,7 @@ export const ru = {
 /** Portuguese dictionary, checked against the English keys. */
 export const pt = {
   reasonUnsupportedPlatform: 'Este plugin não oferece suporte ao sistema operacional em que o DSH está sendo executado.',
+  reasonStandaloneBundle: 'Este pacote requer seu próprio perfil. Inicie-o com o comando CLI dedicado.',
   panel: 'Plug-ins',
   title: 'Plug-ins',
   intro: 'Instalar, habilitar e configurar plug-ins',

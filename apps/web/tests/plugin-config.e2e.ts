@@ -11,6 +11,7 @@ import type { Browser, Locator, Page } from 'playwright'
 import { chromium } from 'playwright'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { join } from 'node:path'
+import { HIDDEN_BUNDLES } from '@deepseek-ai/dsh-official-bundles'
 import {
   assertFixtureInventory, captureStableAria, compareOrRefreshGolden,
   launchWebScaffold, watchConsole, webSnapshotMode, type WebScaffold,
@@ -113,12 +114,9 @@ describe('web e2e: plugin configuration pages', () => {
     // The More list omits the shipped bundles whose own rows do not run (the visibility rule lives in
     // ui-plugin-manager), so it holds fewer cards than the installed optional-bundle list.
     const bundles = await scaffold.ctx.pluginManager.listBundles()
-    const hiddenBundles = new Set([
-      '@deepseek-ai/dsh-experimental-terminal-bundle',
-      '@deepseek-ai/dsh-experimental-liveshare',
-    ])
     expect(await panel.locator('[data-plugin-group="more"] [data-plugin-package]').count())
-      .toBe(bundles.filter(bundle => !hiddenBundles.has(bundle.name)
+      .toBe(bundles.filter(bundle => !HIDDEN_BUNDLES.has(bundle.name)
+        && bundle.name !== '@deepseek-ai/dsh-experimental-liveshare'
         && bundle.official && (bundle.listedByDefault !== false || bundle.enabled || bundle.installed)).length)
     expect(await basic.count()).toBe(0)
     expect(await extensions.count()).toBe(0)

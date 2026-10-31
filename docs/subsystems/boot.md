@@ -4,6 +4,8 @@ English | [中文](boot.zh.md)
 
 The [boot package group](../../packages/boot/README.md) owns launcher-provided profile access and the plugin manager. [Plugin Manager](../../packages/boot/plugin-manager/README.md) documents persistence, reload and package-operation behavior.
 
+[`DshBundleManifest`](../../packages/util/package-manifest/README.md) declares package-owned bundle metadata. Its optional `standalone` boolean requires the bundle to be the sole selected profile bundle when true. [App boot](../../packages/boot/app-boot/README.md#profiles) validates this selection before loading its patch; user patch layers remain available.
+
 ## Management records
 
 `PluginEntryId` identifies one Loader entry; callers obtain it from `listPlugins` rather than constructing a patch id.

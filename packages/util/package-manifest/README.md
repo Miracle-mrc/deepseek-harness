@@ -47,12 +47,13 @@ const manifest: DshPackageManifest = {
 
 `DshBundleManifest.listedByDefault` is an optional boolean, defaulting to true. False hides an installation-carried bundle from the default GUI lists until the profile enables or installs it; the management inventory remains complete. [Plugin Manager](../../client/ui-plugin-manager/README.md#use-this-package) owns the display and explicit activation paths.
 
-The following metadata fields are optional. Omitting them leaves the format version or compatible host versions undeclared; readers do not infer defaults.
+The following metadata fields are optional. Their readers own omission behavior and validation; the declarations supply no runtime defaults.
 
 | Field | Meaning |
 |---|---|
 | `dsh.manifestVersion` | Manifest format identifier; the declared format is `1`, independent of the npm package version and Session format version. |
 | `dsh.bundle.platforms` | Optional nonempty list of Node Host platform names, such as `["darwin"]`; omission allows every operating system. The launcher and plugin manager enforce it before composing or selecting the bundle. |
+| `dsh.bundle.standalone` | Optional boolean. True requires this bundle to be the sole entry in `dsh.profile.bundles`; omission or false permits layering. [App boot](../../boot/app-boot/README.md#profiles) owns composition checks; user patch layers remain allowed. |
 | `engines.dsh` | Author-declared compatible DSH versions as a SemVer range, including exact prerelease versions. This field sits beside `engines.node` and `engines.npm`; an engines object may omit `dsh`. |
 
 `LocalizedText` carries literal text or a language map with a required English fallback. `PluginLocalizedMeta` carries optional display title, description, an image data URL resolved from a package root's `package.json.icon` or an exported `<specifier>/icon`, and metadata diagnostics for installed plugins. [App boot](../../boot/app-boot/README.md) reads these values; this package only supplies their types.
@@ -93,7 +94,7 @@ Type declarations add no model input, so provider cache reuse is unaffected.
 <a id="known-limitations-and-deferred-work"></a>
 
 - **Static typing only.** Consumers read and validate the JSON fields they use, then adapt the shared declarations to their runtime data. The package supplies no parser, getter helpers, file checks, or defaults.
-- **Compatibility is declarative.** Current installers and loaders do not enforce `dsh.manifestVersion` or `engines.dsh`; declaring a range does not reject incompatible hosts or validate SemVer syntax.
+- **Runtime policy belongs to readers.** This package does not enforce manifest versions, compatibility ranges, or bundle composition. [App boot](../../boot/app-boot/README.md#profiles) and Plugin Manager own their runtime checks.
 
 <a id="dev-note"></a>
 ### Dev Note

@@ -193,7 +193,11 @@ const liveshareRemoteBuild = fileURLToPath(new URL('./packages/experimental/live
 const generatedRemoteAliases = existsSync(liveshareRemoteBuild) ? {} : {
   '@deepseek-ai/dsh-experimental-liveshare/remote': fileURLToPath(new URL('./packages/experimental/liveshare/tests/generated-remote-stub.ts', import.meta.url)),
 }
-const testingAliases = { ...claudeCodeTestingAliases, ...generatedRemoteAliases }
+const cloudRemoteBuild = fileURLToPath(new URL('./packages/experimental/cloud-connectors/lib/typert.remote-client.js', import.meta.url))
+const cloudRemoteAliases = existsSync(cloudRemoteBuild) ? {} : {
+  '@deepseek-ai/dsh-experimental-cloud-connectors/remote': fileURLToPath(new URL('./packages/experimental/cloud-connectors/tests/generated-remote-stub.ts', import.meta.url)),
+}
+const testingAliases = { ...claudeCodeTestingAliases, ...generatedRemoteAliases, ...cloudRemoteAliases }
 
 export default defineConfig({
   plugins: [pathsPlugin(), standardDecoratorPlugin()],

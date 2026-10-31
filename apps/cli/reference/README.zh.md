@@ -85,6 +85,8 @@ dsh --profile web --patch ./extra.yml --dump-config
 
 `dsh plugin --profile <name> enable [--empty] <bundle>` 选中安装中携带的可选组合包，不调用 pnpm 或注册表。它会先校验已安装组合包、平台与版本兼容性，再在 profile 锁内选中其补丁。`--empty` 会在自定义 profile 不存在时初始化它，且不添加默认组合包；已有 profile 保留配置层、元数据与补丁。[云命令组合包](../../../packages/experimental/cloud-connectors-cli/README.zh.md)通过此途径创建专用终端应用。
 
+声明 `dsh.bundle.standalone: true` 的组合包必须是 profile 中唯一选中的组合包。`enable` 在写入 profile manifest 前拒绝混合选择。`--empty` 不重置已有 profile，因此当前配置层冲突时，请使用新的自定义 profile。手动混合的 profile 会在启动时跳过 standalone 配置层并报告原因；该策略由 [app boot](../../../packages/boot/app-boot/README.zh.md#profiles)负责。profile、主目录和 argv 补丁覆盖层仍然可用。
+
 包操作使用 `dsh plugin --profile <name> <args...>`。它们在 profile 缺失时先初始化它（有随附模板的用模板，其他名称只装 `@deepseek-ai/dsh-base`），然后以 profile 目录为工作目录，把 `<args...>` 转发给 `pnpm`：`add`、`remove`、`why`、`update` 及其他 pnpm 子命令仍然可用；pnpm 必须在 PATH 上。相对路径 spec（`.`、`../plugin` 及其 `file:`/`link:` 形式）会先锚定到调用目录，因此在插件 checkout 中执行 `add .` 安装的是该 checkout，而不是 profile。每次成功运行后，系统都会根据当前安装状态更新 `dsh.profile.bundles`：如果某项依赖解析到的包在 manifest 中声明了 `"dsh": { "bundle": { "patch": "./cordis.patch.yml" } }`，该依赖就会加入配置层栈；如果某项依赖在 `update` 后获得该声明，也会随即激活。没有组合包声明的依赖仍作为普通依赖保留，并显示一次性警告；已移除的依赖则从配置层栈中删除。
 
 `dsh plugin` 只在被转发的参数之前读取 `--profile`；被转发的参数从它无法识别的第一个 token 开始，因此 `--profile <name>` 必须写在最前面。被转发的参数以 pnpm 命令开头时，该命令之后的所有内容都会原样交给 pnpm，包括 `-h` 和 `--help`。被转发的参数以 `--filter <selector>` 或 `-r` 等 pnpm 选项开头时，后面的 `-h` 或 `--help` 仍会打印转发器的帮助而不是 pnpm 的帮助，因此要查看 pnpm 的帮助，需把 pnpm 命令写在它们之前。在任何被转发的参数之前出现的 `-h` 或 `--help` 会打印转发器自身的帮助并以 0 退出。

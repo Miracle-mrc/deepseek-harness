@@ -28,7 +28,7 @@ it('retains an observed version before an operation settles', () => {
   expect(parsePluginOperationRecord({ ...started, operation: { ...started.operation, version: 'x'.repeat(129) } })).toBeUndefined()
 })
 
-it('retains platform refusals in settled operation records', () => {
-  const record = { ...input, operation: { ...input.operation, application: 'failed', changed: false, errorCode: 'unsupported-platform' } }
+it.each(['unsupported-platform', 'standalone-bundle'])('retains %s refusals in settled operation records', (errorCode) => {
+  const record = { ...input, operation: { ...input.operation, application: 'failed', changed: false, errorCode } }
   expect(parsePluginOperationRecord(record)).toEqual(record)
 })

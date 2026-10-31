@@ -24,6 +24,7 @@ const ERROR_STEPS: Record<ManagementError['code'], string> = {
   'stale-approval': 'Call install_bundle again without approvedBuilds to read the current pendingBuilds.',
   'incompatible-version': 'Install a version compatible with the running DSH. A version exemption needs the user\'s explicit acceptance of crash and data-loss risk.',
   'unsupported-platform': 'This bundle cannot run on the current Host platform; ask the user to use a supported Host.',
+  'standalone-bundle': 'This bundle requires its own profile. Tell the user to start it with its dedicated CLI command.',
   'operation-error': 'Report the diagnostic to the user; retry only after its cause is addressed.',
 }
 

@@ -57,6 +57,7 @@ declare module '@deepseek-ai/cordis' {
 }
 
 export { assertBundlePlatform, UnsupportedBundlePlatformError } from './bundle-platform.ts'
+export { assertBundleSelection, UnsupportedBundleSelectionError } from './bundle-selection.ts'
 export {
   composeEntries,
   createRuntimeResolution,

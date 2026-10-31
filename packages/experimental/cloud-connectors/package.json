@@ -60,6 +60,7 @@
     "@deepseek-ai/dsh-credentials-local": "workspace:*",
     "@deepseek-ai/dsh-llm": "workspace:*",
     "@deepseek-ai/dsh-mcp-client": "workspace:*",
+    "@deepseek-ai/dsh-remote-mock": "workspace:*",
     "@deepseek-ai/dsh-system-prompt": "workspace:*",
     "@deepseek-ai/dsh-tool-executor-native": "workspace:*",
     "@deepseek-ai/dsh-tools": "workspace:*",
