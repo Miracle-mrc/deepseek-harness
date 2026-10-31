@@ -175,7 +175,10 @@ export function apply(ctx) {
     expect(login.stdout).toContain('Authorization code: PUBLIC-CODE')
     expect(login.stdout).toContain('aws: signed in.')
     expect(login.stdout + login.stderr).not.toContain('private-browser-response')
-    expect((await readFile(events, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as unknown)).toEqual([
+    expect((await readFile(events, 'utf8')).trim().split('\n').map((line) => {
+      const operation: unknown = JSON.parse(line)
+      return operation
+    })).toEqual([
       { operation: 'complete', kind: 'browser-response' },
       { operation: 'complete', kind: 'replace-profile' },
     ])
@@ -195,7 +198,10 @@ export function apply(ctx) {
     const none = await f.run(['--patch', patch, 'tools', 'aws', '--none'])
     expect(none.exitCode).toBe(0)
     expect(none.stdout).toContain('aws: saved 0 allowed tools.')
-    const operations = (await readFile(events, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as unknown)
+    const operations = (await readFile(events, 'utf8')).trim().split('\n').map((line) => {
+      const operation: unknown = JSON.parse(line)
+      return operation
+    })
     expect(operations.slice(2)).toEqual([
       { operation: 'cancel', provider: 'aws' },
       { operation: 'confirm', provider: 'supabase', names: ['execute_sql', 'apply_migration'] },
