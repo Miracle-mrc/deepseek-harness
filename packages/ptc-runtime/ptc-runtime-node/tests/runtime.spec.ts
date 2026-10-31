@@ -182,13 +182,39 @@ describe('Node program process', () => {
   })
 
   it.each([{}, { timeoutMs: null }] as const)('cancels a live program and closes its managed process with %j', async (timing) => {
-    const { run } = await setup()
+    const { ctx, run } = await setup()
     const entered = Promise.withResolvers<undefined>()
     const controller = new AbortController()
-    const active = run({ ...timing, program: 'void tools.enter({}); for (;;) {}', signal: controller.signal, bindings: bindings({ enter: async () => { entered.resolve(undefined); return null } }) })
-    await entered.promise
+    let quiescent = false
+    const spawn = ctx.subprocess.spawn.bind(ctx.subprocess)
+    const observed = vi.spyOn(ctx.subprocess, 'spawn').mockImplementationOnce((spec) => {
+      const handle = spawn(spec)
+      let output = ''
+      const onData = (chunk: Buffer | string): void => {
+        output += String(chunk)
+        if (output.includes('entered\n')) entered.resolve(undefined)
+      }
+      handle.stdout?.on('data', onData)
+      onTestFinished(() => { handle.stdout?.off('data', onData) })
+      return {
+        ...handle,
+        waitForExit: async (signal) => { const empty = await handle.waitForExit(signal); quiescent ||= empty; return empty },
+      }
+    })
+    onTestFinished(() => { observed.mockRestore() })
+    // A queued control-pipe write cannot announce readiness once the program blocks its event loop.
+    const active = run({ ...timing, program: 'const {writeSync}=await import("node:fs"); writeSync(1,"entered\\n"); for (;;) {}', signal: controller.signal, bindings: [] })
+    onTestFinished(async () => { controller.abort(); await active })
+    const readiness = await Promise.race([
+      entered.promise.then(() => ({ kind: 'entered' })),
+      active.then(result => ({ kind: 'settled', result })),
+    ])
+    expect(readiness).toEqual({ kind: 'entered' })
     controller.abort('stop')
-    expect((await active).error).toEqual({ kind: 'abort', message: 'stop' })
+    const result = await active
+    expect(result.error).toEqual({ kind: 'abort', message: 'stop' })
+    expect(result.logs.join('')).toBe('entered\n')
+    expect(quiescent).toBe(true)
   })
 
   it('closes a still-running descendant before returning the program result', async () => {

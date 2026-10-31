@@ -1,6 +1,6 @@
 /** Boot the materialized target runtime without access to a user's Harness profile. */
 
-import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -79,6 +79,7 @@ export function apply(ctx) {
       bytes: readFileSync(join(home, `input.${extension}`)).toString('base64') }))
     const cordis = runtime.sharedPackages.find(entry => entry.name === '@deepseek-ai/cordis')
     if (cordis === undefined) throw new Error('desktop runtime: missing shared Cordis package')
+    copyFileSync(new URL('./office-smoke-diagnostics.mjs', import.meta.url), join(plugin, 'office-smoke-diagnostics.mjs'))
     writeFileSync(join(plugin, 'package.json'), JSON.stringify({
       name: pluginName, version: '1.0.0', type: 'module', exports: './index.js',
       peerDependencies: { '@deepseek-ai/cordis': cordis.version }, dsh: { bundle: { patch: './bundle.yml' } },
@@ -88,6 +89,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { inspect, promisify } from 'node:util'
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
+import { traceOfficeSmokeConversion } from './office-smoke-diagnostics.mjs'
 export function apply(ctx) {
   if (!(ctx instanceof Context)) throw new Error('desktop runtime: external plugin loaded another Cordis instance')
   ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/desktop-smoke',
@@ -111,7 +113,8 @@ export function apply(ctx) {
         const options = { cwd: ${JSON.stringify(home)}, env: { ...process.env, PATH: '' }, timeout: 120_000 }
         const capabilities = await promisify(execFile)(node, [cli, 'capabilities'], options)
         const output = ${JSON.stringify(join(home, 'cli.pdf'))}
-        await promisify(execFile)(node, [cli, 'convert', '--input', ${JSON.stringify(join(home, 'input.docx'))}, '--output', output], options)
+        await traceOfficeSmokeConversion('skill-cli-docx', () =>
+          promisify(execFile)(node, [cli, 'convert', '--input', ${JSON.stringify(join(home, 'input.docx'))}, '--output', output], options))
         response.end(JSON.stringify({ capabilities: JSON.parse(capabilities.stdout), pdf: (await readFile(output)).toString('base64') }))
       } catch (error) {
         response.statusCode = 500
@@ -123,9 +126,9 @@ export function apply(ctx) {
       async handler(_request, response) {
         try {
           const bytes = Buffer.from(input.bytes, 'base64')
-          const result = await ctx.officeToPdf.convert({ extension: input.extension, priority: 'foreground',
+          const result = await traceOfficeSmokeConversion('service-' + input.extension, () => ctx.officeToPdf.convert({ extension: input.extension, priority: 'foreground',
             source: { key: 'desktop-smoke-' + input.extension, version: 'fixture', bytes: bytes.length,
-              async read() { return { bytes, version: 'fixture' } } } })
+              async read() { return { bytes, version: 'fixture' } } } }))
           response.end(Buffer.from(result.pdf))
         } catch (error) {
           response.statusCode = 500

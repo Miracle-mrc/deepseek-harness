@@ -19,7 +19,8 @@ jobs:
   expected-filenames:
     name: no golden filenames
     runs-on: >-
-      ${{ vars.DSH_CI_FAILOVER_LINUX == 'blacksmith' && 'blacksmith-4vcpu-ubuntu-2404'
+      ${{ github.repository == 'Miracle-mrc/deepseek-harness' && 'ubuntu-24.04'
+          || vars.DSH_CI_FAILOVER_LINUX == 'blacksmith' && 'blacksmith-4vcpu-ubuntu-2404'
           || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7.0.1

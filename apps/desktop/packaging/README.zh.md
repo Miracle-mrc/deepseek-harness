@@ -13,6 +13,7 @@ description: "在本地或 Windows／macOS Actions 中生成 Desktop 安装包�
 ## 目录
 
 - [选择打包方式](#choose-a-build)
+- [Miracle fork 预览版](#fork-preview)
 - [发布版本](#release-versions)
 - [配置与本地构建](#configuration-and-local-builds)
 - [Windows Actions 打包](#windows-actions)
@@ -33,6 +34,24 @@ description: "在本地或 Windows／macOS Actions 中生成 Desktop 安装包�
 安装锁定依赖后，从仓库根目录运行本地命令。本地构建使用平台命令，已注册的自托管 runner 使用对应平台的 Actions。test/production 部署与 signed/unsigned 模式分别选择。任何 Windows 签名构建或共享 runner 使用前，先阅读 [Windows 签名与 runner 运维](../windows-signing/README.zh.md#trust-and-isolation)。安装与打包分开进行；[发布](../publishing/README.zh.md)还需要单独的显式操作。
 
 将 `DSH_DESKTOP_PACKAGE_CACHE_DIR` 设为绝对构建缓存目录以跨 checkout 复用；详见[缓存配置与生命周期](#desktop-runtime-preparation)。
+
+<a id="fork-preview"></a>
+
+## Miracle fork 预览版
+
+安装锁定依赖后，在对应的原生构建宿主上，从仓库根目录选择运行以下命令：
+
+```sh
+pnpm run package:desktop:win:x64:unsigned -- --fork-preview
+pnpm run package:desktop:mac:arm64:unsigned -- --fork-preview
+pnpm run package:desktop:mac:x64:unsigned -- --fork-preview
+```
+
+`--fork-preview` 隐含未签名模式，拒绝 `--prepare-only` 以及签名、公证选项，包括 `--skip-notarization`。它选择公开配置，不读取 `.env.windows`、`.env.macos`、机器预设、签名凭据或更新配置。打包环境固定 `DSH_DESKTOP_DISTRIBUTION=fork-preview`、[预览版标识](../README.zh.md#miracle-fork-preview)、公开 npm registry，并禁用证书自动发现。标准构建工具、网络代理和 `DSH_DESKTOP_PACKAGE_CACHE_DIR` 仍可使用。无需 Apple 账号、EV Token、COS 凭据、更新服务或私有 runner。
+
+默认版本为未经修改的产品版本。每个目标写入 `apps/desktop/.desktop-build/targets/<target>/unsigned-artifacts/`：`deepseek-harness-miracle-preview-<version>-win-x64-unsigned.exe`、`deepseek-harness-miracle-preview-<version>-mac-arm64-unsigned.dmg` 或 `deepseek-harness-miracle-preview-<version>-mac-x64-unsigned.dmg`。macOS 应用使用 ad-hoc 签名，DMG 未签名；Windows 保持未签名。不生成 ZIP、更新源、强制更新策略或标准发布完成记录。操作系统仍可能显示信任提示。
+
+添加 `--check` 校验配置和原生工具链，或添加 `--dir` 检查解包应用。打包保留本地构建 profile、完整依赖准备、运行时完整性检查和组装后的运行时冒烟检查。完整的 EXE／DMG 生成、安装与 API Key 启动，必须分别在原生 Windows x64、macOS ARM64 和 macOS x64 宿主上验收；Linux 单元测试无法确认这些结果。后续预览版需手动安装。
 
 <a id="release-versions"></a>
 

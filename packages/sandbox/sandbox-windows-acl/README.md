@@ -63,13 +63,15 @@ sandbox.dispose() // revokes the revocable (temp) grant and label, keeps the sta
 rmSync(tempDir, { recursive: true, force: true })
 ```
 
-The workspace security descriptor edits are granted standing — `dispose()` leaves them, because they are the cross-instance reuse cache — while the distinct temp SID is granted revocably. Each grant is one call carrying the capability-SID allow ACE, the ambient-delete deny, and the Low no-write-up label. The server-side counterpart is the `AclWriteGrant` class: `add(path, standing)` per directory, and `dispose()` revokes the revocable paths and frees the SIDs.
+The workspace security descriptor edits are granted standing — `dispose()` leaves them, because they are the cross-instance reuse cache — while the distinct temp SID is granted revocably. The policy update applies the capability-SID allow ACE, the ambient-delete deny, and the Low no-write-up label together after any required DACL normalization. The server-side counterpart is the `AclWriteGrant` class: `add(path, standing)` per directory, and `dispose()` revokes the revocable paths and frees the SIDs.
 
 ### What confinement gives you
 
 Under `workspace-write`, the child may write into the workspace and its private temp directory; other ACL-addressable writes and deletes are denied except the documented hard-link and AppContainer-ACL boundaries. Under `read-only`, no explicit write grants exist, so writes and deletes are denied with the same documented boundaries.
 
 Temp isolation is per live session/workspace pair: sessions sharing a workspace share its write authority but cannot write one another's temp directories. A fresh provider always chooses a new temp path and SID, so crash residue cannot block or authorize a resumed session.
+
+<a id="failures-and-recovery"></a>
 
 ### Failures and recovery
 
@@ -96,6 +98,8 @@ This section explains the restricted-token mechanism, the token lists, the runne
 ### Mechanism
 
 The caller's token is duplicated into a `WRITE_RESTRICTED` token whose restricting SIDs carry separate workspace and private-temp capabilities, and that token is lowered to Low integrity. Windows performs the access check twice — once against the normal SIDs, once against the restricting SIDs — and grants write-class access only where both checks pass; separately, the kernel's mandatory-integrity check denies write-class access to every object that is not labeled Low. The write-SID intersection covers only the object's OWN access check: Windows can also authorize a write or a delete from the parent directory's `FILE_DELETE_CHILD` right, which no restricting SID has to co-sign, so a token holding only the intersection could still delete anything its ambient user SIDs control — including files inside ANOTHER granted root, whose Low label clears the integrity check. Each grant therefore also denies `FILE_DELETE_CHILD` to the world SID, leaving the capability ACE's DELETE bit as the only delete authority inside the granted roots, and labels the same directory Low in the one `SetNamedSecurityInfoW` call that applies all three edits. The workspace SID is derived deterministically from the canonical workspace path (`workspaceWriteSid`), so the workspace-root security descriptor edit materializes once per workspace per machine and every later session, call, or restart hits the exact-ACE/exact-deny/exact-label skip. Each live session/workspace pair instead receives a random private temp directory and a SID derived from that path (`tempWriteSid`), so sessions share the intended workspace authority without inheriting one another's temp authority. Every policy-specific Win32 call and every process primitive from [`dsh-win32-process`](../../subprocess/win32-process/README.md) is checked; failures throw `Win32Error` carrying the API name, exact code, system text, and failing context — fail-closed by construction.
+
+Before that policy update, `grantWrite` checks the root's DACL control flags under the per-root lock. For a DACL missing `SE_DACL_AUTO_INHERITED`, it first reapplies the existing DACL without adding policy ACEs, changing the integrity label, or overriding DACL protection. It then re-reads the security descriptor and requires automatic inheritance to be set and the original DACL protection state to be preserved. DACLs already using automatic inheritance skip this normalization. The lock remains held through the policy update, and any Win32 or verification failure stops the grant.
 
 ### Modes and token lists
 

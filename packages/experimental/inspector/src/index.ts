@@ -62,7 +62,7 @@ export const name = 'experimental-inspector'
 /** Web Host and authenticated browser bootstrap transport. */
 export const inject = ['webServer', 'connection']
 
-/** Host plugin configuration. Fetch capture is enabled by default. */
+/** Host plugin configuration. Fetch capture requires explicit opt-in. */
 export interface Config extends Omit<InspectorOptions, 'clientOrigins'> {
   /** Browser origins allowed to open the Client ingest WebSocket. */
   clientOrigins?: string[]
@@ -75,7 +75,7 @@ export const Config: z<Config> = z.object({
   host: z.const('127.0.0.1').default('127.0.0.1'),
   port: z.natural().max(65_535).default(9_230),
   clientOrigins: z.array(z.string()).default([]),
-  captureFetch: z.boolean().default(true),
+  captureFetch: z.boolean().default(libraryDefaults.captureFetch),
   maxRequestBodyBytes: z.natural().min(1).default(libraryDefaults.maxRequestBodyBytes),
   maxResponseBodyBytes: z.natural().min(1).default(libraryDefaults.maxResponseBodyBytes),
   maxBodyChunkBytes: z.natural().min(1).default(libraryDefaults.maxBodyChunkBytes),

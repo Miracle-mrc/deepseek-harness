@@ -207,6 +207,39 @@ it.each(['--unsigned', '--prepare-only'])('keeps %s hardware-free and creates no
   expect(stages.includes('exec tsx scripts/smoke-packaged-runtime.ts --unsigned')).toBe(mode === '--unsigned')
 })
 
+it.each([
+  ['win-x64', 'win32', 'x64'], ['mac-arm64', 'darwin', 'arm64'], ['mac-x64', 'darwin', 'x64'],
+] as const)('builds and smokes fork-preview %s without release settings or signing stages', async (target, platform, arch) => {
+  const { run, stages } = supervisor()
+  await packageTarget(parseDesktopPackageInvocation([target, '--fork-preview'], platform, arch), {
+    ...environment,
+    DSH_PACKAGING_PRESET: 'invalid-preset', DSH_PACKAGING_CONFIG_DIR: '/missing-machine-settings',
+    DSH_DESKTOP_MANDATORY_UPDATE_CONFIG: 'invalid-policy',
+    DOWNLOAD_PROD_COS_SECRET_KEY: 'unused-secret',
+    CSC_LINK: '/missing.p12', APPLE_API_KEY: '/missing.p8',
+  }, run)
+  expect(stages[0]).toBe('run build --profile local')
+  expect(stages.some(stage => stage.startsWith('exec tsx apps/desktop/scripts/pack-local-packages.ts'))).toBe(true)
+  expect(stages.at(-2)).toBe(`exec electron-builder --config electron-builder.config.mjs ${platform === 'win32' ? '--win' : '--mac'} --${arch} --publish never`)
+  expect(stages.at(-1)).toBe('exec tsx scripts/smoke-packaged-runtime.ts --unsigned')
+  expect(stages).not.toContain('preflight:windows-signing')
+  expect(stages.some(stage => stage.startsWith('run sign:primary-runtime'))).toBe(false)
+  expect(withWindowsSigningStage).not.toHaveBeenCalled()
+  expect(withMacOSNotarizationProxy).not.toHaveBeenCalled()
+  expect(packageMacOSArtifacts).not.toHaveBeenCalled()
+  expect(writeFileSync).not.toHaveBeenCalled()
+  for (const call of run.run.mock.calls) {
+    expect(call[3].env).toMatchObject({
+      DSH_DESKTOP_DISTRIBUTION: 'fork-preview', DSH_DESKTOP_UNSIGNED: '1',
+      DSH_DESKTOP_APP_ID: 'io.github.miracle-mrc.deepseek-harness.preview',
+      DSH_DESKTOP_NPM_REGISTRY: 'https://registry.npmjs.org/', CSC_IDENTITY_AUTO_DISCOVERY: 'false',
+    })
+    for (const name of ['DSH_PACKAGING_PRESET', 'DSH_PACKAGING_CONFIG_DIR', 'DSH_DESKTOP_MANDATORY_UPDATE_CONFIG',
+      'DSH_DESKTOP_WINDOWS_TOKEN_PIN', 'DSH_DESKTOP_AUTO_UPDATE_ENV', 'DOWNLOAD_TEST_ORIGIN',
+      'DOWNLOAD_PROD_COS_SECRET_KEY', 'CSC_LINK', 'APPLE_API_KEY']) expect(call[3].env).not.toHaveProperty(name)
+  }
+})
+
 it.each(['mac-arm64', 'mac-x64', 'win-x64'] as const)('selects branding from the signing mode for %s', async (target) => {
   const modes = [[], ['--unsigned'], ['--dir'], ['--unsigned', '--dir'], ['--prepare-only'],
     ...(target === 'win-x64' ? [] : [['--skip-notarization'], ['--skip-notarization', '--dir']])]

@@ -8,7 +8,7 @@ import { expect, it } from 'vitest'
 import { composeEntries, loadProfileDirectory } from '@deepseek-ai/dsh-app-boot'
 import { createPluginProfile } from '../src/project-manager.ts'
 
-it('retains one shared resource consumer in the Desktop Web profile', () => {
+it.each([undefined, false, true])('retains shared Desktop resources and honors captureFetch=%s', (captureFetch) => {
   const home = mkdtempSync(join(tmpdir(), 'dsh-desktop-profile-mcp-'))
   try {
     const profileDir = join(home, 'profiles', 'desktop')
@@ -19,6 +19,7 @@ it('retains one shared resource consumer in the Desktop Web profile', () => {
     const rows = composeEntries([
       ...profile.layers.map(layer => layer.patches),
       profile.patches,
+      captureFetch === undefined ? [] : [{ id: 'experimental-inspector', config: { captureFetch } }],
     ], message => warnings.push(message))
 
     expect(rows.filter(row => row.name === '@deepseek-ai/dsh-mcp-resources')).toEqual([
@@ -31,7 +32,7 @@ it('retains one shared resource consumer in the Desktop Web profile', () => {
     expect(rows.find(row => row.id === 'auto-review')).toMatchObject({ name: '@deepseek-ai/dsh-experimental-auto-review' })
     expect(rows.find(row => row.id === 'forge')).toMatchObject({ name: '@deepseek-ai/dsh-experimental-forge' })
     expect(rows.find(row => row.id === 'experimental-inspector')).toMatchObject({
-      name: '@deepseek-ai/dsh-experimental-inspector', config: { captureFetch: true },
+      name: '@deepseek-ai/dsh-experimental-inspector', config: { captureFetch: captureFetch ?? false },
     })
     expect(warnings).toEqual([])
   } finally {

@@ -13,6 +13,7 @@ import { resolveMacOSPackageSettings } from './macos-package-settings.mjs'
 import { resolveWindowsSignatureCacheDirectory } from './windows-signature-cache-directory.mjs'
 import { resolveWindowsPackageSettings } from './windows-package-settings.mjs'
 import { resolveDesktopTargetBuildPaths } from './desktop-build-paths.mjs'
+import { resolveDesktopDistributionIdentity } from './desktop-distribution-identity.mjs'
 
 const APP_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const SHARED_SETTING = /^(?:DSH_DESKTOP_(?:APP_ID|AUTO_UPDATE_ENV|NPM_REGISTRY|MANDATORY_UPDATE_(?:CONFIG|(?:TEST|PROD)_ORIGIN))|DOWNLOAD_TEST_RELEASE_ID|DOWNLOAD_PROD_EO_ZONE_ID|DOWNLOAD_(?:TEST|PROD)_(?:ORIGIN|COS_BUCKET|COS_SECRET_ID|COS_SECRET_KEY))$/u
@@ -20,6 +21,25 @@ const WINDOWS_SETTING = /^DSH_DESKTOP_WINDOWS_(?:CER_FILE|SIGNTOOL|KEY_CONTAINER
 const MACOS_SETTING = /^(?:DSH_DESKTOP_MACOS_(?:SIGNING_IDENTITY|TEAM_ID|SIGNATURE_CACHE_DIR|PACK_CONCURRENCY|ZIP_COMPRESSION_LEVEL|DOWNLOAD_PROXY|NOTARIZATION_PROXY)|APPLE_(?:API_KEY|API_KEY_ID|API_ISSUER|ID|APP_SPECIFIC_PASSWORD|TEAM_ID|KEYCHAIN|KEYCHAIN_PROFILE)|CSC_(?:LINK|KEY_PASSWORD))$/u
 const AMBIENT_RELEASE_SETTING = /^(?:DSH_DESKTOP_(?:APP_ID|AUTO_UPDATE_ENV|MANDATORY_UPDATE_.*|WINDOWS_.*|MACOS_.*)|APPLE_.*|(?:WIN_)?CSC_.*|DOWNLOAD_(?:TEST|PROD)_.*)$/iu
 const FILE_SETTINGS = ['DSH_DESKTOP_WINDOWS_CER_FILE', 'DSH_DESKTOP_WINDOWS_SIGNTOOL', 'APPLE_API_KEY', 'APPLE_KEYCHAIN', 'CSC_LINK']
+const FORK_PREVIEW_RELEASE_SETTING = /^(?:DSH_PACKAGING_.*|PACKAGE_(?:TEST_RELEASE_ID|WINDOWS_COMPRESSION_LEVEL|MACOS_ZIP_COMPRESSION_LEVEL)|DSH_DESKTOP_(?:APP_ID|DISTRIBUTION|UNSIGNED|AUTO_UPDATE_ENV|UPDATE_CHANNEL|NPM_REGISTRY|MANDATORY_UPDATE_.*|WINDOWS_.*|MACOS_.*)|APPLE_.*|(?:WIN_)?CSC_.*|DOWNLOAD_.*)$/iu
+
+/**
+ * Select public fork-preview settings without reading machine configuration or credential values.
+ * @param {NodeJS.ProcessEnv} environment Parent environment, retained for build tools, networking and public caches.
+ * @returns {NodeJS.ProcessEnv} Isolated unsigned preview environment using the public npm registry.
+ */
+export function forkPreviewPackageEnvironment(environment = process.env) {
+  const identity = resolveDesktopDistributionIdentity('fork-preview')
+  return {
+    ...Object.fromEntries(Object.keys(environment).filter(name => !FORK_PREVIEW_RELEASE_SETTING.test(name))
+      .map(name => [name, environment[name]])),
+    DSH_DESKTOP_DISTRIBUTION: identity.distribution,
+    DSH_DESKTOP_APP_ID: identity.appId,
+    DSH_DESKTOP_NPM_REGISTRY: 'https://registry.npmjs.org/',
+    DSH_DESKTOP_UNSIGNED: '1',
+    CSC_IDENTITY_AUTO_DISCOVERY: 'false',
+  }
+}
 
 /**
  * Select local macOS test defaults without reading dotenv files or inheriting release settings.
@@ -149,14 +169,20 @@ function requireReadableFile(environment, name) {
  * Validate the packaging mode before preparation without invoking a token or Apple's services.
  * @param {NodeJS.ProcessEnv} environment Selected local defaults or file-owned release settings.
  * @param {{ platform: 'win32' | 'darwin', arch: string }} target Selected release target.
- * @param {{ unsigned?: boolean, prepareOnly?: boolean, skipNotarization?: boolean }} options Explicit packaging mode.
+ * @param {{ unsigned?: boolean, prepareOnly?: boolean, skipNotarization?: boolean, forkPreview?: boolean }} options Explicit packaging mode.
  * @returns {void}
  */
 export function validateDesktopPackageEnvironment(environment, target, options = {}) {
+  const identity = resolveDesktopDistributionIdentity(environment.DSH_DESKTOP_DISTRIBUTION)
+  const forkPreview = identity.distribution === 'fork-preview'
+  if (forkPreview && (!options.unsigned || options.prepareOnly || options.skipNotarization)) {
+    throw new Error('desktop package: fork-preview requires unsigned packaging without --prepare-only or --skip-notarization')
+  }
+  if (options.forkPreview && !forkPreview) throw new Error('desktop package: fork-preview requires its public packaging environment')
   resolveDesktopTargetBuildPaths(environment, target.platform, target.arch)
   resolveDesktopAppId(environment)
   resolveNpmRegistry(environment)
-  if (target.platform !== 'darwin' || !options.unsigned) resolveDesktopPolicyEnvironment(environment)
+  if (!forkPreview && (target.platform !== 'darwin' || !options.unsigned)) resolveDesktopPolicyEnvironment(environment)
   if (target.platform === 'darwin') resolveMacOSPackageSettings(environment)
   else resolveWindowsPackageSettings(environment)
   if (options.unsigned) return

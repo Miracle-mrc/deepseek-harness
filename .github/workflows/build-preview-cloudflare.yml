@@ -40,7 +40,8 @@ jobs:
     # script check) after the Typert pass. Publishing is best effort: transport,
     # Access, and comment failures warn instead of failing the check.
     runs-on: >-
-      ${{ vars.DSH_CI_FAILOVER_LINUX == 'blacksmith' && 'blacksmith-4vcpu-ubuntu-2404'
+      ${{ github.repository == 'Miracle-mrc/deepseek-harness' && 'ubuntu-24.04'
+          || vars.DSH_CI_FAILOVER_LINUX == 'blacksmith' && 'blacksmith-4vcpu-ubuntu-2404'
           || 'ubuntu-24.04' }}
     name: cloudflare pages preview
     steps:

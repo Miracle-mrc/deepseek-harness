@@ -45,6 +45,8 @@ int wmain()
   P((int)TokenGroups);
   P((int)SE_FILE_OBJECT);
   P(DACL_SECURITY_INFORMATION);
+  P(SE_DACL_AUTO_INHERITED);
+  P(SE_DACL_PROTECTED);
   P((int)TRUSTEE_IS_UNKNOWN);
   P((int)TRUSTEE_IS_SID);
   P((int)GRANT_ACCESS);
@@ -87,6 +89,7 @@ int wmain()
   static_assert(LOCKFILE_EXCLUSIVE_LOCK == 0x2 && LOCKFILE_FAIL_IMMEDIATELY == 0x1, "lockfile flags");
   static_assert(ERROR_LOCK_VIOLATION == 33, "lock violation");
   static_assert(INHERITED_ACE == 0x10, "inherited ace flag");
+  static_assert(SE_DACL_AUTO_INHERITED == 0x400 && SE_DACL_PROTECTED == 0x1000, "DACL inheritance control");
   static_assert(GRANT_ACCESS == 1 && REVOKE_ACCESS == 4, "access modes");
   static_assert(SUB_CONTAINERS_AND_OBJECTS_INHERIT == 0x3, "inheritance");
   printf("\nstatic_asserts passed\n");

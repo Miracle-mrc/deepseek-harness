@@ -11,7 +11,7 @@ kind: "package-reference"
 
 在 Chrome DevTools 中检查一个运行中的 dsh Host 及其浏览器 Client：Host 与 Client Console context、Host Sources 与调试、Host fetch 采集和共享 Cordis 树，全部 CDP 状态都在 Worker 中。
 
-可选的[开发者工具组合包](../inspector-profile/README.zh.md) 同时启用 NodeJS 诊断和会话数据诊断，并开启 Host fetch 采集。Web startup 不需要也不接受 `--inspect`。
+可选的[开发者工具组合包](../inspector-profile/README.zh.md) 同时启用 NodeJS 诊断和会话数据诊断。Host fetch 采集保持关闭，必须通过 `captureFetch: true` 显式启用。Web startup 不需要也不接受 `--inspect`。
 
 ## 目录
 
@@ -33,7 +33,7 @@ kind: "package-reference"
 
 可信本地开发可通过 `pnpm run demo:inspector`，经普通 Web profile 显式挂载源码 overlay。Host 会打印调试链接，检查该目标需要 Chrome。fetch 采集包含密钥等敏感信息，本地调试端口允许执行任意代码。
 
-组合包将 `experimental-inspector` 设置为 `disabled: false`，并设置 `captureFetch: true`。Host 可选的 `--inspect` 参数处理仅负责打开外部 Chrome 窗口，不控制 Inspector 是否运行。
+组合包将 `experimental-inspector` 设置为 `disabled: false`，并设置 `captureFetch: false`。Host 可选的 `--inspect` 参数处理仅负责打开外部 Chrome 窗口，不控制 Inspector 是否运行。
 
 启用此组件后，按 **Ctrl/Cmd+Shift+.** 可展开或收起整宽底部面板中的 **NodeJS 诊断**，无需选中 Session。拖动上边缘可调整面板高度，占用上方内容的可用空间；收起和切换页面时保留所选高度。聚焦分隔条后也可使用上/下方向键、Home 和 End。iframe 首次展开时加载，收起、切换 Session 或主面板时保持挂载；卸载此组件会重置前端。X 按钮和快捷键会在原打开控件仍连接时恢复其焦点。iframe 自动连接当前 Host 并打开 Console；不包含手动 Connection 面板。每个内嵌前端的 Console、Sources 和 Cordis 树只显示 Host 与嵌入它的页面所对应的 Client；打印的 `devtools://` 链接仍显示全部 Client。
 
@@ -72,7 +72,7 @@ Host 插件注入 `webServer` 和 `connection`，接受以下字段：
 | `host` | `127.0.0.1` | Worker endpoint 监听地址；只接受 loopback |
 | `port` | `9230` | Worker endpoint 起始端口；端口占用时向上递增，`0` 表示由操作系统分配 |
 | `clientOrigins` | `[]` | `/ingest` 额外接受的精确浏览器 origin；loopback origin 始终允许 |
-| `captureFetch` | `true` | 包装 `globalThis.fetch` 并发布之后的每次调用 |
+| `captureFetch` | `false` | 显式启用后包装 `globalThis.fetch` 并发布之后的每次调用 |
 | `maxRequestBodyBytes` | 8 MiB | 每次请求保留的 request body 前缀 |
 | `maxResponseBodyBytes` | 32 MiB | 每次请求保留的 response body 前缀 |
 | `maxBodyChunkBytes` | 48 KiB | base64 编码前一条 body 记录携带的原始字节数 |
@@ -133,7 +133,7 @@ Client 断联时，其 Console execution context 与 live object id 会立即销
 <a id="host-fetch-capture"></a>
 ## Host fetch 采集
 
-fetch 采集默认开启，记录完整 URL、全部请求与响应 headers、请求体、响应体、状态、时间、错误和取消。它不脱敏 credential、Cookie、query value 或 payload。body 采集读取 clone；原始 fetch resolve 后，调用方立即拿到原始 Response。
+插件、库 API 和开发者工具组合包的 fetch 采集均默认关闭。显式设置 `captureFetch: true` 后，会记录完整 URL、全部请求与响应 headers、请求体、响应体、状态、时间、错误和取消。它不脱敏 credential、Cookie、query value 或 payload。body 采集读取 clone；原始 fetch resolve 后，调用方立即拿到原始 Response。
 
 配置的 body 上限限制保留量，而不选择字段：采集保留前缀并标记 truncated。`Network.getRequestPostData` 与 `Network.getResponseBody` 读取 Worker 保留的字节。`Network.streamResourceContent` 返回已缓冲的前缀，并仅为发起调用的 DevTools 连接把后续 response 字节附加到 `Network.dataReceived`，以驱动实时 Response 与 EventStream 视图。直接调用 Undici Client/Dispatcher，以及插件激活前保存的 fetch 引用，不在观察范围内。
 

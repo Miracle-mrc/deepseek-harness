@@ -164,9 +164,15 @@ pi-ai 检查会在内存中重新生成预期元数据。数据过期时，检�
 
 keyless [CI 工作流](../.github/workflows/ci.yml) 将独立门禁分组到若干宽粒度 lane，并在受支持的 Node 版本上运行一组较小的兼容性检查。产物消费方在各自 lane 内等待一次 build。覆盖率分区复用按平台和运行器池隔离的文件耗时，在配置的 worker 上限内均衡工作量。原生 Windows lane 运行在独立的 [CI Windows 工作流](../.github/workflows/ci-windows.yml)中，Python 检查运行在独立的 [CI Python 工作流](../.github/workflows/ci-python.yml)中，两者都可单独重新运行。必需 benchmark 在标准 GitHub 托管 Linux 上独立运行；[benchmark 运行器说明](../benchmarks/AGENTS.md)拥有路由及 job 超时。单独的真实 API 工作流按其配置的 worker 上限运行 `pnpm run test:e2e`。当前门禁和 job 清单以 [scripts/run-gates.ts](../scripts/run-gates.ts) 和工作流文件为准。
 
-`Miracle-mrc/deepseek-harness` fork 的必需 PR job 使用 GitHub 托管的 Ubuntu 24.04 和 Windows 2025 运行器，即使设置了上游的故障转移变量也是如此。该 fork 保留 PR 预览构建，但跳过上游 Cloudflare 发布、部署验证及预览评论。由于无法访问上游 Project/App，fork 所有者已在 GitHub Actions 中停用 Issue policy 和 Issue lifecycle 工作流；lifecycle job 还带有仅针对 fork 的保护条件，而 policy job 在重新启用时仍保持无条件执行的校验约束。仅用于上游的自托管备用检查和专用运行器基准测试不会执行；必需的 PR 结果检查与覆盖率检查仍然执行。此 fork 应保持上游 `DSH_CI_FAILOVER_*` 变量未设置。
+`Miracle-mrc/deepseek-harness` fork 的必需 PR job、独立检查、发布演练和原生 Python 构建均使用公开的 GitHub 托管运行器，即使设置了上游的故障转移变量也是如此。原生发布构建使用标准目标矩阵，包括两种 macOS 架构。Windows 覆盖率结果纳入必需的 `windows checks passed` 检查；失败、取消及意外跳过均使该检查失败。
 
-不带凭据的 dsh 依赖布局检查与 dsh/vendor 打包演练仅在 `DSH_CI_FAILOVER_LINUX=selfhosted`，且事件为受信任的 master 推送或同仓库、非 fork、非 Dependabot 拉取请求时使用现有 Linux 自托管池。其余情况（包括手动触发）均使用 `ubuntu-24.04`；手动发布仍使用托管运行器。持久化存储隔离与回退限制见[发布演练运行器说明](../.agents/notes/implemented/process/2026-07-26-ci-failover-runbook.zh.md)。
+针对仓库的 job 保护条件在此 fork 中跳过上游 Issue/Project 策略、加权审批及其 review 事件转发、三个 `Policy` 工作流、自托管备用检查和专用运行器基准测试。PR 预览仍构建并打包 VFS 镜像，同时跳过上游 Cloudflare 发布、部署验证及预览评论。上游 npm、PyPI、Desktop COS 和文档发布 job 也会跳过；其构建和打包验证仍然执行。其他仓库保留现有策略及发布行为。
+
+独立的[真实 API 工作流](../.github/workflows/e2e.yml)在此 fork 中默认停用。将仓库变量设为 `DSH_FORK_LIVE_API_ENABLED=true` 可启用受信任运行。fork 拉取请求和 Dependabot 拉取请求仍被排除，每次启用的运行都必须配置 `DEEPSEEK_API_KEY_EXTERNAL`；缺少该密钥时预检会失败。
+
+此 fork 的 Python 运行时 CI 仅在未设置 `DEEPSEEK_API_KEY_EXTERNAL` 时跳过真实 API 预检和冒烟测试。构建、已安装 wheel 包的不带密钥测试及平台检查仍为必需项；运行摘要会标明跳过的真实 API 检查。已配置密钥的受信任 CI 事件仍执行真实 API 测试，其他仓库仍保留缺少密钥时失败的严格预检。
+
+在此 fork 之外，不带凭据的 dsh 依赖布局演练也支持 `DSH_CI_FAILOVER_LINUX=blacksmith`。dsh 依赖布局检查与 dsh/vendor 打包演练仅在上游仓库中设置 `DSH_CI_FAILOVER_LINUX=selfhosted`，且事件为受信任的 master 推送或同仓库、非 fork、非 Dependabot 拉取请求时使用现有 Linux 自托管池。没有匹配的运行器覆盖条件时，演练使用 `ubuntu-24.04`；手动发布仍使用托管运行器。持久化存储隔离与回退限制见[发布演练运行器说明](../.agents/notes/implemented/process/2026-07-26-ci-failover-runbook.zh.md)。
 
 ### 日常命令
 

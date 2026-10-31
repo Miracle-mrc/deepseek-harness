@@ -73,6 +73,8 @@ The shipped bootstrap and protocol sources reach the interpreter as UTF-8 JSON o
 
 The frames are `boot` / `run` (host → child) and `boot-ack` / `call` / `log` / `done` plus one `reply` per call (child → host). The `log` frame's `truncated` flag marks the frame that IS the child ledger's truncation marker, so the host stops capturing at the same point the child did instead of inferring it from its own budget. The `log` frame's `open` flag marks an unterminated line committed by an explicit flush: the host merges the next log frame into the same entry, so `print('a', end='', flush=True); print('b')` reads back as one `'ab'` entry rather than a fake newline (the split-billing arithmetic lives in the fd-3 protocol Agent Note's wire-contract section). The one exception to merging is truncation: the already-billed prefix is committed as its own entry and the truncation marker follows it (marker last, no re-charge). `done.error.kind` is one of `exception`, `invalid-output`, `output-limit`, or `timeout` from the CPU check after model code returns; wall deadlines, aborts, and substrate death are observed host-side.
 
+During normal settlement, the bootstrap sends `done`, then discards remaining host bytes in bounded chunks until the host closes the channel or terminates the child. It does not dispatch those bytes to binding callbacks. Keeping the duplex channel open preserves the completion frame while a host reply is backpressured; the host retains process-group teardown ownership.
+
 ### Lossless JSON crossing
 
 Completion values and binding arguments cross as exact JSON: values serialize without recursion, so a deep payload below the byte budget survives instead of dying on `JSON.stringify`'s stack limit, and integral doubles beyond the safe range cross as exact digits rather than silently rounded tokens; the meters in `src/protocol.ts` enforce byte budgets and number losslessness before anything else reads the payload.
@@ -90,6 +92,7 @@ Completion values and binding arguments cross as exact JSON: values serialize wi
 | [`py/bootstrap.py`](py/bootstrap.py) | Child side: fd-3 channel, program execution, binding dispatch, ledger and settlement |
 | [`py/protocol.py`](py/protocol.py) | Python side: `PROTOCOL_FD`, `TypedDict` frame mirrors, `log_truncation_marker` |
 | [`tests/runtime.spec.ts`](tests/runtime.spec.ts) | Real-subprocess suite: budgets, containment, hostile frames, name rebinding |
+| [`tests/bootstrap-settlement.spec.ts`](tests/bootstrap-settlement.spec.ts) | Bootstrap shutdown under reply backpressure and host disconnect |
 | [`tests/protocol-mirror.e2e.ts`](tests/protocol-mirror.e2e.ts) | Cross-language mirror test against a real `python3` |
 
 </details>
