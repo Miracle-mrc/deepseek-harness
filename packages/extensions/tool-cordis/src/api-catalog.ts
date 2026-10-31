@@ -681,6 +681,56 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'cloudConnections',
+    summary: 'Owns browser authorization, AWS CLI sign-in, and MCP tool registration.',
+    description: 'Owns browser authorization, AWS CLI sign-in, and MCP tool registration. It starts without connecting to either cloud service when the Harness home has no saved grants.',
+    methods: [
+      {
+        signature: '@Remote async list(): Promise<CloudConnectionView[]>',
+        description: 'Current connection facts, including tool-level selection after sign-in.',
+        parameters: [],
+        returns: 'Credential-free provider status and available tool selections.',
+        throws: ['If the owning plugin is stopping.'],
+      },
+      {
+        signature: '@Remote async start(providerId: string, awsRegion: string, options?: CloudStartOptions): Promise<CloudSignIn>',
+        description: 'Admit one sign-in without waiting for provider I/O. Notices and private prompts are projected by list(); cancellation uses the returned identity.',
+        parameters: [{ name: 'providerId', description: 'AWS or Supabase.' }, { name: 'awsRegion', description: 'Region of the AWS-managed MCP endpoint.' }, { name: 'options', description: 'Explicit AWS CLI selectors; omitted fields use plugin configuration.' }],
+        returns: 'Identity of this caller\'s admitted authorization operation.',
+      },
+      {
+        signature: '@Remote async complete(providerId: string, promptId: CloudPromptId, response: string): Promise<CloudConnectionView[]>',
+        description: 'Return a browser response to its exact pending prompt without logging it.',
+        parameters: [{ name: 'providerId', description: 'Provider whose sign-in is waiting.' }, { name: 'promptId', description: 'Identity supplied by list(); stale prompts are rejected.' }, { name: 'response', description: 'Private authorization response or callback URL from the browser.' }],
+        returns: 'Connection state without echoing the supplied response.',
+      },
+      {
+        signature: '@Remote async cancel(providerId: string, attemptId: CloudAttemptId): Promise<CloudConnectionView[]>',
+        description: 'Cancel only the caller\'s admitted operation; never disconnect another login.',
+        parameters: [{ name: 'providerId', description: 'Provider of the sign-in operation.' }, { name: 'attemptId', description: 'Identity returned by start(); a stale identity is a no-op.' }],
+        returns: 'State after the owned authorization runner has stopped.',
+      },
+      {
+        signature: 'async restore(providerId: string): Promise<CloudConnectionView[]>',
+        description: 'Restore saved credentials only when a noninteractive consumer requests it.',
+        parameters: [{ name: 'providerId', description: 'Provider to restore; missing credentials leave it disconnected.' }],
+        returns: 'Connection facts after MCP discovery, or a safe failed state.',
+      },
+      {
+        signature: '@Remote async confirm(providerId: string, selected: string[]): Promise<CloudConnectionView[]>',
+        description: 'Confirm the selected subset of tools after sign-in. Tool names not offered by the connected MCP server are refused; no IAM/database privilege is granted by toggling a tool here.',
+        parameters: [{ name: 'providerId', description: 'Provider to enable.' }, { name: 'selected', description: 'Model-visible raw MCP tool names.' }],
+        returns: 'Updated connection facts.',
+      },
+      {
+        signature: '@Remote async disconnect(providerId: string): Promise<CloudConnectionView[]>',
+        description: 'Remove the local cloud grant and every associated model tool. External token revocation is controlled by the identity provider, not this action.',
+        parameters: [{ name: 'providerId', description: 'Provider to disconnect.' }],
+        returns: 'Updated connection facts.',
+      },
+    ],
+  },
+  {
     key: 'commands',
     summary: 'Human-command registry.',
     description: 'Human-command registry. Plain-context definitions are global; definitions registered through a command-injected child of an agent context shadow globals for that agent.',
@@ -5616,6 +5666,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type AuthorizationStatus = \'authorized\' | \'cancelled\';',
   },
   {
+    name: 'AwsLoginMethod',
+    declaration: 'export type AwsLoginMethod = \'login\' | \'sso\' | \'existing\';',
+  },
+  {
     name: 'BackendRegistry',
     declaration: 'export class BackendRegistry {\n    register(name: string, backend: StorageBackend): () => void;\n    get(name: string): StorageBackend;\n    names(): string[];\n}',
   },
@@ -5714,6 +5768,38 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ClientArtifactBaseline',
     declaration: 'export interface ClientArtifactBaseline {\n    readonly path: string;\n    readonly mtimeMs: number;\n    readonly ctimeMs: number;\n    readonly size: number;\n}',
+  },
+  {
+    name: 'CloudAttemptId',
+    declaration: 'export type CloudAttemptId = Branded<\'cloud-attempt\'>;',
+  },
+  {
+    name: 'CloudConnectionErrorCode',
+    declaration: 'export type CloudConnectionErrorCode = \'authorization-failed\' | \'connection-failed\' | \'session-expired\' | \'aws-cli-required\' | \'aws-login-failed\' | \'aws-permission-required\';',
+  },
+  {
+    name: 'CloudConnectionPrompt',
+    declaration: 'export type CloudConnectionPrompt = {\n    id: CloudPromptId;\n    kind: \'secret\';\n} | {\n    id: CloudPromptId;\n    kind: \'select\';\n    purpose: \'replace-aws-login\';\n};',
+  },
+  {
+    name: 'CloudConnectionView',
+    declaration: 'export interface CloudConnectionView {\n    provider: CloudProvider;\n    status: \'not-connected\' | \'authorizing\' | \'choose-permissions\' | \'connected\' | \'failed\';\n    tools: Array<{\n        name: string;\n        description: string;\n    }>;\n    enabledTools: string[];\n    errorCode?: CloudConnectionErrorCode;\n    authorizationUrl?: string;\n    code?: string;\n    prompt?: CloudConnectionPrompt;\n    attemptId?: CloudAttemptId;\n    awsProfile?: string;\n    awsMethod?: AwsLoginMethod;\n}',
+  },
+  {
+    name: 'CloudPromptId',
+    declaration: 'export type CloudPromptId = Branded<\'cloud-prompt\'>;',
+  },
+  {
+    name: 'CloudProvider',
+    declaration: 'export type CloudProvider = \'aws\' | \'supabase\';',
+  },
+  {
+    name: 'CloudSignIn',
+    declaration: 'export interface CloudSignIn {\n    attemptId: CloudAttemptId;\n    url?: string;\n}',
+  },
+  {
+    name: 'CloudStartOptions',
+    declaration: 'export interface CloudStartOptions {\n    awsProfile?: string;\n    awsMethod?: AwsLoginMethod;\n}',
   },
   {
     name: 'CollectedOutput',
@@ -6917,7 +7003,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ManagementError',
-    declaration: 'export interface ManagementError {\n    code: ReadOnlyReason | \'unknown-plugin\' | \'invalid-spec\' | \'already-installed\' | \'ambiguous-install\' | \'not-bundle\' | \'not-removable\' | \'stop-profile\' | \'bundle-in-use\' | \'stale-approval\' | \'incompatible-version\' | \'unsupported-platform\' | \'operation-error\';\n    diagnostic?: string;\n    incompatible?: IncompatiblePlugin[];\n}',
+    declaration: 'export interface ManagementError {\n    code: ReadOnlyReason | \'unknown-plugin\' | \'invalid-spec\' | \'already-installed\' | \'ambiguous-install\' | \'not-bundle\' | \'not-removable\' | \'stop-profile\' | \'bundle-in-use\' | \'stale-approval\' | \'incompatible-version\' | \'unsupported-platform\' | \'standalone-bundle\' | \'operation-error\';\n    diagnostic?: string;\n    incompatible?: IncompatiblePlugin[];\n}',
   },
   {
     name: 'ManualCompactAgentContext',

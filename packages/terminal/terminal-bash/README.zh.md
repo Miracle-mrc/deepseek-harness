@@ -89,6 +89,8 @@ shell 在整个生命周期内运行在有效的沙箱边界之下。当所有�
 
 Scrollback 和尚未读取的发送输出保留独立拥有的字符串，并增量维护字节数与换行符数，因此清理后的切片不会保留已丢弃的控制序列。追加与淘汰文本的摊还耗时与输入文本量成正比；读取时才拼接保留的分片。保留策略维持码点边界，并将末尾换行符之后的空行计入行数。[历史保留策略决策](../../../.agents/notes/archived/bug-fix/2026-09-11-incremental-terminal-retention.md)记录复杂度与测量依据。
 
+计算请求页的 UTF-8 字节数之后，超限的 ASCII 页只把 `maxReadBytes` 后缀复制到独立的 UTF-16 存储。非 ASCII 页保留按码点裁剪的方式。完整读取仍会拼接 scrollback、拆分行，并统计全部请求文本的 UTF-8 字节数。[PTY 决策](../../../.agents/notes/implemented/feature/2026-07-16-persistent-pty-sessions.zh.md)记录测量与排除项。
+
 ### 源码地图
 
 | 文件 | 职责 |

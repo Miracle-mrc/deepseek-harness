@@ -2,6 +2,7 @@
 
 import { join } from 'node:path'
 import { assertBundlePlatform } from './bundle-platform.ts'
+import { assertBundleSelection } from './bundle-selection.ts'
 import { readProfileManifest, resolveBundleDir, writeProfileManifest, type ProfileManifest } from './profile.ts'
 
 /** Profile directory and installation used by the shared bundle resolver. */
@@ -98,8 +99,8 @@ export function writeProfileBundles(
  * template entries retain their order and duplicates. New bundle dependencies activate automatically.
  * @param options - location, inventory captured before pnpm, and whether explicitly disabled bundles remain disabled.
  * @returns updated inventory and newly added ordinary dependencies for caller-owned warnings.
- * @throws If a new selection has invalid platform metadata or excludes the Host. Installed dependencies
- * remain; no bundle selection changes are written.
+ * @throws If a new bundle has invalid platform metadata or excludes the Host, or selected standalone
+ * metadata is invalid or conflicts with another bundle. Installed dependencies remain; no bundle selection changes are written.
  */
 export function reconcileProfilePlugins(options: ProfilePluginLocation & {
   readonly before: ProfilePluginInventory
@@ -119,6 +120,9 @@ export function reconcileProfilePlugins(options: ProfilePluginLocation & {
       assertBundlePlatform(bundleManifest(options, dependency.name)?.dsh?.bundle?.platforms, process.platform)
       bundles.push(dependency.name)
     }
+  }
+  for (const name of bundles) {
+    assertBundleSelection(name, bundleManifest(options, name)?.dsh?.bundle?.standalone, bundles)
   }
   const changed = bundles.length !== previous.length || bundles.some((name, index) => name !== previous[index])
   const manifest = changed ? writeProfileBundles(options.profileDir, after.manifest, bundles) : after.manifest

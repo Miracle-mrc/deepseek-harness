@@ -7,7 +7,8 @@ import { execa } from 'execa'
 import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import {
-  assertBundlePlatform, UnsupportedBundlePlatformError, bundlePatchPaths, initProfile, readProfileManifest,
+  assertBundlePlatform, UnsupportedBundlePlatformError, assertBundleSelection, UnsupportedBundleSelectionError,
+  bundlePatchPaths, initProfile, readProfileManifest,
   resolveBundleDir, resolveProfileDir, loadOverlayPatches, composeEntries, readProfileVersionExemptions,
   evaluatePluginCompatibility, pluginCompatibilityWarning, type ProfileManifest,
 } from '@deepseek-ai/dsh-app-boot'
@@ -86,13 +87,13 @@ export async function saveManifest(dir: string, manifest: ProfileManifest): Prom
   await writeFileAtomic(join(dir, 'package.json'), JSON.stringify(manifest, undefined, 2) + '\n', { mode: 0o600 })
 }
 
-/** Reconcile bundle selection, returning platform denials without saving any selection changes. */
+/** Reconcile the complete bundle selection, returning activation refusals without saving any selection changes. */
 async function reconcile(before: ProfileManifest, dir: string, anchor: string, options: PackageOperationOptions): Promise<string[]> {
   const after = readProfileManifest('dsh', dir)
   const dependencies = Object.keys(after.dependencies ?? {})
   const beforeDeps = new Set(Object.keys(before.dependencies ?? {}))
   const previous = after.dsh?.profile?.bundles ?? []
-  const unsupported: string[] = []
+  const refused: string[] = []
   const bundles = previous.filter((name) => {
     if (!beforeDeps.has(name) && !dependencies.includes(name)) return true
     return dependencies.includes(name) && bundleManifest(name, dir, anchor) !== undefined
@@ -106,7 +107,7 @@ async function reconcile(before: ProfileManifest, dir: string, anchor: string, o
     }
     try { assertBundlePlatform(metadata.dsh.bundle.platforms, process.platform) } catch (error) {
       if (!(error instanceof UnsupportedBundlePlatformError)) throw error
-      unsupported.push(`${name}: ${error.message}`)
+      refused.push(`${name}: ${error.message}`)
       continue
     }
     for (const file of bundlePatchPaths(resolveBundleDir('dsh', name, anchor, dir), metadata.dsh.bundle)) loadOverlayPatches('dsh', file)
@@ -114,7 +115,13 @@ async function reconcile(before: ProfileManifest, dir: string, anchor: string, o
       bundles.push(name)
     }
   }
-  if (unsupported.length > 0) return unsupported
+  for (const name of bundles) {
+    try { assertBundleSelection(name, bundleManifest(name, dir, anchor)?.dsh?.bundle?.standalone, bundles) } catch (error) {
+      if (!(error instanceof UnsupportedBundleSelectionError)) throw error
+      refused.push(error.message)
+    }
+  }
+  if (refused.length > 0) return refused
   if (JSON.stringify(previous) === JSON.stringify(bundles)) return []
   after.dsh = { ...after.dsh, profile: { ...after.dsh?.profile, bundles } }
   await saveManifest(dir, after)
@@ -289,7 +296,7 @@ function bundleComponentManifests(manifest: ProfileManifest, dir: string, anchor
  * @param options Output, activation and cancellation policy.
  * @returns Exit status, whether the silence bound stopped the run, and the diagnostic path.
  * A compatibility denial returns exit code 1. Service output is bounded; CLI output uses inherited descriptors.
- * Unsupported Host activation returns exit code 1 with named diagnostics; installed dependencies remain,
+ * Unsupported Host or standalone bundle activation returns exit code 1 with named diagnostics; installed dependencies remain,
  * and no bundle selection changes are saved. Other reconciliation or filesystem errors reject.
  * The diagnostic file is closed on return or rejection, including preparation and spawn failures.
  */
@@ -531,10 +538,10 @@ export async function runProfilePnpm(
         options.onOutput?.(diagnostic, 'stderr')
         append(Buffer.from(diagnostic))
       } else if (options.activateNewBundles !== false) {
-        const unsupported = await reconcile(before, dir, context.installAnchor, options)
-        if (unsupported.length > 0) {
+        const refused = await reconcile(before, dir, context.installAnchor, options)
+        if (refused.length > 0) {
           exitCode = 1
-          const diagnostic = `\ndsh: bundle activation rejected: ${unsupported.join('\n')}\ndsh: installed dependencies remain; bundle selection is unchanged. Use a supported Host or remove the unwanted dependencies with 'dsh plugin remove <package>'.\n`
+          const diagnostic = `\ndsh: bundle activation rejected: ${refused.join('\n')}\ndsh: installed dependencies remain; bundle selection is unchanged. Use a supported Host and keep standalone bundles in their own profiles, or remove the unwanted dependencies with 'dsh plugin remove <package>'.\n`
           await log.write(diagnostic)
           options.onOutput?.(diagnostic, 'stderr')
           append(Buffer.from(diagnostic))

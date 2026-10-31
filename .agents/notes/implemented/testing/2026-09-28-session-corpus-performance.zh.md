@@ -47,7 +47,13 @@ worker 是编译后的纯 Node 进程，每次都针对已播种根目录全新�
 
 此文件（包括播种）必须在标准托管 CI 上五分钟内完成，其最后一个用例断言该上限。1,000 个 Session 的搜索和最长 Session 的一次 fork 约占其中 170 s，因此两者各取一个样本。列表语料是剩余时间内能容纳的最大规模。预算约束列表启动、首次和重复的中位数，以及 fork 分层中位数和排名 990 的中位数；搜索和最长 fork 约束各自的单个样本。搜索和 fork 使用各自独立的 1,000 个 Session 根目录，因此 fork 子会话不会进入搜索索引。排名 988 是实测 p99（7,229 个事件）上最高的顶层排名；fork subagent 子会话会增加一次谱系查找，而排名 990 已落入 99.3% 锚点。列表、搜索和 fork 进程的峰值 RSS 设有预算，使用共享的 1.25 余量，不做时间缩放。每个子进程的截止时间等于文件上限，每个测试的截止时间长于其顺序子进程之和，因此失败的用例会在删除临时根目录之前回收所有子进程。
 
+### 峰值 RSS 计数器
+
+[corpus](../../../../benchmarks/session-corpus/session-corpus.worker.ts) 和 [projection-list](../../../../benchmarks/session-corpus/projection-list.worker.ts) worker 在既有操作后内存采样中读取整个进程的峰值 RSS。Linux 上，[`readProcessPeakRssBytes`](../../../../benchmarks/session-corpus/process-peak-rss.ts) 从 `/proc/self/status` 读取 `VmHWM`，即内核记录的 worker 当前可执行映像的 RSS 高水位，包括启动和瞬时分配。计数器不可读、缺失或格式错误时，样本失败，不回退到其他计数器。其他平台继续使用 `process.resourceUsage().maxRSS`。MiB 换算、垃圾回收调用、工作负载、校准和所有预算均不变；该端点既不是 GC 后 RSS，也不是减去基线后的增量。
+
 ## 校准证据
+
+使用官方 Node 24.22.1、Linux x64 的隔离真实子进程回归实验表明，`process.resourceUsage().maxRSS` 可能包含父进程在 exec 前的常驻内存下限。精简父进程启动的微小子进程通过 `maxRSS` 报告 46.8 MiB，通过 `VmHWM` 报告 47.2 MiB；父进程保留已触碰的 1.1 GiB 分配后，运行同一程序的新子进程分别报告 1,130.4 MiB 和 47.2 MiB。此前 1,016.5 MiB 的 CI 样本没有记录父进程 RSS，因此该回归实验不能确定那次读数的具体原因。修正后的测量仍须满足既有预算。
 
 预算使用标准双 CPU 托管 CI 的期望值（Linux x64、Node 24.21、PR #5403），取高于 AMD EPYC 7763 与 EPYC 9V74 运行器中较高记录中位数的整数，再乘以共享的 1.25 余量。同一次运行内的样本差异最多 15%；两种运行器型号在单个端点上最多相差 25%。托管与参考机器的比值为 2.4 到 3.4，高于共享的参考缩放系数 2，因此按参考机器缩放会拒绝正常的托管运行。
 

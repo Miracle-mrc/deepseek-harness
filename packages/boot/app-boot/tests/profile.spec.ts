@@ -47,7 +47,7 @@ const tmp = (): string => {
 
 /** Stage a fake installed app: package.json with deps and a node_modules holding bundles. */
 function stageInstallation(
-  bundles: Record<string, { patch?: string; deps?: Record<string, string>; platforms?: string[] }>,
+  bundles: Record<string, { patch?: string; deps?: Record<string, string>; platforms?: string[]; standalone?: unknown }>,
   appName = 'dsh-app',
 ): string {
   const root = tmp()
@@ -64,7 +64,11 @@ function stageInstallation(
       type: 'module',
       main: './index.js',
       dependencies: spec.deps ?? {},
-      ...spec.patch === undefined ? {} : { dsh: { bundle: { patch: './cordis.patch.yml', ...spec.platforms === undefined ? {} : { platforms: spec.platforms } } } },
+      ...spec.patch === undefined ? {} : { dsh: { bundle: {
+        patch: './cordis.patch.yml',
+        ...spec.platforms === undefined ? {} : { platforms: spec.platforms },
+        ...spec.standalone === undefined ? {} : { standalone: spec.standalone },
+      } } },
     }))
     writeFileSync(join(dir, 'index.js'), `export const packageName = ${JSON.stringify(name)}\n`)
     if (spec.patch !== undefined) writeFileSync(join(dir, 'cordis.patch.yml'), spec.patch)
@@ -75,6 +79,81 @@ function stageInstallation(
   writeFileSync(join(appDir, 'index.js'), `export const packageName = ${JSON.stringify(appName)}\n`)
   return join(appDir, 'package.json')
 }
+
+it('loads a standalone application over an empty profile root and permits its profile override', () => {
+  const anchor = stageInstallation({
+    application: { standalone: true, patch: '- insert:\n  - id: app\n    name: application\n    config: { surface: cli }\n' },
+  })
+  const dir = join(tmp(), 'profile')
+  initProfile(dir, ['application'])
+  writeFileSync(join(dir, PROFILE_PATCH_FILENAME), '- id: app\n  config: { surface: custom-cli }\n')
+  const profile = loadProfileDirectory('test', dir, anchor)
+  expect(profile.skippedBundles).toEqual([])
+  expect(profile.layers.map(layer => layer.packageName)).toEqual(['application'])
+  expect(composeEntries([...profile.layers.map(layer => layer.patches), profile.patches])).toEqual([
+    { id: 'app', name: 'application', config: { surface: 'custom-cli' } },
+  ])
+})
+
+it.each([
+  { bundles: ['web', 'application'] }, { bundles: ['application', 'web'] },
+])('skips a standalone application in a mixed selection before composing duplicate app ids: $bundles', ({ bundles }) => {
+  const anchor = stageInstallation({
+    web: { patch: '- insert:\n  - id: app\n    name: web\n    config: { surface: web }\n' },
+    application: { standalone: true, patch: '- insert:\n  - id: app\n    name: application\n    config: { surface: cli }\n' },
+  })
+  const dir = join(tmp(), 'profile')
+  initProfile(dir, bundles)
+  const before = readFileSync(join(dir, 'package.json'), 'utf8')
+  const profile = loadProfileDirectory('test', dir, anchor)
+  expect(profile.layers.map(layer => layer.packageName)).toEqual(['web'])
+  expect(profile.skippedBundles).toEqual([{
+    packageName: 'application', reason: 'UnsupportedBundleSelectionError: application: standalone bundles must be the only selected profile bundle',
+  }])
+  expect(composeEntries(profile.layers.map(layer => layer.patches))).toEqual([
+    { id: 'app', name: 'web', config: { surface: 'web' } },
+  ])
+  expect(readFileSync(join(dir, 'package.json'), 'utf8')).toBe(before)
+})
+
+it('rejects a mixed standalone selection before attempting to read its patch', () => {
+  const anchor = stageInstallation({
+    web: { patch: '[]\n' }, application: { standalone: true, patch: '[]\n' },
+  })
+  rmSync(join(dirname(anchor), 'node_modules', 'application', 'cordis.patch.yml'))
+  const dir = join(tmp(), 'profile')
+  initProfile(dir, ['web', 'application'])
+  const profile = loadProfileDirectory('test', dir, anchor)
+  expect(profile.skippedBundles[0]?.reason)
+    .toBe('UnsupportedBundleSelectionError: application: standalone bundles must be the only selected profile bundle')
+})
+
+it.each([null, 0, 'true', [], {}].map(standalone => ({ standalone })))(
+  'skips raw invalid standalone metadata with a repairable diagnostic: $standalone', ({ standalone }) => {
+    const anchor = stageInstallation({ application: { standalone, patch: '[]\n' } })
+    const dir = join(tmp(), 'profile')
+    initProfile(dir, ['application'])
+    const profile = loadProfileDirectory('test', dir, anchor)
+    expect(profile.layers).toEqual([])
+    expect(profile.skippedBundles).toEqual([{
+      packageName: 'application', reason: 'Error: application: dsh.bundle.standalone must be a boolean',
+    }])
+  },
+)
+
+it('continues to compose explicitly non-standalone bundles with other selected layers', () => {
+  const anchor = stageInstallation({
+    base: { patch: '- insert:\n  - id: app\n    name: web\n    config: { surface: web }\n' },
+    extension: { standalone: false, patch: '- id: app\n  config: { surface: custom-web }\n' },
+  })
+  const dir = join(tmp(), 'profile')
+  initProfile(dir, ['base', 'extension'])
+  const profile = loadProfileDirectory('test', dir, anchor)
+  expect(profile.skippedBundles).toEqual([])
+  expect(composeEntries(profile.layers.map(layer => layer.patches))).toEqual([
+    { id: 'app', name: 'web', config: { surface: 'custom-web' } },
+  ])
+})
 
 it('skips an unsupported saved bundle before composing any runtime overrides and retains the selection', () => {
   const unsupported = process.platform === 'darwin' ? 'win32' : 'darwin'

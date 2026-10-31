@@ -567,7 +567,8 @@ function PackageCard({ pkg, t, resolveText, busy, highlighted, newer, onOpen, on
         end={<EnableSwitch pkg={pkg} title={title} t={t} busy={busy} onSetEnabled={onSetEnabled} />}
       />
       <MetadataError error={pkg.meta?.error} t={t} />
-      {pkg.error?.code === 'unsupported-platform' && <p className={css.reason} role="status">{managementText(pkg.error, t)}</p>}
+      {(pkg.error?.code === 'unsupported-platform' || pkg.error?.code === 'standalone-bundle')
+        && <p className={css.reason} role="status">{managementText(pkg.error, t)}</p>}
     </li>
   )
 }

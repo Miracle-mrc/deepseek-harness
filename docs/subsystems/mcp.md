@@ -21,17 +21,19 @@ Model Context Protocol (MCP) connects the model to tools supplied by external se
 <a id="configuration"></a>
 ## Configuration
 
-MCP servers are opt-in. Configure one `@deepseek-ai/dsh-mcp-client` entry per server in the intended Cordis scope. Every shipped profile supplies the [tool registry](tools.md) and mounts the shared resource service once; users configure only client entries. Callers with no visible configured server receive no MCP prompt text or tools in native or PTC mode.
+MCP servers are opt-in. Configure one `@deepseek-ai/dsh-mcp-client` entry per server in the intended Cordis scope. Agent profiles built from base or sdk-minimal supply the [tool registry](tools.md) and mount the shared resource service once; users configure only client entries. Callers with no visible configured server receive no MCP prompt text or tools in native or PTC mode.
 
 | Choice | Configuration owner |
 |---|---|
 | Server identity, local process or HTTP endpoint, credentials, and process environment | [Client configuration](../../packages/mcp/mcp-client/README.md#use-this-package) |
 | Tool and resource request timeout, startup failure policy, and reconnection | [Client configuration](../../packages/mcp/mcp-client/README.md#use-this-package) |
-| Resource discovery and reading | The [MCP resource service](../../packages/mcp/mcp-resources/README.md#use-this-package) is included in shipped profiles; it has no configuration fields |
+| Resource discovery and reading | The [MCP resource service](../../packages/mcp/mcp-resources/README.md#use-this-package) is included in shipped agent profiles; it has no configuration fields |
 | Server instruction size limit | Client `maxInstructionBytes`; the composition supplies [system-prompt assembly](system-prompt.md) |
 | Permission decisions and supported image output | [Tool execution](tools.md) and [attachments](attachment.md) |
 
 Protocol negotiation follows the SDK's supported revisions; there is no product setting that forces a protocol revision. The [configuration catalog](../config-catalog.md#deepseek-aidsh-mcp-client) lists accepted client fields and defaults.
+
+The optional [cloud connectors package](../../packages/experimental/cloud-connectors/README.md) provides `ctx.cloudConnections` for fixed AWS and Supabase endpoints. Web, Desktop, and terminal consumers share its AWS CLI sign-in, Supabase browser OAuth, Harness-home grants, and explicit per-tool confirmation. It does not configure general MCP clients or publish shared resource tools; the package README owns setup and authorization behavior.
 
 -----
 
@@ -118,6 +120,75 @@ MCP prompt templates, human-input elicitation, task-based execution, and resourc
 ## Cordis API
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
+
+<a id="ctxcloudconnections--cloudconnections"></a>
+
+### `ctx.cloudConnections` — `CloudConnections`
+
+Owns browser authorization, AWS CLI sign-in, and MCP tool registration. It starts without connecting to either cloud service when the Harness home has no saved grants.
+
+```ts cordis-catalog
+/**
+ * Current connection facts, including tool-level selection after sign-in.
+ * @returns Credential-free provider status and available tool selections.
+ * @throws If the owning plugin is stopping.
+ */
+@Remote async list(): Promise<CloudConnectionView[]>
+
+/**
+ * Admit one sign-in without waiting for provider I/O. Notices and private
+ * prompts are projected by list(); cancellation uses the returned identity.
+ * @param providerId - AWS or Supabase.
+ * @param awsRegion - Region of the AWS-managed MCP endpoint.
+ * @param options - Explicit AWS CLI selectors; omitted fields use plugin configuration.
+ * @returns Identity of this caller's admitted authorization operation.
+ */
+@Remote async start(providerId: string, awsRegion: string, options?: CloudStartOptions): Promise<CloudSignIn>
+
+/**
+ * Return a browser response to its exact pending prompt without logging it.
+ * @param providerId - Provider whose sign-in is waiting.
+ * @param promptId - Identity supplied by list(); stale prompts are rejected.
+ * @param response - Private authorization response or callback URL from the browser.
+ * @returns Connection state without echoing the supplied response.
+ */
+@Remote async complete(providerId: string, promptId: CloudPromptId, response: string): Promise<CloudConnectionView[]>
+
+/**
+ * Cancel only the caller's admitted operation; never disconnect another login.
+ * @param providerId - Provider of the sign-in operation.
+ * @param attemptId - Identity returned by start(); a stale identity is a no-op.
+ * @returns State after the owned authorization runner has stopped.
+ */
+@Remote async cancel(providerId: string, attemptId: CloudAttemptId): Promise<CloudConnectionView[]>
+
+/**
+ * Restore saved credentials only when a noninteractive consumer requests it.
+ * @param providerId - Provider to restore; missing credentials leave it disconnected.
+ * @returns Connection facts after MCP discovery, or a safe failed state.
+ */
+async restore(providerId: string): Promise<CloudConnectionView[]>
+
+/**
+ * Confirm the selected subset of tools after sign-in. Tool names not offered
+ * by the connected MCP server are refused; no IAM/database privilege is
+ * granted by toggling a tool here.
+ * @param providerId - Provider to enable.
+ * @param selected - Model-visible raw MCP tool names.
+ * @returns Updated connection facts.
+ */
+@Remote async confirm(providerId: string, selected: string[]): Promise<CloudConnectionView[]>
+
+/**
+ * Remove the local cloud grant and every associated model tool. External
+ * token revocation is controlled by the identity provider, not this action.
+ * @param providerId - Provider to disconnect.
+ * @returns Updated connection facts.
+ */
+@Remote async disconnect(providerId: string): Promise<CloudConnectionView[]>
+```
+
+Source: [`packages/experimental/cloud-connectors/src/index.ts`](../../packages/experimental/cloud-connectors/src/index.ts)
 
 <a id="ctxmcpresources--mcpresourceruntime"></a>
 

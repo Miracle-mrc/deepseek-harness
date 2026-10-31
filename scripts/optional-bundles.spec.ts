@@ -1,19 +1,22 @@
-/** The delivered Web composition's Schedule rows, the optional bundles it ships switched off, and their display metadata. */
+/** Optional bundles' layered or standalone compositions, Web Schedule rows, and display metadata. */
 
 import { globSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { describe, expect, it, onTestFinished } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import { loadOverlayPatches } from '../packages/boot/app-boot/src/index.ts'
 import { readPluginMeta } from '../packages/boot/app-boot/src/package-meta.ts'
-import { bundlePatchPaths, composeEntries, initProfile, readProfileManifest } from '../packages/boot/app-boot/src/profile.ts'
+import {
+  bundlePatchPaths, composeEntries, initProfile, loadProfileDirectory, readProfileManifest, reportSkippedBundles,
+} from '../packages/boot/app-boot/src/profile.ts'
 import { OPTIONAL_BUNDLES, PROFILE_TEMPLATES } from '../packages/util/official-bundles/src/bundles.ts'
 import type { DshBundleManifest } from '../packages/util/package-manifest/src/types.ts'
 import { createPluginProfile } from '../apps/desktop/src/project-manager.ts'
 
 const root = resolve(import.meta.dirname, '..')
+const installAnchor = resolve(root, 'apps/cli/package.json')
 
 interface Manifest {
   name: string
@@ -24,6 +27,14 @@ const bundles = new Map(globSync('packages/*/*/package.json', { cwd: root }).map
   const manifest = JSON.parse(readFileSync(resolve(root, path), 'utf8')) as Manifest
   return [manifest.name, { dir: dirname(resolve(root, path)), manifest }]
 }))
+
+const optionalBundles = OPTIONAL_BUNDLES.map((name) => {
+  const entry = bundles.get(name)
+  if (entry?.manifest.dsh?.bundle === undefined) throw new Error(`${name} is not a workspace bundle`)
+  return { name, standalone: entry.manifest.dsh.bundle.standalone === true }
+})
+const layeredBundles = optionalBundles.filter(entry => !entry.standalone).map(entry => entry.name)
+const standaloneBundles = optionalBundles.filter(entry => entry.standalone).map(entry => entry.name)
 
 function bundle(name: string): { dir: string; patches: ReturnType<typeof loadOverlayPatches> } {
   const entry = bundles.get(name)
@@ -101,11 +112,19 @@ describe('optional bundles', () => {
     expect(OPTIONAL_BUNDLES.length).toBeGreaterThan(0)
   })
 
+  it('tests every optional bundle according to its declared composition', () => {
+    expect(layeredBundles.length).toBeGreaterThan(0)
+    expect(standaloneBundles.length).toBeGreaterThan(0)
+    const partitioned = [...layeredBundles, ...standaloneBundles]
+    expect(new Set(partitioned).size).toBe(OPTIONAL_BUNDLES.length)
+    expect(partitioned.toSorted()).toEqual(OPTIONAL_BUNDLES.toSorted())
+  })
+
   it('keeps the Inspector out of the default plugin list', () => {
     expect(OPTIONAL_BUNDLES).not.toContain('@deepseek-ai/dsh-experimental-inspector')
   })
 
-  it.each(OPTIONAL_BUNDLES)('%s composes over the Web profile without a skipped patch', (name) => {
+  it.each(layeredBundles)('%s composes over the Web profile without a skipped patch', (name) => {
     const { patches } = bundle(name)
     const warnings: string[] = []
     const composed = composeEntries([...shipped, patches], message => warnings.push(message))
@@ -131,6 +150,54 @@ describe('optional bundles', () => {
       expect(matches).toHaveLength(1)
       expect(matches[0]?.name).toBe(shippedComposed.find(entry => entry.id === patch.id)?.name)
     }
+  })
+
+  it.each(standaloneBundles)('%s composes as the only bundle of an empty profile', (name) => {
+    const directory = mkdtempSync(join(tmpdir(), 'dsh-standalone-bundle-'))
+    onTestFinished(() => { rmSync(directory, { recursive: true, force: true }) })
+    initProfile(directory, [name])
+    const profile = loadProfileDirectory('test', directory, installAnchor)
+    expect(profile.skippedBundles).toEqual([])
+    expect(profile.layers.map(layer => layer.packageName)).toEqual([name])
+    const warnings: string[] = []
+    const composed = composeEntries([...profile.layers.map(layer => layer.patches), profile.patches], message => warnings.push(message))
+    expect(warnings).toEqual([])
+    const rows = flattenRows(composed)
+    expect(rows.length).toBeGreaterThan(0)
+    const ids = rows.map(row => row.id)
+    expect(ids.every(id => typeof id === 'string')).toBe(true)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('keeps the standalone cloud commands free of Agent, model, Session and Web services', () => {
+    const name = '@deepseek-ai/dsh-experimental-cloud-connectors-cli'
+    expect(standaloneBundles).toContain(name)
+    const names = flattenRows(composeEntries([bundle(name).patches])).map(row => row.name)
+    for (const owner of [
+      '@deepseek-ai/dsh-agent', '@deepseek-ai/dsh-agent-loop', '@deepseek-ai/dsh-llm',
+      '@deepseek-ai/dsh-session', '@deepseek-ai/dsh-host-webserver', '@deepseek-ai/dsh-web-app',
+    ]) expect(names).not.toContain(owner)
+  })
+
+  it.each(standaloneBundles)('%s is visibly skipped beside Web without changing the Web composition', (name) => {
+    const directory = mkdtempSync(join(tmpdir(), 'dsh-standalone-web-mix-'))
+    onTestFinished(() => { rmSync(directory, { recursive: true, force: true }) })
+    const selected = [...PROFILE_TEMPLATES.web!.bundles, name]
+    initProfile(directory, selected)
+    const profile = loadProfileDirectory('test', directory, installAnchor)
+    expect(profile.skippedBundles.map(item => item.packageName)).toEqual([name])
+    expect(profile.skippedBundles[0]?.reason).toContain('standalone bundles must be the only selected profile bundle')
+    expect(profile.layers.map(layer => layer.packageName)).toEqual(PROFILE_TEMPLATES.web!.bundles)
+    const warnings: string[] = []
+    const composed = composeEntries([...profile.layers.map(layer => layer.patches), profile.patches], message => warnings.push(message))
+    expect(warnings).toEqual([])
+    expect(composed).toEqual(composeEntries(shipped))
+    expect(readProfileManifest('test', directory).dsh?.profile?.bundles).toEqual(selected)
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    onTestFinished(() => { stderr.mockRestore() })
+    reportSkippedBundles('test', profile)
+    expect(stderr).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(`skipping profile bundle ${JSON.stringify(name)}`))
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('standalone bundles must be the only selected profile bundle'))
   })
 
   it('offers Git Worktrees as one disabled bundle with its runtime and tool', () => {

@@ -1,0 +1,2 @@
+aws: not-connected; 0 tools enabled
+supabase: not-connected; 0 tools enabled

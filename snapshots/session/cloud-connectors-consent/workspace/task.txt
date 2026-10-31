@@ -1,0 +1,1 @@
+Authorize the fixture Supabase connection, enable only execute_sql, then verify unselected and revoked tools cannot run. Reply DONE.

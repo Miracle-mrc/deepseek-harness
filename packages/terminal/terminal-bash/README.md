@@ -89,6 +89,8 @@ One backend serves both dialects: bash and pwsh share the same session machinery
 
 Scrollback and unread send output retain independently owned strings with incremental byte and newline counts, so sanitized slices cannot retain discarded control sequences. Appending and evicting text takes amortized time proportional to incoming text; reads assemble the retained chunks. Retention preserves code-point boundaries and counts the empty line after a trailing newline. The [historical retention decision](../../../.agents/notes/archived/bug-fix/2026-09-11-incremental-terminal-retention.md) records the complexity and measurement rationale.
 
+After counting a requested page's UTF-8 bytes, an oversized ASCII page copies only its `maxReadBytes` suffix into independent UTF-16 storage. Non-ASCII pages retain code-point trimming. The complete read still assembles scrollback, splits lines, and counts all requested UTF-8 bytes. The [PTY decision](../../../.agents/notes/implemented/feature/2026-07-16-persistent-pty-sessions.md) records the measurement and exclusions.
+
 ### Source map
 
 | File | Role |

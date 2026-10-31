@@ -1,0 +1,10 @@
+version: 1
+scenario: cloud-connectors-consent
+profile: headless
+composition: cloud-connectors-consent
+recording: authored
+header:
+  class: cloud-connectors-consent
+  pin: true
+  systemPromptSource: text-turn
+  changes: 2

@@ -1,7 +1,8 @@
 /** Shipped profile templates, and the offline catalog that does not depend on installed provider packages or registry requests. */
 
 import { describe, expect, it } from 'vitest'
-import { OFFICIAL_ON_DEMAND_CATALOG, ON_DEMAND_BUNDLES, PROFILE_TEMPLATES } from '../src/index.ts'
+import { readFileSync } from 'node:fs'
+import { EXPERIMENTAL_BUNDLES, HIDDEN_BUNDLES, OFFICIAL_ON_DEMAND_CATALOG, ON_DEMAND_BUNDLES, OPTIONAL_BUNDLES, PROFILE_TEMPLATES } from '../src/index.ts'
 
 describe('Official on-demand catalog', () => {
   it('offers exactly the two native subagent integrations with offline localized metadata', () => {
@@ -20,7 +21,7 @@ describe('Official on-demand catalog', () => {
 })
 
 describe('Shipped profile templates', () => {
-  it('stack each mode bundle on base except the standalone minimal SDK', () => {
+  it('keeps cloud commands and the minimal SDK independent of the model application base', () => {
     expect(PROFILE_TEMPLATES).toEqual({
       acp: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-acp-app'] },
       web: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] },
@@ -28,5 +29,58 @@ describe('Shipped profile templates', () => {
       sdk: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-sdk-app'] },
       'sdk-minimal': { bundles: ['@deepseek-ai/dsh-sdk-minimal'] },
     })
+  })
+})
+
+describe('Cloud command bundle', () => {
+  it('ships cloud commands for explicit activation without adding a default profile', () => {
+    const name = '@deepseek-ai/dsh-experimental-cloud-connectors-cli'
+    expect(PROFILE_TEMPLATES).not.toHaveProperty('cloud')
+    expect(HIDDEN_BUNDLES.has(name)).toBe(true)
+    expect(EXPERIMENTAL_BUNDLES.has(name)).toBe(true)
+    expect(OPTIONAL_BUNDLES).toContain(name)
+    for (const template of Object.values(PROFILE_TEMPLATES)) {
+      expect(template.bundles).not.toContain(name)
+    }
+  })
+})
+
+describe('Bundled cloud connections', () => {
+  const name = '@deepseek-ai/dsh-experimental-cloud-connectors-bundle'
+  const manifestUrl = new URL('../../../experimental/cloud-connectors-bundle/package.json', import.meta.url)
+
+  it('classifies cloud connections as an available experimental bundle without enabling ordinary CLI profiles', () => {
+    expect(OPTIONAL_BUNDLES).toContain(name)
+    expect(EXPERIMENTAL_BUNDLES.has(name)).toBe(true)
+    expect(HIDDEN_BUNDLES.has(name)).toBe(false)
+    expect(ON_DEMAND_BUNDLES).not.toContain(name)
+    for (const profile of Object.values(PROFILE_TEMPLATES)) expect(profile.bundles).not.toContain(name)
+  })
+
+  it('publishes its self-contained icon and localized metadata beside the bundle patch', () => {
+    const manifest = JSON.parse(readFileSync(manifestUrl, 'utf8')) as {
+      icon: string
+      files: string[]
+      exports: { './locale/*.json': string }
+      dsh: { bundle: { patch: string; platforms?: string[] } }
+    }
+    expect(manifest.icon).toBe('./icon.svg')
+    expect(manifest.files).toContain('icon.svg')
+    expect(manifest.files).toContain('locale/*.json')
+    expect(manifest.files).toContain('cordis.patch.yml')
+    expect(manifest.exports['./locale/*.json']).toBe('./locale/*.json')
+    expect(manifest.dsh.bundle).toEqual({ patch: './cordis.patch.yml' })
+
+    const artwork = readFileSync(new URL(manifest.icon, manifestUrl), 'utf8')
+    expect(artwork).toContain('width="36" height="36" viewBox="0 0 36 36"')
+    expect(artwork).toContain('<path ')
+    expect(artwork).not.toMatch(/<(?:script|style|image|foreignObject|text|animate)\b|\bon\w+=|(?:href|xlink:href)=/i)
+    for (const language of ['en', 'zh']) {
+      const { meta } = JSON.parse(readFileSync(new URL(`./locale/${language}.json`, manifestUrl), 'utf8')) as {
+        meta: { title: string; description: string }
+      }
+      expect(meta.title).toMatch(/\S/)
+      expect(meta.description).toMatch(/\S/)
+    }
   })
 })

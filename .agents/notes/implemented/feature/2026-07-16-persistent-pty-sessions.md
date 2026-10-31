@@ -72,6 +72,28 @@ With `run_in_background: true`, `dsh-tool-terminal` registers the in-flight send
 
 `terminal_signal` accepts the closed set `SIGINT | SIGTERM | SIGKILL | SIGTSTP | SIGHUP`. The backend resolves the terminal foreground process group at execution time. `SIGKILL` is rejected when that group is the top-level shell, directing the caller to `terminal_close`; a failed group lookup fails the operation instead of signaling a guessed PID.
 
+### Oversized ASCII read trimming
+
+The backend's private `utf8Tail` computes UTF-8 length once. When an oversized page has equal byte and UTF-16 code-unit lengths, it is ASCII, so the backend copies only the permitted suffix through UTF-16 into independent storage. This avoids building a code-point array for the complete ASCII page and prevents a returned slice from retaining the larger input. Non-ASCII pages keep the existing code-point-array trimming, including surrogate behavior. Byte caps, truncation flags, line pagination, readiness, emulator processing, and sanitization remain unchanged.
+
+This optimization covers the final ASCII suffix selection and copy. Snapshot assembly, line splitting, and the initial UTF-8 byte count still process the full retained or requested text; the complete read is not bounded by `maxReadBytes` alone.
+
+The [terminal I/O benchmark](../../../../benchmarks/terminal-io/terminal-io.bench.ts) measures ingestion, emulator processing, readiness, and the final bounded read for five MiB of fixed ASCII output with a four MiB retained window and a 256 KiB returned page. It uses the median of five fresh compiled workers under plain Node. Its 120 ms reference expectation, existing 2× CI scale, and 1.25× headroom retain the 300 ms completion limit. The 4× capacity ratio and 16 MiB retained-heap limits also remain unchanged.
+
+The failing hosted-CI completion median is 301.88038 ms against 300 ms. Local comparison uses Linux x64, a Xeon 8573C, official Node 24.22.1, and a four-CPU quota (`cpu.max: 400000 100000`). Each phase runs five fresh compiled workers serially with the same inputs, in this order: original helper, ASCII candidate, then the byte-identical original helper as a negative control. Times below are milliseconds in sample order.
+
+| Implementation | Full completion samples | Median |
+|---|---|---:|
+| Original helper | 362.874, 370.201, 381.596, 393.266, 369.634 | 370.201 |
+| ASCII candidate | 229.590, 215.514, 237.034, 240.224, 244.173 | 237.034 |
+| Restored original negative control | 511.417, 484.604, 499.070, 338.130, 319.515 | 484.604 |
+
+A separate diagnostic production read measures 84.640 ms wall time and 91.282 ms process CPU time before the change, and 5.530/5.744 ms after it. The baseline CPU profile attributes 63 self and 68 inclusive samples to `utf8Tail` out of 357 samples. Ingestion time also varies between batches despite the change being after ingestion, so the complete-endpoint median difference cannot all be attributed to suffix trimming.
+
+Retained heap is 6,602,008–6,619,040 bytes before and 6,593,880–6,600,656 bytes after, below the unchanged 16 MiB bound. A five-millisecond child `VmHWM` sampler observes 135,102,464–138,821,632 bytes before and 100,376,576–104,689,664 bytes after. These sampled high-water values are auxiliary diagnostics, not an exact final whole-process peak.
+
+The synthetic provider excludes shell startup, operating-system PTY transport, model latency, and browser rendering. Local timing does not recalibrate hosted CI; the unchanged gate remains the acceptance condition.
+
 ### Local readiness detection
 
 The local backend first recognizes a private OSC prompt marker emitted by its controlled bash startup, then requires the printable tail after the latest marker to exactly equal the controlled `PS1` before declaring prompt readiness and runs three bounded fallback tiers. Carrying that tail across data callbacks covers delivery where the marker and prompt arrive separately; requiring the exact tail rejects a delayed earlier prompt once echoed input or output follows it, so it cannot settle the current send. The marker is removed before output reaches the model and avoids a fixed silence delay for ordinary shell commands on both platforms. Unpublished startup does not accept zero-output silence as readiness; timeout rejects the spawn. If caller cancellation wins during startup, the backend closes the private session and propagates the exact `AbortSignal.reason`; a foreground PGID that is not observable yet cannot replace cancellation with a lookup error. All timings are validated config fields: `pollIntervalMs`, `exactProbeAfterMs`, `idleSilenceMs`, `handoffGraceMs`, `promptTailGraceMs`, and `timeoutMs`.

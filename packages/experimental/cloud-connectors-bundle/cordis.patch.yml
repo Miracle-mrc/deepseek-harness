@@ -1,0 +1,3 @@
+- insert:
+    - id: cloud-connectors
+      name: '@deepseek-ai/dsh-experimental-cloud-connectors'

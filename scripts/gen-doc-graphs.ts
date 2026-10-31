@@ -966,6 +966,13 @@ const SERVICE_ROLES: ServiceRole[] = [
     mode: 'service',
     note: 'Publishes the owner share-management operations as one Typert Remote namespace that the owner client face calls; every method delegates to the same operations the same-origin routes used.',
   },
+  {
+    key: 'cloudConnections',
+    pkg: 'experimental-cloud-connectors',
+    title: 'Cloud MCP connections Remote',
+    mode: 'service',
+    note: 'Owns browser OAuth, device-local grants, and confirmed MCP tool registrations for fixed AWS and Supabase endpoints; its client face uses the same Remote to connect, select tools, and disconnect.',
+  },
 ]
 
 function generatedHeader(title: string): string[] {

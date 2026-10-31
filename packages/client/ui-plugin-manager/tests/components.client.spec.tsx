@@ -1312,6 +1312,25 @@ describe('PluginManagerPage', () => {
       expect(actions.setEnabled).toHaveBeenCalledExactlyOnceWith(name, false)
     })
 
+    it.each([en, zh])('explains a standalone bundle refusal and allows removing an invalid saved selection', (dict) => {
+      const name = '@acme/standalone'
+      const entry = pkg({ name, enabled: false, error: { code: 'standalone-bundle' } })
+      const { actions, set, setLanguage } = renderTab({ packages: [entry] })
+      setLanguage(dict)
+      expect(screen.getByText(dict.reasonStandaloneBundle)).toBeTruthy()
+      const disabled = screen.getByRole('switch', { name: dict.enableToggle.replace('{name}', name) })
+      expect(disabled).toHaveProperty('disabled', true)
+      fireEvent.click(disabled)
+      expect(actions.setEnabled).not.toHaveBeenCalled()
+      set({ packages: [{ ...entry, enabled: true }] })
+      fireEvent.click(screen.getByRole('button', { name: dict.openDetail.replace('{name}', name) }))
+      expect(screen.getByText(`${dict.reasonLabel}: ${dict.reasonStandaloneBundle}`)).toBeTruthy()
+      const enabled = screen.getByRole('switch', { name: dict.enableToggle.replace('{name}', name) })
+      expect(enabled).toHaveProperty('disabled', false)
+      fireEvent.click(enabled)
+      expect(actions.setEnabled).toHaveBeenCalledExactlyOnceWith(name, false)
+    })
+
     it.each([en, zh])('keeps disabled CUA on the secondary page with experimental labels', (dict) => {
       const name = '@deepseek-ai/dsh-cua-bundle'
       const entry = (enabled: boolean) => pkg({ name, official: true, enabled, meta: { title: 'Computer Use' } })

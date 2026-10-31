@@ -60,6 +60,7 @@ const CODE_KEYS = {
   'stale-approval': 'reasonStaleApproval',
   'incompatible-version': 'reasonIncompatibleVersionUnnamed',
   'unsupported-platform': 'reasonUnsupportedPlatform',
+  'standalone-bundle': 'reasonStandaloneBundle',
   'operation-error': 'reasonOperationError',
 } satisfies Record<ManagementError['code'], PluginManagerLocaleKey>
 

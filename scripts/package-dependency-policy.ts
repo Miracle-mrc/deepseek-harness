@@ -18,6 +18,7 @@ const HOST_DEPENDENCY_PACKAGES: readonly string[] = [
 /** Required Cordis services whose Host imports are type-only. */
 const REQUIRED_SERVICE_PEERS = {
   '@deepseek-ai/dsh-api-terminal-controller': ['@deepseek-ai/dsh-subprocess'],
+  '@deepseek-ai/dsh-experimental-cloud-connectors': ['@deepseek-ai/dsh-authorization'],
 } as const satisfies Readonly<Record<string, readonly string[]>>
 
 /** Development-only package relationships not represented by source imports. */
@@ -71,6 +72,10 @@ const SAFE_HOST_DEPENDENCY_EXPORTS = {
 
 /** Runtime exports that require every consumer to resolve the provider's shared peer instance. */
 const PEER_REQUIRED_HOST_EXPORTS = {
+  // Cloud connectors use the Host's canonical MCP bridge for tool naming,
+  // execution/result projection and attachment admission. Resolve the same
+  // MCP client peer as the CLI instead of shipping a separate adapter copy.
+  '@deepseek-ai/dsh-mcp-client': ['createMcpToolDefinition', 'publicToolName'],
   // Profile settings must match the installed Node provider's configuration schema.
   '@deepseek-ai/dsh-ptc-runtime-node/configuration': ['resolvePersistentExecution'],
   // CUA checks UserQuestionError and preserves AttachmentError from image admission.

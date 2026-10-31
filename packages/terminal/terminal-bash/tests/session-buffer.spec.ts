@@ -203,6 +203,31 @@ describe('LocalPtySession incremental output compatibility', () => {
     expect(operation.readOutput()).toEqual({ delta: '', truncated: false })
   })
 
+  it.each([1, 2, 3, 4, 5, 8, 17])('reads the bounded ASCII tail with a %i-byte cap below scrollback capacity', (maxReadBytes) => {
+    const { producer, session } = fixture({ scrollbackMaxBytes: 8192, maxReadBytes, scrollbackLines: 64 })
+    const reference = new ReferenceBuffer(8192, 64)
+    for (const chunk of ['a'.repeat(maxReadBytes - 1), 'b', 'c', 'prefix'.repeat(1024) + 'TAIL']) {
+      producer.emit(chunk)
+      reference.append(chunk)
+      expect(session.read({})).toEqual(referenceRead(reference, maxReadBytes))
+      expect(session.read({ count: 1 })).toEqual(referenceRead(reference, maxReadBytes, { count: 1 }))
+    }
+  })
+
+  it.each([1, 2, 3, 4, 5, 8, 17])('preserves Unicode read tails and lone UTF-16 units with a %i-byte cap', (maxReadBytes) => {
+    const { session } = fixture({ scrollbackMaxBytes: 8192, maxReadBytes, scrollbackLines: 64 })
+    const reference = new ReferenceBuffer(8192, 64)
+    // Raw UTF-16 follows the existing buffer fixture because TextDecoder replaces lone surrogates.
+    const buffer = session['scrollback']
+    for (const chunk of ['ASCII', 'é界😀', '\n', '\ud800', 'Z', '\udfff', '\nend', '\ud83d', '\ude00', '\udfff\udfff\ud800\ud800']) {
+      buffer.append(chunk)
+      reference.append(chunk)
+      for (const request of [{}, { count: 1 }, { offset: 1, count: 2 }]) {
+        expect(session.read(request)).toEqual(referenceRead(reference, maxReadBytes, request))
+      }
+    }
+  })
+
   it.each([[1, 1, 1], [17, 7, 3], [64, 13, 5]])(
     'matches eager reads and active output with byte caps %i/%i and %i lines',
     async (scrollbackMaxBytes, maxReadBytes, scrollbackLines) => {

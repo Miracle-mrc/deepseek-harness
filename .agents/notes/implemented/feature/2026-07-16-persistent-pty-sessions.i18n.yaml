@@ -23,6 +23,9 @@
 /agent-note-persistent-pty-sessions/decision/six-model-facing-tools:
   en: b92715f36550c728
   zh: e18d7e0e2363347a
+/agent-note-persistent-pty-sessions/decision/oversized-ascii-read-trimming:
+  en: 282a07295d633653
+  zh: cd3e482712c874c5
 /agent-note-persistent-pty-sessions/decision/local-readiness-detection:
   en: 8f36f06869bd5367
   zh: f3560477a8965cbe

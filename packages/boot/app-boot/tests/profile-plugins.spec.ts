@@ -84,6 +84,98 @@ describe('profile plugin inventory', () => {
 })
 
 describe('profile plugin reconciliation', () => {
+  it.each([
+    { selected: ['web'], dependencies: {}, added: ['complete'] },
+    { selected: ['complete'], dependencies: { complete: '^1' }, added: ['layer'] },
+    { selected: [], dependencies: {}, added: ['complete', 'layer'] },
+    { selected: [], dependencies: {}, added: ['layer', 'complete'] },
+  ])('refuses automatic standalone activation for $selected plus $added without changing profile files', ({ selected, dependencies, added }) => {
+    const location = fixture()
+    const manifest = { dependencies, dsh: { profile: { bundles: selected } }, custom: { keep: true } }
+    writeManifest(location.profileDir, manifest)
+    installed(location, 'web')
+    installed(location, 'layer')
+    writeManifest(join(location.profileDir, 'node_modules', 'complete'), {
+      name: 'complete', version: '1.0.0', dsh: { bundle: { patch: 'unbuilt.yml', standalone: true } },
+    })
+    const before = readProfilePlugins(location)
+    writeManifest(location.profileDir, {
+      ...manifest, dependencies: { ...dependencies, ...Object.fromEntries(added.map(name => [name, '^1'])) },
+    })
+    const manifestBytes = readFileSync(join(location.profileDir, 'package.json'), 'utf8')
+    const patchBytes = '# keep user overrides\n[]\n'
+    writeFileSync(join(location.profileDir, 'cordis.patch.yml'), patchBytes)
+    expect(() => reconcileProfilePlugins({ ...location, before, preserveDisabled: true }))
+      .toThrow('complete: standalone bundles must be the only selected profile bundle')
+    expect(readFileSync(join(location.profileDir, 'package.json'), 'utf8')).toBe(manifestBytes)
+    expect(readFileSync(join(location.profileDir, 'cordis.patch.yml'), 'utf8')).toBe(patchBytes)
+    expect(readProfilePlugins(location).dependencies.map(dependency => dependency.name))
+      .toEqual([...Object.keys(dependencies), ...added])
+  })
+
+  it('automatically activates a lone complete application', () => {
+    const location = fixture()
+    const before = readProfilePlugins(location)
+    writeManifest(location.profileDir, { dependencies: { complete: '^1' } })
+    writeManifest(join(location.profileDir, 'node_modules', 'complete'), {
+      name: 'complete', dsh: { bundle: { patch: 'unbuilt.yml', standalone: true } },
+    })
+    const result = reconcileProfilePlugins({ ...location, before, preserveDisabled: true })
+    expect(result.plugins.manifest.dsh?.profile?.bundles).toEqual(['complete'])
+    expect(result.plugins.dependencies).toEqual([{ name: 'complete', version: '^1', bundle: true, enabled: true }])
+  })
+
+  it.each([undefined, false])('preserves ordinary layer order when standalone metadata is %s', (standalone) => {
+    const location = fixture()
+    writeManifest(location.profileDir, { dsh: { profile: { bundles: ['web'] } } })
+    const before = readProfilePlugins(location)
+    writeManifest(location.profileDir, { dependencies: { second: '^1', first: '^1' }, dsh: { profile: { bundles: ['web'] } } })
+    for (const name of ['web', 'second', 'first']) {
+      writeManifest(join(location.profileDir, 'node_modules', name), {
+        name, dsh: { bundle: { patch: 'unbuilt.yml', standalone } },
+      })
+    }
+    expect(reconcileProfilePlugins({ ...location, before, preserveDisabled: true }).plugins.manifest.dsh?.profile?.bundles)
+      .toEqual(['web', 'second', 'first'])
+  })
+
+  it.each([false, true])('refuses malformed standalone metadata on a bundle selected before reconciliation=%s', (selected) => {
+    const location = fixture()
+    writeManifest(location.profileDir, { dsh: { profile: { bundles: selected ? ['invalid'] : [] } } })
+    writeManifest(join(location.profileDir, 'node_modules', 'invalid'), {
+      name: 'invalid', dsh: { bundle: { patch: 'unbuilt.yml', standalone: 'true' } },
+    })
+    const before = readProfilePlugins(location)
+    writeManifest(location.profileDir, {
+      dependencies: { invalid: '^1' }, dsh: { profile: { bundles: selected ? ['invalid'] : [] } },
+    })
+    const bytes = readFileSync(join(location.profileDir, 'package.json'), 'utf8')
+    expect(() => reconcileProfilePlugins({ ...location, before, preserveDisabled: true }))
+      .toThrow('invalid: dsh.bundle.standalone must be a boolean')
+    expect(readFileSync(join(location.profileDir, 'package.json'), 'utf8')).toBe(bytes)
+  })
+
+  it('retains unavailable template layers while keeping unreadable dependencies visible for repair', () => {
+    const location = fixture()
+    const manifest = {
+      dependencies: { broken: '^1' }, dsh: { profile: { bundles: ['missing-template', 'broken-template', 'broken'] } },
+    }
+    writeManifest(location.profileDir, manifest)
+    for (const name of ['broken-template', 'broken']) {
+      installed(location, name)
+      writeFileSync(join(location.profileDir, 'node_modules', name, 'package.json'), '{')
+    }
+    const before = readProfilePlugins(location)
+    writeManifest(location.profileDir, { ...manifest, dependencies: { broken: '^1', added: '^1' } })
+    installed(location, 'added')
+    const result = reconcileProfilePlugins({ ...location, before, preserveDisabled: true })
+    expect(result.plugins.manifest.dsh?.profile?.bundles).toEqual(['missing-template', 'broken-template', 'added'])
+    expect(result.plugins.dependencies).toEqual([
+      { name: 'broken', version: '^1', bundle: false, enabled: false },
+      { name: 'added', version: '1.0.0', bundle: true, enabled: true },
+    ])
+  })
+
   it.each([false, true])('reconciles declarations and removal while preserveDisabled=%s', (preserveDisabled) => {
     const location = fixture()
     const beforeManifest = {

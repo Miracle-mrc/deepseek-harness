@@ -23,6 +23,9 @@ Options:
 
 Examples:
   dsh web                                   boot the web profile (same as: dsh --profile web)
+  dsh plugin --profile cloud enable --empty @deepseek-ai/dsh-experimental-cloud-connectors-cli
+                                            enable the optional cloud command profile without npm access
+  dsh cloud login supabase                   sign in, then choose cloud tool permissions separately
   dsh rescue --from-default-profile web
                                             recreate rescue from the shipped web template, then boot it
   dsh headless "run the tests"              answer one task, print the result, and exit

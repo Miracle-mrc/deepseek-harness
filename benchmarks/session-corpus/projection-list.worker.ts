@@ -22,6 +22,7 @@ import { generationLogPath, sessionDir, toHeaderLine } from '../../packages/sess
 import { compressZstdFrame } from '../../packages/session/session-persistence-jsonl/src/zstd.ts'
 import { assertBuiltBenchmarkRuntime } from '../support/built-worker.ts'
 import { createBenchmarkSessionController } from './session-controller.ts'
+import { readProcessPeakRssBytes } from './process-peak-rss.ts'
 
 const KEY = 'syntheticProjectionList'
 const CWD = '/synthetic-projection-benchmark'
@@ -216,7 +217,7 @@ async function memory(): Promise<Memory> {
   await scheduler.yield()
   gc()
   const usage = process.memoryUsage()
-  return { heapUsedBytes: usage.heapUsed, rssBytes: usage.rss, peakRssBytes: process.resourceUsage().maxRSS * 1024 }
+  return { heapUsedBytes: usage.heapUsed, rssBytes: usage.rss, peakRssBytes: await readProcessPeakRssBytes() }
 }
 
 async function measure(controller: SessionController, observation: ViewObservation, sessions: number, baseline: Memory, fullProbe = false): Promise<ListSample> {

@@ -126,6 +126,71 @@ it('allows supported bundle activation and permits deselecting an unsupported sa
   expect(await manager.setBundleEnabled('extra', false)).toMatchObject({ changed: true, application: 'applied' })
 })
 
+it.each([
+  { reload: 'live', standalone: 'extra' }, { reload: 'startup', standalone: 'extra' },
+  { reload: 'live', standalone: 'core' }, { reload: 'startup', standalone: 'core' },
+] as const)('refuses mixing $standalone standalone with another layer before saving with $reload reload', async ({ reload, standalone }) => {
+  const { manager, dir, ctx } = await fixture(reload, false, undefined, {}, undefined, (dir) => {
+    const path = join(dir, 'node_modules', standalone, 'package.json')
+    const metadata = readProfileManifest('test', join(dir, 'node_modules', standalone))
+    metadata.dsh = { bundle: { patch: './cordis.patch.yml', standalone: true } }
+    writeFileSync(path, JSON.stringify(metadata))
+    const extraPath = join(dir, 'node_modules/extra/package.json')
+    const extra = readProfileManifest('test', join(dir, 'node_modules/extra'))
+    extra.description = 'A readable standalone admission candidate'
+    writeFileSync(extraPath, JSON.stringify(extra))
+    const manifest = readProfileManifest('test', dir)
+    manifest.dsh = { profile: { bundles: ['core'] } }
+    writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest))
+  })
+  const before = readFileSync(join(dir, 'package.json'), 'utf8')
+  const patchBefore = readFileSync(join(dir, 'cordis.patch.yml'), 'utf8')
+  expect((await manager.listBundles()).find(row => row.name === 'extra')).toMatchObject({
+    enabled: false, installed: true, version: '1.0.0', description: 'A readable standalone admission candidate',
+    rows: [{ rowId: 'managed' }], error: { code: 'standalone-bundle' },
+  })
+  expect((await manager.listBundles()).find(row => row.name === 'core')?.error).toBeUndefined()
+  expect(await manager.setBundleEnabled('extra', true)).toMatchObject({
+    changed: false, application: 'failed', error: { code: 'standalone-bundle' },
+  })
+  expect(readFileSync(join(dir, 'package.json'), 'utf8')).toBe(before)
+  expect(readFileSync(join(dir, 'cordis.patch.yml'), 'utf8')).toBe(patchBefore)
+  expect(ctx.get('managedProbe')).toBeUndefined()
+  expect(await manager.setBundleEnabled('extra', false)).toMatchObject({ changed: false })
+})
+
+it('admits a sole standalone selection and permits removing an invalid saved standalone layer', async () => {
+  const { manager, dir } = await fixture('startup')
+  const path = join(dir, 'node_modules/extra/package.json')
+  const metadata = readProfileManifest('test', join(dir, 'node_modules/extra'))
+  metadata.dsh = { bundle: { patch: './cordis.patch.yml', standalone: true } }
+  writeFileSync(path, JSON.stringify(metadata))
+  const manifest = readProfileManifest('test', dir)
+  manifest.dsh = { profile: { bundles: [] } }
+  writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest))
+  expect(await manager.setBundleEnabled('extra', true)).toMatchObject({ changed: true, application: 'restart-required' })
+  expect(readProfileManifest('test', dir).dsh?.profile?.bundles).toEqual(['extra'])
+  manifest.dsh.profile!.bundles = ['core', 'extra']
+  writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest))
+  expect(await manager.setBundleEnabled('extra', false)).toMatchObject({ changed: true, application: 'restart-required' })
+  expect(readProfileManifest('test', dir).dsh?.profile?.bundles).toEqual(['core'])
+})
+
+it('reports malformed standalone metadata without treating it as a selection refusal', async () => {
+  const { manager, dir } = await fixture('startup')
+  writeFileSync(join(dir, 'node_modules/extra/package.json'), JSON.stringify({ name: 'extra',
+    dsh: { bundle: { patch: './cordis.patch.yml', standalone: 'true' } } }))
+  const before = readFileSync(join(dir, 'package.json'), 'utf8')
+  expect((await manager.listBundles()).find(row => row.name === 'extra')?.error).toEqual({
+    code: 'operation-error', diagnostic: 'extra: dsh.bundle.standalone must be a boolean',
+  })
+  expect(await manager.setBundleEnabled('extra', true)).toMatchObject({
+    changed: false, application: 'failed',
+    error: { code: 'operation-error', diagnostic: 'extra: dsh.bundle.standalone must be a boolean' },
+  })
+  expect(readFileSync(join(dir, 'package.json'), 'utf8')).toBe(before)
+})
+
 it.each(['network', 'timeout'] as const)('stops a GitHub %s before pnpm and attributes it to the repository', async (kind) => {
   const { manager, dir, connection } = await fixture()
   const before = readFileSync(join(dir, 'package.json'), 'utf8')
@@ -1467,9 +1532,10 @@ it('installs and removes with the bundled pnpm when PATH contains no pnpm', asyn
   writeFileSync(join(target, 'package.json'), JSON.stringify({ name: '@test/desktop-manager', version: '1.0.0',
     dsh: { bundle: { patch: './cordis.patch.yml' } } }))
   writeFileSync(join(target, 'cordis.patch.yml'), '[]\n')
-  // Fixture-only packages need no registry resolution during this local install.
+  // The booted manager needs no remaining fixture bundles or registry dependencies for this local package operation.
   const manifest = readProfileManifest('test', dir)
   delete manifest.dependencies
+  manifest.dsh = { profile: { bundles: [] } }
   writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest))
   const installed = await manager.installBundle(target)
   expect(installed.error).toBeUndefined()

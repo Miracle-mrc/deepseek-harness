@@ -162,10 +162,11 @@ function heldPipeChild(output: string) {
   return Object.assign(exit.promise, { stdout, stderr, nodeChildProcess: raw })
 }
 
-function install(dir: string, name: string) {
+function install(dir: string, name: string, standalone?: unknown) {
   const path = join(dir, 'node_modules', name)
   mkdirSync(path, { recursive: true })
-  writeFileSync(join(path, 'package.json'), JSON.stringify({ name, version: '1', dsh: { bundle: { patch: './cordis.patch.yml' } } }))
+  writeFileSync(join(path, 'package.json'), JSON.stringify({ name, version: '1',
+    dsh: { bundle: { patch: './cordis.patch.yml', ...standalone === undefined ? {} : { standalone } } } }))
   writeFileSync(join(path, 'cordis.patch.yml'), '[]\n')
   const manifest = readProfileManifest('test', dir)
   manifest.dependencies = { ...manifest.dependencies, [name]: '1' }
@@ -204,6 +205,89 @@ it('preserves malformed platform metadata errors without selecting the installed
   await expect(runProfilePnpm(context, ['add', 'malformed'], { execution: 'service', outputBytes: 8192 }))
     .rejects.toThrow('dsh.bundle.platforms must be a nonempty list of Node platform names')
   expect(readProfileManifest('test', dir).dsh?.profile?.bundles).toEqual([])
+})
+
+it.each([
+  { previous: ['layer'], added: ['standalone'], order: 'standalone after a retained layer' },
+  { previous: ['standalone'], added: ['layer'], order: 'layer after a retained standalone' },
+  { previous: [], added: ['standalone', 'layer'], order: 'standalone first in one batch' },
+  { previous: [], added: ['layer', 'standalone'], order: 'standalone last in one batch' },
+].flatMap(scenario => (['service', 'cli'] as const).map(execution => ({ ...scenario, execution }))))(
+  'refuses standalone profile mixes through $execution diagnostics: $order', async ({ previous, added, execution }) => {
+    const { dir, context, pnpm } = fixture()
+    for (const name of previous) install(dir, name, name === 'standalone' ? true : undefined)
+    const manifest = readProfileManifest('test', dir)
+    manifest.dsh = { profile: { bundles: previous } }
+    writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest))
+    let installedManifest: string | undefined
+    pnpm.mutate = (target) => {
+      for (const name of added) install(target, name, name === 'standalone' ? true : undefined)
+      installedManifest = readFileSync(join(target, 'package.json'), 'utf8')
+    }
+    const messages: { text: string; stream: string }[] = []
+    const outcome = await runPluginCommand(context, ['add', ...added], {
+      execution, outputBytes: 8192, onOutput: (text, stream) => { messages.push({ text, stream }) },
+    })
+    expect(outcome.exitCode).toBe(1)
+    expect(outcome.output).toContain('standalone: standalone bundles must be the only selected profile bundle')
+    expect(outcome.output).toContain('installed dependencies remain; bundle selection is unchanged')
+    expect(outcome.output).toContain('standalone bundles in their own profiles')
+    expect(readFileSync(outcome.logPath, 'utf8')).toBe(outcome.output)
+    expect(messages).toEqual([{ text: outcome.output, stream: 'stderr' }])
+    expect(readFileSync(join(dir, 'package.json'), 'utf8')).toBe(installedManifest)
+    expect(readProfileManifest('test', dir)).toMatchObject({
+      dependencies: { layer: '1', standalone: '1' }, dsh: { profile: { bundles: previous } },
+    })
+  },
+)
+
+it.each([
+  { standalone: true, previous: [], expected: ['new'] },
+  { standalone: false, previous: ['layer'], expected: ['layer', 'new'] },
+  { standalone: undefined, previous: ['layer'], expected: ['layer', 'new'] },
+])('activates a valid final selection with standalone=$standalone', async ({ standalone, previous, expected }) => {
+  const { dir, context, pnpm } = fixture()
+  for (const name of previous) install(dir, name)
+  const manifest = readProfileManifest('test', dir)
+  manifest.dsh = { profile: { bundles: previous } }
+  writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest))
+  pnpm.mutate = (target) => { install(target, 'new', standalone) }
+  expect(await runProfilePnpm(context, ['add', 'new'], { execution: 'service', outputBytes: 8192 }))
+    .toMatchObject({ exitCode: 0, output: '' })
+  expect(readProfileManifest('test', dir).dsh?.profile?.bundles).toEqual(expected)
+})
+
+it.each(['new', 'selected'])('preserves malformed standalone metadata errors for a %s bundle without saving a selection', async (source) => {
+  const { dir, context, pnpm } = fixture()
+  if (source === 'selected') {
+    install(dir, 'malformed', 'true')
+    const manifest = readProfileManifest('test', dir)
+    manifest.dsh = { profile: { bundles: ['malformed'] } }
+    writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest))
+  }
+  let installedManifest: string | undefined
+  pnpm.mutate = (target) => {
+    if (source === 'new') install(target, 'malformed', 'true')
+    else install(target, 'layer')
+    installedManifest = readFileSync(join(target, 'package.json'), 'utf8')
+  }
+  await expect(runProfilePnpm(context, ['install'], { execution: 'service', outputBytes: 8192 }))
+    .rejects.toThrow('malformed: dsh.bundle.standalone must be a boolean')
+  expect(readFileSync(join(dir, 'package.json'), 'utf8')).toBe(installedManifest)
+})
+
+it('installs a standalone dependency without selecting it when activation is disabled', async () => {
+  const { dir, context, pnpm } = fixture()
+  install(dir, 'layer')
+  const manifest = readProfileManifest('test', dir)
+  manifest.dsh = { profile: { bundles: ['layer'] } }
+  writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest))
+  pnpm.mutate = (target) => { install(target, 'standalone', true) }
+  expect(await runProfilePnpm(context, ['add', 'standalone'], { execution: 'service', outputBytes: 8192, activateNewBundles: false }))
+    .toMatchObject({ exitCode: 0, output: '' })
+  expect(readProfileManifest('test', dir)).toMatchObject({
+    dependencies: { layer: '1', standalone: '1' }, dsh: { profile: { bundles: ['layer'] } },
+  })
 })
 
 function installGuarded(dir: string, dependency: string, name = dependency, version = '1.0.0', peer = '>=999.0.0') {
@@ -633,6 +717,8 @@ it('retains partial package-manager changes after a failed install without activ
 
 it('initializes missing profiles under the same lock and reports initialization', async () => {
   const { home, context } = fixture()
+  install(home, '@deepseek-ai/dsh-base')
+  install(home, '@deepseek-ai/dsh-web-app')
   const messages: string[] = []
   for (const profile of ['custom', 'web']) {
     await runPluginCommand({ ...context, profile }, ['root'], {
@@ -838,6 +924,7 @@ it('terminates a service run as a tree and leaves the CLI in the caller group', 
 
 it('retains built-in layers, removes deleted dependencies and warns about plain packages', async () => {
   const { context, dir, pnpm } = fixture()
+  install(context.home, 'builtin')
   install(dir, 'removed')
   const manifest = readProfileManifest('test', dir)
   manifest.dsh = { profile: { bundles: ['builtin', 'removed'] } }

@@ -1,10 +1,9 @@
 /** The generated request-header schema retains the native reader's retired-field refusal. */
-import { resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { expect, it } from 'vitest'
 import { assertV4RowAdmission } from '@deepseek-ai/dsh-session-format-v3-to-v4'
 import { COVERAGE_TEST_TIMEOUT_ENV, parseCoverageTestTimeout } from './coverage-partitions.ts'
-import { extractPersistenceSchema } from './persistence-schema.ts'
-import { classifyPersistenceChange } from './persistence-changes.ts'
+import { classifyPersistenceChange, parsePersistenceSnapshot } from './persistence-changes.ts'
 import { canonicalizeSchema, schemaDigest } from './persistence-schema-model.ts'
 import type { SchemaNode } from './persistence-schema-model.ts'
 
@@ -16,10 +15,11 @@ function property(nodes: readonly SchemaNode[], index: number, name: string): nu
   return field.type
 }
 
-// Whole-workspace scans retain their local allowance and any larger lane budget.
+// Retain the local allowance and any larger lane budget.
 const timeout = Math.max(60_000, parseCoverageTestTimeout(process.env[COVERAGE_TEST_TIMEOUT_ENV]) ?? 0)
 it('requires compatibility review before request headers can carry retired system text', { timeout }, () => {
-  const inventory = extractPersistenceSchema(resolve(import.meta.dirname, '..'))
+  // verify-persistence-catalog checks this generated inventory against source declarations.
+  const inventory = parsePersistenceSnapshot(readFileSync(new URL('../docs/persistence-schema.json', import.meta.url), 'utf8'))
   const before = inventory.roots.find(root => root.key === 'event:request/header')
   if (before === undefined) throw new Error('generated schema omits request/header')
   const nodes = [...before.schema.nodes]

@@ -45,13 +45,18 @@ Write-Output 'RUNNER-STDOUT'
 for ($iteration = 0; $iteration -lt 2; $iteration++) {
     $previous = [int](Get-Content (Join-Path $network 'child-pid'))
     $child = Get-Process -Id $previous
-    try { $child.Kill(); $child.WaitForExit() } finally { $child.Dispose() }
-    $deadline = [datetime]::UtcNow.AddSeconds(30)
-    do {
-        if ([datetime]::UtcNow -ge $deadline) { throw 'Network process was not recovered.' }
-        Start-Sleep -Milliseconds 50
-        $next = Get-Content (Join-Path $network 'child-pid') -Raw
-    } while (-not $next -or [int]$next -eq $previous)
+    try {
+        # Retain the native handle so Windows cannot reuse this PID before the replacement is observed.
+        $null = $child.Handle
+        $child.Kill()
+        $child.WaitForExit()
+        $deadline = [datetime]::UtcNow.AddSeconds(30)
+        do {
+            if ([datetime]::UtcNow -ge $deadline) { throw 'Network process was not recovered.' }
+            Start-Sleep -Milliseconds 50
+            $next = Get-Content (Join-Path $network 'child-pid') -Raw
+        } while (-not $next -or [int]$next -eq $previous)
+    } finally { $child.Dispose() }
     if ([int](Get-Content (Join-Path $PSScriptRoot 'listened')) -ne $PID) { throw 'Runner was replaced during recovery.' }
 }
 Write-Output 'RUNNER-SURVIVED-RECOVERY'

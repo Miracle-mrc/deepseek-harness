@@ -1,0 +1,43 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/experimental/cloud-connectors-bundle/README.md
+/:
+  en: 9cf33f4ca4b0fe9f
+  zh: ae9912ea122d5f1b
+/deepseek-ai-dsh-experimental-cloud-connectors-bundle:
+  en: 0f51b0a6e7fbbf95
+  zh: 53d2df6869b90d69
+/deepseek-ai-dsh-experimental-cloud-connectors-bundle/summary:
+  en: d394219a7d6ddc64
+  zh: 3a5c1e81eeeb2a6f
+/deepseek-ai-dsh-experimental-cloud-connectors-bundle/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 0fa203a334ffb450
+/deepseek-ai-dsh-experimental-cloud-connectors-bundle/use-this-package:
+  en: 0cadf92aa750f881
+  zh: c0881670ce2f8313
+/deepseek-ai-dsh-experimental-cloud-connectors-bundle/use-this-package/enable-in-a-profile:
+  en: 66a3eed9409d67df
+  zh: 5b983537989dc2d9
+/deepseek-ai-dsh-experimental-cloud-connectors-bundle/use-this-package/connect-an-account:
+  en: fbf88efa0f387733
+  zh: 5500f64bbce85fcb
+/deepseek-ai-dsh-experimental-cloud-connectors-bundle/understand-the-implementation:
+  en: 52ae424b1fc589be
+  zh: 9ef1ffd0e31761ce
+/deepseek-ai-dsh-experimental-cloud-connectors-bundle/further-exploration:
+  en: 866b80e60420b251
+  zh: 3f48076d6e11197a
+/deepseek-ai-dsh-experimental-cloud-connectors-bundle/model-experience:
+  en: 934eae884c4506b1
+  zh: 0fc729667c3e457b
+/deepseek-ai-dsh-experimental-cloud-connectors-bundle/model-experience/kv-cache-effect:
+  en: 5df3aff358cfab8c
+  zh: 672b1e4e7f5d2dae
+/deepseek-ai-dsh-experimental-cloud-connectors-bundle/known-limitations-and-deferred-work:
+  en: 5026dd79a7d10ddb
+  zh: a765b287e16e1dcd
+/deepseek-ai-dsh-experimental-cloud-connectors-bundle/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: 6c5f9788c6536776

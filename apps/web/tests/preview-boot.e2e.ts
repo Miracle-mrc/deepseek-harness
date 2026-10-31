@@ -68,6 +68,7 @@ const SESSION_TITLES_BUNDLE = '@deepseek-ai/dsh-experimental-session-titles-bund
 const BASE_TITLE_MODULE = '@deepseek-ai/dsh-session-title-first-prompt-llm'
 const BUNDLE_TITLE_MODULE = '@deepseek-ai/dsh-session-title-all-prompts-llm'
 const INSPECTOR_BUNDLE = '@deepseek-ai/dsh-experimental-inspector-profile'
+const CLOUD_CLI_BUNDLE = '@deepseek-ai/dsh-experimental-cloud-connectors-cli'
 const INSPECTOR_MODULE = '@deepseek-ai/dsh-experimental-inspector'
 const SESSION_INSPECTOR_MODULE = '@deepseek-ai/dsh-experimental-session-inspector'
 
@@ -705,8 +706,9 @@ async function toggleOptionalBundles(page: Page): Promise<void> {
   })
   expect(result.optional.map(entry => entry.name).sort()).toEqual([...OPTIONAL_BUNDLES].sort())
   expect(result.optional.filter(entry => entry.enabled || entry.availability !== 'installation')).toEqual([])
-  expect(result.optional.filter(entry => entry.error !== null)).toEqual([
+  expect(result.optional.filter(entry => entry.error !== null).sort((a, b) => a.name.localeCompare(b.name))).toEqual([
     expect.objectContaining({ name: '@deepseek-ai/dsh-cua-bundle', error: { code: 'unsupported-platform' } }),
+    expect.objectContaining({ name: CLOUD_CLI_BUNDLE, error: { code: 'standalone-bundle' } }),
   ])
   // Metadata resolves through the Worker's Node internal modules: every optional bundle shows its title and icon.
   expect(result.optional.filter(entry => entry.metaError !== null || entry.title !== 'object' || entry.icon !== 'string')).toEqual([])
@@ -716,9 +718,13 @@ async function toggleOptionalBundles(page: Page): Promise<void> {
     enable: 'failed', disable: 'applied', error: { code: 'unsupported-platform' },
     changed: 0, inactive: [], restored: true,
   })
+  expect(result.toggles.find(toggle => toggle.name === CLOUD_CLI_BUNDLE)).toMatchObject({
+    enable: 'failed', disable: 'applied', error: { code: 'standalone-bundle' },
+    changed: 0, inactive: [], restored: true,
+  })
   // The packed worker composition excludes LiveShare from its generic toggles; plugin-manager.e2e.ts
   // covers that bundle's enable/disable path in the ordinary Web scaffold.
-  const supported = result.toggles.filter(toggle => toggle.name !== '@deepseek-ai/dsh-cua-bundle')
+  const supported = result.toggles.filter(toggle => toggle.name !== '@deepseek-ai/dsh-cua-bundle' && toggle.name !== CLOUD_CLI_BUNDLE)
   expect(supported.filter(toggle => toggle.enable !== 'applied' || toggle.disable !== 'applied')
     .map(({ name, enable, disable }) => ({ name, enable, disable }))).toEqual([])
   // Each bundle changes Loader rows, every enabled row it changes runs, and switching it off restores the prior rows.

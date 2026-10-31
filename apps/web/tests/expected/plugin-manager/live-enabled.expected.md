@@ -43,6 +43,11 @@
     - status
     - switch "启用 自动授权审查"
   - listitem:
+    - button "查看 AWS 与 Supabase": AWS 与 Supabase
+    - text: 实验性 使用浏览器登录并确认工具权限；默认不连接任何账户。
+    - status
+    - switch "启用 AWS 与 Supabase"
+  - listitem:
     - button "查看 变更请求与工作树": 变更请求与工作树
     - text: 实验性 跟踪每个会话的变更请求及其检查与评审，新会话也可以在 Git 工作树中开始；GitHub 通过 gh 命令行访问。
     - status
