@@ -1,8 +1,9 @@
 /** Manual and HTTP callbacks share one verified, single-use OAuth attempt. */
 
 import { IncomingMessage, request, Server } from 'node:http'
-import { EventEmitter } from 'node:events'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { EventEmitter, once } from 'node:events'
+import { Socket } from 'node:net'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { OAuthLoopback } from '../src/oauth-loopback.ts'
 
 afterEach(() => { vi.restoreAllMocks() })
@@ -142,5 +143,49 @@ describe('manual OAuth callback completion', () => {
     await loopback.close()
     await rejected
     expect(loopback.completeCallback(`${loopback.url}?state=${loopback.state}&code=cancelled-code`)).toBe(false)
+  })
+
+  it('closes a raw browser preconnection before reporting cancellation complete', async () => {
+    const controller = new AbortController()
+    const loopback = await OAuthLoopback.listen(controller.signal)
+    const socket = new Socket()
+    const clientClosed = new Promise<void>((resolve) => { socket.once('close', () => { resolve() }) })
+    onTestFinished(async () => {
+      socket.destroy()
+      await clientClosed
+      await loopback.close()
+    })
+    const port = Number(new URL(loopback.url).port)
+    const accepted = Promise.withResolvers<Socket>()
+    // oxlint-disable-next-line typescript/unbound-method -- retain native dispatch; call() supplies its Server receiver.
+    const emit = EventEmitter.prototype.emit
+    const intercepted = vi.spyOn(Server.prototype, 'emit').mockImplementation(
+      function (this: Server, event: string | symbol, ...args: unknown[]) {
+        if (event === 'connection' && args[0] instanceof Socket && args[0].localPort === port) accepted.resolve(args[0])
+        return emit.call(this, event, ...args)
+      },
+    )
+    const errors: Error[] = []
+    socket.on('error', (error: Error) => { errors.push(error) })
+    const connected = once(socket, 'connect')
+    socket.connect({ host: '127.0.0.1', port })
+    await Promise.all([connected, accepted.promise])
+    intercepted.mockRestore()
+    const rejected = expect(loopback.result).rejects.toThrow('Authorization was cancelled')
+    controller.abort()
+    await rejected
+    await loopback.close()
+    await clientClosed
+    expect(socket.destroyed).toBe(true)
+    for (const error of errors) expect('code' in error && error.code).toBe('ECONNRESET')
+  })
+
+  it('flushes the HTTP callback response when cleanup begins as authorization completes', async () => {
+    const loopback = await OAuthLoopback.listen(new AbortController().signal)
+    onTestFinished(async () => { await loopback.close() })
+    const closing = loopback.result.then(async () => { await loopback.close() })
+    const response = await callbackResponse(`${loopback.url}?state=${loopback.state}&code=completed-before-response-flush`)
+    expect(response).toEqual({ status: 200, body: 'Authorization received. Return to DeepSeek Harness.' })
+    await closing
   })
 })

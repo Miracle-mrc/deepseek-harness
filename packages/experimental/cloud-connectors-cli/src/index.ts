@@ -54,6 +54,12 @@ export function apply(ctx: Context, config: Config): void {
       cancelReady()
       controller.abort()
       await running
+      // A completed one-shot command no longer owns a live terminal reader.
+      // Native stdin can stay referenced after a paused readable-mode prompt.
+      if (process.stdin.isTTY) {
+        process.stdin.pause()
+        process.stdin.unref()
+      }
       process.off('SIGINT', interrupted)
       process.off('SIGTERM', interrupted)
     }, 'cloud CLI: command lifetime')

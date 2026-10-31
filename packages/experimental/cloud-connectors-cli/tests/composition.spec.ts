@@ -54,6 +54,15 @@ async function boot(args: string[]) {
 }
 
 it('runs status with the actual credential, authorization and cloud services, then releases its listeners', async () => {
+  const input = process.stdin
+  const tty = Object.getOwnPropertyDescriptor(input, 'isTTY')
+  Object.defineProperty(input, 'isTTY', { value: true, configurable: true })
+  onTestFinished(() => {
+    if (tty === undefined) Reflect.deleteProperty(input, 'isTTY')
+    else Object.defineProperty(input, 'isTTY', tty)
+  })
+  const pause = vi.spyOn(input, 'pause').mockReturnValue(input)
+  const unref = vi.spyOn(input, 'unref').mockReturnValue(input)
   let output = ''
   const stdout = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => { output += String(chunk); return true })
   const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Unexpected cloud request'))
@@ -66,7 +75,11 @@ it('runs status with the actual credential, authorization and cloud services, th
   expect(await ctx.credentials.listRecords()).toEqual([])
   expect(ctx.get('agents')).toBeUndefined()
   expect(ctx.get('sessions')).toBeUndefined()
+  expect(pause).not.toHaveBeenCalled()
+  expect(unref).not.toHaveBeenCalled()
   await ctx.loader.resolve('fixture:cloud-cli').fiber!.dispose()
+  expect(pause).toHaveBeenCalledOnce()
+  expect(unref).toHaveBeenCalledOnce()
   expect([process.listenerCount('SIGINT'), process.listenerCount('SIGTERM')]).toEqual(beforeSignals)
 })
 

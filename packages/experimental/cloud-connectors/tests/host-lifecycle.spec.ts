@@ -269,6 +269,95 @@ describe('cloud connections through the Loader', () => {
     expect(sdk.connect).not.toHaveBeenCalled()
   })
 
+  it('keeps a cancelled replacement retryable without restoring its saved tool consent', async () => {
+    const { ctx, host } = await fixture()
+    await signIn(host)
+    await host.confirm('supabase', ['execute_sql'])
+    const saved = await ctx.credentials.readRecord(KEY)
+    const admitted = await beginSignIn(host)
+    const returned = await host.cancel('supabase', admitted.attemptId)
+    expect(returned.find(view => view.provider === 'supabase')).toMatchObject({
+      status: 'failed', errorCode: 'connection-failed', tools: [], enabledTools: ['execute_sql'],
+    })
+    expect(await ctx.credentials.readRecord(KEY)).toEqual(saved)
+    expect(ctx.tools.schemas()).toEqual([])
+    expect(sdk.connect).toHaveBeenCalledTimes(1)
+    await signIn(host)
+    expect((await host.list()).find(view => view.provider === 'supabase')).toMatchObject({
+      status: 'choose-permissions', enabledTools: [],
+    })
+    expect(ctx.tools.schemas()).toEqual([])
+    await host.confirm('supabase', ['execute_sql'])
+    expect(ctx.tools.schemas().map(tool => tool.name)).toEqual([TOOL])
+  })
+
+  it('keeps a newly committed grant retryable when discovery is cancelled', async () => {
+    const { ctx, host } = await fixture()
+    const entered = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<typeof discovered>()
+    onTestFinished(() => { release.resolve(discovered) })
+    sdk.listTools.mockImplementationOnce(() => { entered.resolve(undefined); return release.promise })
+    const admitted = await beginSignIn(host)
+    await callback()
+    await entered.promise
+    const cancellation = host.cancel('supabase', admitted.attemptId)
+    release.resolve(discovered)
+    const returned = await cancellation
+    expect(returned.find(view => view.provider === 'supabase')).toMatchObject({
+      status: 'failed', errorCode: 'connection-failed', tools: [], enabledTools: [],
+    })
+    expect(parseCloudGrant('supabase', await ctx.credentials.readRecord(KEY))).toMatchObject({
+      confirmed: false, allowedTools: [],
+    })
+    expect(ctx.tools.schemas()).toEqual([])
+    expect(sdk.connect).toHaveBeenCalledTimes(1)
+    const restored = await host.restore('supabase')
+    expect(restored.find(view => view.provider === 'supabase')).toMatchObject({
+      status: 'choose-permissions',
+      tools: discovered.tools.map(({ name, description }) => ({ name, description })), enabledTools: [],
+    })
+    expect(ctx.tools.schemas()).toEqual([])
+  })
+
+  it('keeps an explicitly restored saved connection usable after cancelling its replacement', async () => {
+    const { ctx, host } = await fixture()
+    await signIn(host)
+    await host.confirm('supabase', ['execute_sql'])
+    const admitted = await beginSignIn(host)
+    await host.restore('supabase')
+    const returned = await host.cancel('supabase', admitted.attemptId)
+    expect(returned.find(view => view.provider === 'supabase')).toMatchObject({
+      status: 'connected', enabledTools: ['execute_sql'],
+    })
+    expect(returned.find(view => view.provider === 'supabase')?.errorCode).toBeUndefined()
+    expect(ctx.tools.schemas().map(tool => tool.name)).toEqual([TOOL])
+  })
+
+  it('does not mark a queued later sign-in failed while cancellation drains an earlier attempt', async () => {
+    const { ctx, host } = await fixture()
+    await signIn(host)
+    const admitted = await beginSignIn(host)
+    const entered = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<typeof discovered>()
+    onTestFinished(() => { release.resolve(discovered) })
+    sdk.listTools.mockImplementationOnce(() => { entered.resolve(undefined); return release.promise })
+    const restoring = host.restore('supabase')
+    await entered.promise
+    const next = host.start('supabase', '')
+    const cancelled = host.cancel('supabase', admitted.attemptId)
+    await expect.poll(async () => (await host.list()).find(view => view.provider === 'supabase')?.attemptId).toBeUndefined()
+    release.resolve(discovered)
+    await restoring
+    const replacement = await next
+    const returned = await cancelled
+    expect(returned.find(view => view.provider === 'supabase')).toMatchObject({
+      status: 'authorizing', attemptId: replacement.attemptId,
+    })
+    expect(returned.find(view => view.provider === 'supabase')?.errorCode).toBeUndefined()
+    expect(ctx.tools.schemas()).toEqual([])
+    await host.disconnect('supabase')
+  })
+
   it('refuses stale prompts and leaves a later caller\'s sign-in and connected grant intact', async () => {
     const { ctx, host } = await fixture()
     const first = await beginSignIn(host)

@@ -227,7 +227,7 @@ async function checkVersion(options: AwsCliTokenOptions, spawnProcess: AwsCliSpa
 async function requestToken(options: AwsCliTokenOptions, spawnProcess: AwsCliSpawner): Promise<AwsCliToken> {
   const startedAt = Date.now()
   const output = await runCommand(options, [
-    'signin', 'create-o-auth2-token-with-iam', '--grant-type', 'client_credentials',
+    'signin', 'create-oauth2-token-with-iam', '--grant-type', 'client_credentials',
     '--resource', 'aws-mcp.amazonaws.com', '--output', 'json', ...selectors(options),
   ], 'session-expired', spawnProcess)
   let body: unknown

@@ -428,12 +428,14 @@ describe('BashTerminalBackend startup rollback', () => {
     await session.close('test complete')
   })
 
-  it('bootstraps a pwsh dialect through the prompt function and scrubs bash-only env', async () => {
+  it.each(['posix', 'windows'] as const)('bootstraps a pwsh dialect through the prompt function and scrubs bash-only env (%s)', async (platform) => {
     const ctx = new Context()
     provideWorkingDirectoryFixture(ctx)
     await ctx.plugin(EmptySandbox)
     await ctx.plugin(SessionProjectionRegistry)
     await ctx.plugin(SandboxPolicyService, { mode: 'danger-full-access', workspaceRoot: '/workspace' })
+    await ctx.plugin(StubSubprocessRuntime)
+    vi.spyOn(ctx.subprocess, 'terminalEnvironment').mockResolvedValue({ platform })
     let spawned: SubprocessTerminalSpawnSpec | undefined
     let sent: TerminalSendRequest | undefined
     const session = {
@@ -458,7 +460,10 @@ describe('BashTerminalBackend startup rollback', () => {
       () => session,
     )
     expect(await backend.spawn(spec(agent(ctx)))).toBe(session)
-    expect(sent).toMatchObject({ text: ENCODING_PREAMBLE + PWSH_PROMPT_SETUP, submit: true })
+    expect(sent).toMatchObject({
+      text: ENCODING_PREAMBLE + PWSH_PROMPT_SETUP + (platform === 'posix' ? '\x1bOM' : '\r'),
+      submit: false,
+    })
     expect(session.motd).toBe('setup-echo dsh> ')
     expect(spawned?.env).toMatchObject({
       TERM: 'dumb', NO_COLOR: '1', DSH_SHELL: '1', DSH_SESSION_ID: 'agent', DSH_PTY_SESSION_ID: 'pty-1',
@@ -467,12 +472,80 @@ describe('BashTerminalBackend startup rollback', () => {
     expect(spawned?.env?.PROMPT_COMMAND).toBeUndefined()
   })
 
+  it.each([true, false])('waits for the executed pwsh bootstrap before publishing a session (exact stdin probe: %s)', async (exactStdinProbe) => {
+    vi.useFakeTimers()
+    const ctx = new Context()
+    provideWorkingDirectoryFixture(ctx)
+    const output = new PassThrough()
+    const outcome = Promise.withResolvers<{ exitCode: number | null; signal: NodeJS.Signals | null }>()
+    const written = Promise.withResolvers<string>()
+    const writes: string[] = []
+    let inputWaiting = false
+    let startupFinished = Promise.resolve<PromiseSettledResult<LocalPtySession>[]>([])
+    const terminal: SubprocessTerminalHandle = {
+      ...terminalHandle(),
+      output,
+      done: outcome.promise,
+      write: async (data) => { writes.push(data); written.resolve(data) },
+      inspectForeground: async () => ({ processGroupId: 123, inputWaiting }),
+      async terminate() {
+        output.end()
+        outcome.resolve({ exitCode: null, signal: 'SIGTERM' })
+      },
+    }
+    try {
+      await ctx.plugin(SessionProjectionRegistry)
+      await ctx.plugin(SandboxPolicyService, { mode: 'danger-full-access', workspaceRoot: '/workspace' })
+      await ctx.plugin(StubSubprocessRuntime)
+      const backend = new BashTerminalBackend(
+        ctx,
+        { ...config(), shellDialect: 'pwsh', shellPath: 'pwsh', idleSilenceMs: 3_000, timeoutMs: 1_000 },
+        async () => terminal,
+      )
+      let published = false
+      const spawning = backend.spawn(spec(agent(ctx))).then((session) => {
+        published = true
+        return session
+      })
+      startupFinished = Promise.allSettled([spawning])
+      await vi.advanceTimersByTimeAsync(0)
+      expect(writes).toEqual([ENCODING_PREAMBLE + PWSH_PROMPT_SETUP + '\x1bOM'])
+      expect(await written.promise).toBe(writes[0])
+
+      // A later stdin wait and echoed prompt source do not prove that the
+      // queued bootstrap has executed.
+      output.write(Buffer.from(PWSH_PROMPT_SETUP + '\r\nPS /workspace> '))
+      inputWaiting = false
+      await vi.advanceTimersByTimeAsync(10)
+      inputWaiting = exactStdinProbe
+      await vi.advanceTimersByTimeAsync(20)
+      expect(published).toBe(false)
+      await vi.advanceTimersByTimeAsync(20)
+      expect(published).toBe(false)
+
+      output.write(Buffer.from('\x1b]133;D;0\x07'))
+      await vi.advanceTimersByTimeAsync(10)
+      expect(published).toBe(false)
+      output.write(Buffer.from('dsh> '))
+      await vi.advanceTimersByTimeAsync(10)
+      const session = await spawning
+      expect(session.motd).toContain('dsh> ')
+      await session.close('test complete')
+    } finally {
+      await terminal.terminate()
+      await startupFinished
+      await ctx.fiber.dispose()
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps waiting for stdin_read when the first settled output only echoes the prompt literal', async () => {
     const ctx = new Context()
     provideWorkingDirectoryFixture(ctx)
     await ctx.plugin(EmptySandbox)
     await ctx.plugin(SessionProjectionRegistry)
     await ctx.plugin(SandboxPolicyService, { mode: 'danger-full-access', workspaceRoot: '/workspace' })
+    await ctx.plugin(StubSubprocessRuntime)
     const sends: TerminalSendRequest[] = []
     const session = {
       motd: '',
@@ -509,6 +582,7 @@ describe('BashTerminalBackend startup rollback', () => {
     await ctx.plugin(EmptySandbox)
     await ctx.plugin(SessionProjectionRegistry)
     await ctx.plugin(SandboxPolicyService, { mode: 'danger-full-access', workspaceRoot: '/workspace' })
+    await ctx.plugin(StubSubprocessRuntime)
     const sessionFor = (waitReason: TerminalWaitReason): LocalPtySession => ({
       startSend: () => ({
         done: Promise.resolve({
@@ -535,6 +609,7 @@ describe('BashTerminalBackend startup rollback', () => {
       await ctx.plugin(EmptySandbox)
       await ctx.plugin(SessionProjectionRegistry)
       await ctx.plugin(SandboxPolicyService, { mode: 'danger-full-access', workspaceRoot: '/workspace' })
+      await ctx.plugin(StubSubprocessRuntime)
       const pending = Promise.withResolvers<{
         viewport: string
         waitReason: 'inferred_idle'
@@ -589,6 +664,7 @@ describe('BashTerminalBackend startup rollback', () => {
     await ctx.plugin(EmptySandbox)
     await ctx.plugin(SessionProjectionRegistry)
     await ctx.plugin(SandboxPolicyService, { mode: 'danger-full-access', workspaceRoot: '/workspace' })
+    await ctx.plugin(StubSubprocessRuntime)
     const sends: TerminalSendRequest[] = []
     const session = {
       motd: '',

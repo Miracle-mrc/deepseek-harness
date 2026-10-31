@@ -111,6 +111,7 @@ async function spawnArgv(ctx: Context, config: ResolvedConfig, policy: SandboxEx
 async function startupSession(
   session: LocalPtySession,
   dialect: ShellDialect,
+  bootstrapEnter: string,
   timeoutMs: number,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -122,15 +123,15 @@ async function startupSession(
     }
     // pwsh cannot install its prompt from the environment. Write the prompt
     // function through the session, pin UTF-8 output before user input, and
-    // accept only backend stdin_read evidence; echoed setup source containing
-    // the printable prompt is not readiness. Follow-up sends bridge silence
+    // accept only backend stdin_read evidence from the installed prompt;
+    // echoed setup source is not readiness. Follow-up sends bridge silence
     // settlements during startup, while one absolute deadline bounds them.
     let viewport = ''
     for (;;) {
       const first = viewport.length === 0
       startupOperation = session.startSend({
-        text: first ? ENCODING_PREAMBLE + PWSH_PROMPT_SETUP : '',
-        submit: first,
+        text: first ? ENCODING_PREAMBLE + PWSH_PROMPT_SETUP + bootstrapEnter : '',
+        submit: false,
         ...signal !== undefined ? { signal } : {},
       })
       const result = await startupOperation.done
@@ -202,6 +203,14 @@ export class BashTerminalBackend implements TerminalBackend {
     const argv = await spawnArgv(this.ctx, this.config, policy, spec.signal)
     spec.signal?.throwIfAborted()
     if (argv[0] === undefined) throw new Error('terminal-bash: sandbox returned empty argv')
+    let bootstrapEnter = '\r'
+    if (this.config.shellDialect === 'pwsh') {
+      const environment = await this.ctx.subprocess.terminalEnvironment(spec.signal)
+      // POSIX can translate a queued CR to LF before pwsh enters raw mode.
+      // Keypad Enter reaches .NET as Enter without that line-discipline conversion.
+      if (environment.platform === 'posix') bootstrapEnter = '\x1bOM'
+    }
+    spec.signal?.throwIfAborted()
     const terminal = await this.spawnTerminal({
       argv,
       cwd: spec.cwd ?? await this.ctx.workingDirectory.ensure(spec.owner, spec.signal),
@@ -219,7 +228,7 @@ export class BashTerminalBackend implements TerminalBackend {
       return rejectAfterStartupCleanup(error, () => terminal.terminate())
     }
     try {
-      await startupSession(session, this.config.shellDialect, this.config.timeoutMs, spec.signal)
+      await startupSession(session, this.config.shellDialect, bootstrapEnter, this.config.timeoutMs, spec.signal)
       return session
     } catch (error) {
       return rejectAfterStartupCleanup(error, () => session.close('PTY startup failed'))
