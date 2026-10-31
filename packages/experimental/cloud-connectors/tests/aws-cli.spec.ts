@@ -230,14 +230,34 @@ describe('AWS CLI managed MCP authorization', () => {
     expectAllExited()
   })
 
-  it('rejects private input when the CLI has closed its stdin', async () => {
-    const { runner } = fixture({ login: `
-      import { closeSync } from 'node:fs';
-      closeSync(0);
-      process.stdout.write('Enter the authorization code displayed in your browser: ');
-      setInterval(() => {}, 1000);
-    ` })
-    await expect(authorizeAwsCli(authorization(), runner)).rejects.toMatchObject({ code: 'aws-login-failed' })
+  it('contains a stdin stream error during a private prompt and awaits CLI exit', async () => {
+    const base = fixture({ login: remoteLogin() })
+    const login = Promise.withResolvers<ChildProcessWithoutNullStreams>()
+    const stdinFailure = new Error('private-stdin-failure-detail')
+    const stdinErrors: Error[] = []
+    const runner: AwsCliSpawner = (executable, args, settings) => {
+      const child = base.runner(executable, args, settings)
+      if (args[0] === 'login') {
+        child.stdin.once('error', (error) => { stdinErrors.push(error) })
+        login.resolve(child)
+      }
+      return child
+    }
+    const prompt = vi.fn(async () => {
+      const child = await login.promise
+      child.stdin.destroy(stdinFailure)
+      return browserCode
+    })
+    const error: unknown = await authorizeAwsCli(authorization({ prompt }), runner).catch((failure: unknown) => failure)
+    expect(prompt).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind: 'secret' }))
+    expect(stdinErrors).toHaveLength(1)
+    expect(stdinErrors[0]).toBe(stdinFailure)
+    expect(error).toBeInstanceOf(CloudConnectionError)
+    expect(error).toMatchObject({ code: 'aws-login-failed' })
+    const publicFailure = `${String(error)} ${JSON.stringify(error)}`
+    expect(publicFailure).not.toContain(stdinFailure.message)
+    expect(publicFailure).not.toContain(browserCode)
+    expect(base.calls.map(call => call.args[0])).toEqual(['--version', 'login'])
     expectAllExited()
   })
 
