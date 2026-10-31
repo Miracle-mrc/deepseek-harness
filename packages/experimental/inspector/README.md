@@ -11,7 +11,7 @@ English | [中文](README.zh.md)
 
 Inspect one running dsh Host and its browser Clients in Chrome DevTools: Host and Client Console contexts, Host Sources and debugging, captured Host fetches, and a shared Cordis tree, with all CDP state in a Worker.
 
-The optional [Developer tools bundle](../inspector-profile/README.md) enables both NodeJS inspector and Session log, including Host fetch capture. Web startup does not require or accept `--inspect`.
+The optional [Developer tools bundle](../inspector-profile/README.md) enables both NodeJS inspector and Session log. Host fetch capture stays off unless explicitly enabled with `captureFetch: true`. Web startup does not require or accept `--inspect`.
 
 ## Table of Contents
 
@@ -33,7 +33,7 @@ The optional [Developer tools bundle](../inspector-profile/README.md) enables bo
 
 For trusted local development, `pnpm run demo:inspector` explicitly mounts the source overlay through the normal Web profile. The Host prints a debugging URL; Chrome is required to inspect that target. Fetch capture includes secrets, and the local debugging endpoint permits arbitrary code execution.
 
-The bundle sets `experimental-inspector` to `disabled: false` with `captureFetch: true`. The Host's optional `--inspect` argument hook only opens an external Chrome window; it does not control whether the Inspector runs.
+The bundle sets `experimental-inspector` to `disabled: false` with `captureFetch: false`. The Host's optional `--inspect` argument hook only opens an external Chrome window; it does not control whether the Inspector runs.
 
 When this component is enabled, **Ctrl/Cmd+Shift+.** toggles **NodeJS inspector** in the full-width bottom panel without requiring a selected Session. Drag its top edge to resize it, taking space from the content above; the selected height is retained across collapse and navigation. The focused divider also accepts Up/Down, Home and End. Its iframe loads on the first open and remains mounted while collapsed and across Session or main-panel navigation; unloading the component resets it. The X button and shortcut restore the opening control's focus when that control remains connected. The iframe automatically connects to this Host and opens Console; the manual Connection panel is omitted. Each embedded frontend shows Host and only its embedding page's Client in Console, Sources and the Cordis tree. The printed `devtools://` URL shows all Clients.
 
@@ -72,7 +72,7 @@ The Host plugin injects `webServer` and `connection` and accepts these fields:
 | `host` | `127.0.0.1` | Worker endpoint bind address; only loopback is accepted |
 | `port` | `9230` | First Worker endpoint port; occupied ports advance upward, while `0` requests an OS-assigned port |
 | `clientOrigins` | `[]` | Additional exact browser origins accepted by `/ingest`; loopback origins remain accepted |
-| `captureFetch` | `true` | Wrap `globalThis.fetch` and publish every later call |
+| `captureFetch` | `false` | Opt in to wrapping `globalThis.fetch` and publishing every later call |
 | `maxRequestBodyBytes` | 8 MiB | Per-request captured request-body prefix |
 | `maxResponseBodyBytes` | 32 MiB | Per-request captured response-body prefix |
 | `maxBodyChunkBytes` | 48 KiB | Raw bytes carried by one body record before base64 encoding |
@@ -133,7 +133,7 @@ When a Client disconnects, its Console execution context and live object ids are
 <a id="host-fetch-capture"></a>
 ## Host fetch capture
 
-Fetch capture is on by default and records the complete URL, all request and response headers, request body, response body, status, timing, errors, and cancellation. It does not redact credentials, cookies, query values, or payloads. Body capture reads clones; the caller receives the original Response as soon as the original fetch resolves.
+Fetch capture is off by default in the plugin, library API, and Developer tools bundle. Explicit `captureFetch: true` records the complete URL, all request and response headers, request body, response body, status, timing, errors, and cancellation. It does not redact credentials, cookies, query values, or payloads. Body capture reads clones; the caller receives the original Response as soon as the original fetch resolves.
 
 The configured body limits bound retention rather than select fields: capture keeps the prefix and marks the result truncated. `Network.getRequestPostData` and `Network.getResponseBody` read the Worker's retained bytes. `Network.streamResourceContent` returns the buffered prefix and adds later response bytes to `Network.dataReceived` for that DevTools connection, which drives live Response and EventStream views. Direct Undici Client/Dispatcher calls and fetch references retained before plugin activation are outside this observer.
 

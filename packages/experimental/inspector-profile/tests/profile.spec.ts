@@ -1,4 +1,4 @@
-/** Developer tools enable the inspectors without capturing credential-bearing requests. */
+/** Developer tools enable both inspectors without capturing Host requests by default. */
 
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'

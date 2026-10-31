@@ -3,14 +3,14 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-alpha.2/inspector-fetch-capture-opt-in/guide.md
 /:
-  en: 6e3d0a4a4ef311ea
-  zh: 74034a307856094d
+  en: 2048bc4351b3151a
+  zh: 9100a430e2bae929
 /host-fetch-capture-requires-explicit-opt-in:
   en: 546d2d601a81d8b8
   zh: b07829b8e31db9e1
 /host-fetch-capture-requires-explicit-opt-in/change:
-  en: f7e354f79c1176ec
-  zh: aad28951ba6dda20
+  en: 1cb8c5b54d998ed6
+  zh: 1f534c26fff5aaaa
 /host-fetch-capture-requires-explicit-opt-in/migration:
-  en: bfe476f62bfdb8fb
-  zh: 387bf41bf9b0c0b6
+  en: 4232f01151fa7423
+  zh: 976858f87c0db3a7

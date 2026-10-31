@@ -13,6 +13,7 @@ Desktop runs the Harness workspace in a native application. This reference cover
 ## Table of Contents
 
 - [Application overview](#application-overview)
+- [Miracle fork preview](#miracle-fork-preview)
 - [Terminal command](#terminal-command)
 - [Closing the window and quitting](#closing-the-window-and-quitting)
 - [Key technical decisions](#key-technical-decisions)
@@ -54,6 +55,23 @@ A server-expired account credential returns to Welcome when no official API key 
 Desktop microphone access is restricted to audio requests from the primary `dsh-app://app` frame. macOS uses system microphone authorization, a packaged usage description, and `com.apple.security.device.audio-input` in the main application and Helper signatures.
 
 Press F12 (Fn+F12 on media-key keyboards), Command+Option+I on macOS, or Ctrl+Shift+I on Windows to toggle DevTools for the focused application page, including in packaged builds. These native shortcuts use hidden application-menu items. Update overlays and packaged embedded browser guests disable DevTools.
+
+<a id="miracle-fork-preview"></a>
+
+## Miracle fork preview
+
+The unsigned Miracle fork preview installs as **DeepSeek Harness Miracle Preview** alongside the standard application. Its packaged identity is:
+
+| Field | Preview value |
+|---|---|
+| Application ID | `io.github.miracle-mrc.deepseek-harness.preview` |
+| Package name | `deepseek-harness-miracle-preview` |
+| External open link | `dsh-miracle-preview://open` |
+| Packaged distribution marker | `dshDistribution: "fork-preview"` |
+
+Before logging or taking the single-instance lock, the preview selects Electron user data under `appData/deepseek-harness-miracle-preview` and defaults `DSH_HOME` to `~/.dsh-miracle-preview`. An explicit nonblank `DSH_HOME` is retained and forwarded to the Host. This isolates default sessions, credentials, plugins and browser storage; choosing the same explicit home as another installation shares that home. Internal `dsh-app://app` and `dsh-app://shell` origins retain their normal behavior.
+
+Preview builds omit automatic updates, mandatory-update policy requests and the Check for Updates menu action. Install each later preview manually. Welcome retains API-key setup and Set up later; optional platform sign-in can depend on server-selected return links that target the standard `dsh` handler. The [preview packaging reference](packaging/README.md#fork-preview) owns commands, unsigned artifacts and native verification requirements. The Updates section below describes standard packages.
 
 <a id="terminal-command"></a>
 
@@ -151,7 +169,7 @@ Only the main application window enables `<webview>`. Guest attachment must matc
 
 The `dsh-app://shell/` origin serves packaged update documents, scripts, and styles without contacting the Host. Static requests retain GET/HEAD, path-containment, and MIME handling; each update document keeps its isolated preload and owned-window IPC checks.
 
-The product UI retains Web actions, including "Open In..." through the shared authenticated HTTP routes. Desktop uses Web's automatic directory-picker selection and initializes new profiles with the shared Web bundles plus Agent Teams, Auto Review, Session Search, Plugin Market, Session Titles, Personalized Recommendations, Git Worktree, Forge, and Developer Tools. These nine bundles come from the packaged runtime without a first-launch plugin download; existing profiles retain their saved selections. Developer Tools enables a code-capable local inspector and unredacted Host fetch capture, so disable it when not debugging or on shared computers.
+The product UI retains Web actions, including "Open In..." through the shared authenticated HTTP routes. Desktop uses Web's automatic directory-picker selection and initializes new profiles with the shared Web bundles plus Agent Teams, Auto Review, Session Search, Plugin Market, Session Titles, Personalized Recommendations, Git Worktree, Forge, and Developer Tools. These nine bundles come from the packaged runtime without a first-launch plugin download; existing profiles retain their saved selections. Developer Tools enables a code-capable local inspector but leaves Host fetch capture off unless explicitly enabled. The debugger still permits local code execution, so disable it when not debugging or on shared computers.
 
 Update copy preserves the complete version, including prerelease suffixes, without adding v or V. When no update is available, the dialog title reports the result and the body shows the current version.
 
@@ -308,7 +326,7 @@ Existing documents are never overwritten; an omitted `updates` object or field r
 
 ### Mandatory update policy
 
-Packaging reads `.env.windows` or `.env.macos`: `DSH_DESKTOP_AUTO_UPDATE_ENV=test` (the default) selects `DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN`; `production` selects `DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN`. The templates leave both origins blank; fill in the selected deployment origin in the ignored local dotenv file. Local unsigned macOS builds omit this policy and do not read either file. Other modes require the selected origin before preparation or signing, including unsigned Windows and preparation-only builds; the unselected origin is optional. These settings never fall back to the parent environment or the other deployment. Packaging embeds the selected policy with the application ID; packaged applications ignore runtime overrides.
+Packaging reads `.env.windows` or `.env.macos`: `DSH_DESKTOP_AUTO_UPDATE_ENV=test` (the default) selects `DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN`; `production` selects `DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN`. The templates leave both origins blank; fill in the selected deployment origin in the ignored local dotenv file. Local unsigned macOS builds and [fork previews](#miracle-fork-preview) omit this policy and do not read either file. Other modes require the selected origin before preparation or signing, including ordinary unsigned Windows and preparation-only builds; the unselected origin is optional. These settings never fall back to the parent environment or the other deployment. Packaging embeds the selected policy with the application ID; packaged applications ignore runtime overrides.
 
 `DSH_DESKTOP_MANDATORY_UPDATE_CONFIG` JSON supplies test login origins and optional polling and download-page options; packaging rejects `origin` and `authentication` inside it. The page allowlist defaults to the selected service origin; explicitly allow other approved download-page origins when needed. Test builds select `feishu-test` and require `allowedAuthOrigins` in `DSH_DESKTOP_MANDATORY_UPDATE_CONFIG`; production selects `anonymous` and rejects that field. Each login origin must be an HTTPS origin without credentials, path, query, or fragment. The login window permits document navigation only to the selected policy origin and these configured origins. Policy requests reject redirects; only test authentication carries gateway cookies. Unpackaged development instead reads a complete policy JSON from this variable and requires `DSH_DESKTOP_APP_ID`; absent JSON disables development policy queries, and only anonymous development permits HTTP `127.0.0.1`. A user-initiated ordinary check triggers policy work concurrently but never waits for or reports a policy failure. Only a confirmed blocking decision cancels ordinary dialogs. Test authentication waits until the active ordinary dialog finishes, and cancellation or failure does not discard the updater result.
 

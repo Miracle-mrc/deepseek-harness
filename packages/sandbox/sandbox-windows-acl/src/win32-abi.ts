@@ -44,6 +44,10 @@ export const TokenDefaultDacl = 6
 export const DACL_SECURITY_INFORMATION = 0x00000004
 /** SECURITY_INFORMATION flag selecting the mandatory integrity label. */
 export const LABEL_SECURITY_INFORMATION = 0x00000010
+/** Descriptor control bit marking the current automatic DACL inheritance model. */
+export const SE_DACL_AUTO_INHERITED = 0x0400
+/** Descriptor control bit preventing DACL inheritance from the parent. */
+export const SE_DACL_PROTECTED = 0x1000
 /** ACE type carrying a mandatory integrity label. */
 export const SYSTEM_MANDATORY_LABEL_ACE_TYPE = 0x11
 /**

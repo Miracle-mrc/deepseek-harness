@@ -1,0 +1,34 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .github/fork-release/README.md
+/:
+  en: 4e64f7c9b839f3f9
+  zh: 3ede61aeb49bb199
+/fork-preview-releases:
+  en: 3fbef0f818a72237
+  zh: 8adad9b246be072c
+/fork-preview-releases/summary:
+  en: 6bd023bd8153f8fd
+  zh: e430e8a5dac07f1b
+/fork-preview-releases/table-of-contents:
+  en: 27a67fd44afd91d2
+  zh: a21e57f646b0fe5e
+/fork-preview-releases/scope-and-verification:
+  en: a67f1422f16fd754
+  zh: 81acc8a66ea04528
+/fork-preview-releases/pull-request-previews:
+  en: 0bf6285098389626
+  zh: 60ae2c0cd0c9c9b8
+/fork-preview-releases/candidate-sources:
+  en: 8d4c179faffbef21
+  zh: 6610cbd5db1fcb3b
+/fork-preview-releases/prepare-a-draft-prerelease:
+  en: 2d59b043b6b15ff9
+  zh: 35772eef2681414c
+/fork-preview-releases/artifacts-and-recovery:
+  en: 548d1aa7f2efb9d9
+  zh: e3dea15af98ea3ec
+/fork-preview-releases/dev-note:
+  en: b75c8458928b72b9
+  zh: 003ba4e17b4b5269

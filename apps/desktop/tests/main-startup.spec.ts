@@ -6,10 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import type { IpcMainInvokeEvent } from 'electron'
 import { join } from 'node:path'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import type { MenuItemConstructorOptions, MessageBoxOptions } from 'electron'
 import { DESKTOP_IPC, type DesktopUpdateState } from '../src/ipc.ts'
 import { MANDATORY_IPC } from '../src/mandatory-update-ipc.ts'
+import { WELCOME_IPC } from '../src/welcome-api.ts'
 import { DesktopHostFatalError, DesktopHostUncleanExitError } from '../src/host-process.ts'
 import { en, zh } from '../src/locale.ts'
 import { DesktopUpdatePreparationError } from '../src/update-error.ts'
@@ -56,6 +57,7 @@ const harness = await vi.hoisted(async () => {
   let quitCompleted = deferred()
   let policyBlocked = deferred()
   let embeddedPolicy: unknown
+  let embeddedDistribution: unknown
   let closeWindowsOnQuit = false
   let updateState: DesktopUpdateState = { phase: 'idle' }
   let platformDisposeDeferred: ReturnType<typeof deferred> | undefined
@@ -71,6 +73,8 @@ const harness = await vi.hoisted(async () => {
   const updateCheck = vi.fn(async (_manual?: boolean): Promise<DesktopUpdateState> => updateState)
   const updateDownload = vi.fn(async (_version: string): Promise<DesktopUpdateState> => updateState)
   const updateInstall = vi.fn(async (_version: string): Promise<DesktopUpdateState> => updateState)
+  const updateConstruct = vi.fn()
+  const saveApiKey = vi.fn(async (_value: string) => ({ ok: true }))
   const popup = vi.fn<(options: { window: FakeWindow; x?: number; y?: number; callback?: () => void }) => void>()
   const menuBuilder = vi.fn<(template: MenuItemConstructorOptions[]) => { popup: typeof popup }>(() => ({ popup }))
   const menu = Object.assign(menuBuilder, { buildFromTemplate: menuBuilder, setApplicationMenu: vi.fn() })
@@ -125,6 +129,7 @@ const harness = await vi.hoisted(async () => {
       this.webContents.mainFrame.url = url
       if (url === 'dsh-app://app/') navigated.resolve()
     }
+    async loadFile(path: string) { await this.loadURL(`file://${path}`) }
     static getAllWindows() { return windows.filter(window => !window.destroyed) }
     setMenu() {}
     getContentBounds() { return { x: 0, y: 0, width: 900, height: 650 } }
@@ -182,8 +187,11 @@ const harness = await vi.hoisted(async () => {
     getAppPath: (): string => 'desktop-test-app',
     setAppLogsPath: vi.fn(),
     getPath: vi.fn<(name: string) => string>(),
+    setPath: vi.fn<(name: string, path: string) => void>(),
+    setName: vi.fn<(name: string) => void>(),
+    setAppUserModelId: vi.fn(),
     setAboutPanelOptions: vi.fn<(options: Electron.AboutPanelOptionsOptions) => void>(),
-    requestSingleInstanceLock: () => true,
+    requestSingleInstanceLock: vi.fn(() => true),
     setAsDefaultProtocolClient: vi.fn(),
     exit: vi.fn(),
     relaunch: vi.fn(),
@@ -215,7 +223,8 @@ const harness = await vi.hoisted(async () => {
     failWindow(error: Error) { windowFailure = error },
     windows, views, hosts, handlers, app, FakeWindow, FakeView, FakeHost, powerMonitor, nativeTheme, analytics,
     trays, FakeTray, backgroundNotice, shellDialog,
-    menu, popup, socketHeaders: vi.fn(), loginShell, readLoginShell, updateCheck, updateDownload, updateInstall,
+    menu, popup, socketHeaders: vi.fn(), loginShell, readLoginShell,
+    updateCheck, updateDownload, updateInstall, updateConstruct, saveApiKey,
     platformDispose,
     platformCloseAndWait,
 
@@ -251,6 +260,8 @@ const harness = await vi.hoisted(async () => {
     get policyBlocked() { return policyBlocked },
     get embeddedPolicy() { return embeddedPolicy },
     set embeddedPolicy(value: unknown) { embeddedPolicy = value },
+    get embeddedDistribution() { return embeddedDistribution },
+    set embeddedDistribution(value: unknown) { embeddedDistribution = value },
     nextNavigation() { navigated = deferred(); return navigated.promise },
     nextHostStart() { hostStarted = deferred(); return hostStarted.promise },
     deferPlatformDispose() { platformDisposeDeferred = deferred(); return platformDisposeDeferred },
@@ -267,6 +278,7 @@ const harness = await vi.hoisted(async () => {
       shellDialog.isOpen = false
       powerMonitor.removeAllListeners()
       app.isPackaged = true
+      app.name = 'Desktop test'
       windowFailure = undefined
       pluginsEnabled = false
       closeWindowsOnQuit = false
@@ -282,6 +294,7 @@ const harness = await vi.hoisted(async () => {
       navigated = deferred(); dialogShown = deferred(); quitCompleted = deferred()
       policyBlocked = deferred()
       embeddedPolicy = undefined
+      embeddedDistribution = undefined
       fileDrag.install.mockReset()
       fileDrag.dispose.mockReset().mockResolvedValue(undefined)
       platformDisposeDeferred = undefined
@@ -333,10 +346,21 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   const original = await importOriginal<typeof import('node:fs/promises')>()
   return { ...original, readFile: vi.fn((path: Parameters<typeof original.readFile>[0], encoding?: 'utf8') => {
     if (path === join('desktop-test-app', 'package.json')) {
-      return Promise.resolve(JSON.stringify({ dshDesktopAppId: 'com.deepseek.dsh', dshMandatoryUpdatePolicy: harness.embeddedPolicy }))
+      return Promise.resolve(JSON.stringify({ dshDesktopAppId: 'com.deepseek.dsh', dshMandatoryUpdatePolicy: harness.embeddedPolicy,
+        dshDistribution: harness.embeddedDistribution }))
     }
     return encoding === undefined ? original.readFile(path) : original.readFile(path, encoding)
   }) }
+})
+vi.mock('node:fs', async (importOriginal) => {
+  const original = await importOriginal<typeof import('node:fs')>()
+  return { ...original, readFileSync: (...args: Parameters<typeof original.readFileSync>) => {
+    if (args[0] === join('desktop-test-app', 'package.json')) {
+      return JSON.stringify({ dshDesktopAppId: 'com.deepseek.dsh', dshMandatoryUpdatePolicy: harness.embeddedPolicy,
+        dshDistribution: harness.embeddedDistribution })
+    }
+    return original.readFileSync(...args)
+  } }
 })
 vi.mock('../src/login-shell-environment.ts', async importOriginal => ({
   ...await importOriginal<typeof import('../src/login-shell-environment.ts')>(),
@@ -367,6 +391,7 @@ vi.mock('../src/update-dialog.ts', () => ({ DesktopUpdateDialog: class {
 } }))
 vi.mock('../src/update-coordinator.ts', () => ({ DesktopUpdateCoordinator: class {
   constructor(publish: (state: DesktopUpdateState) => DesktopUpdateState, beforeRestart: () => Promise<boolean>) {
+    harness.updateConstruct()
     harness.prepareUpdate = beforeRestart
     harness.publishUpdate = publish
   }
@@ -393,7 +418,7 @@ vi.mock('../src/welcome-backend.ts', () => ({
     report: harness.analytics,
     readLocalePreference: async () => null,
     read: async (): Promise<unknown> => (await harness.hosts.at(-1)!.fetch()).json() as Promise<unknown>,
-    save: async () => ({ ok: true }),
+    save: harness.saveApiKey,
     account: { watch: harness.watchAccount, state: async () => ({ status: 'signed-out', attempt: null }) },
   }),
 }))
@@ -433,7 +458,10 @@ beforeEach(() => {
   harness.reset()
   const userData = mkdtempSync(join(tmpdir(), 'dsh-main-user-data-'))
   onTestFinished(() => { rmSync(userData, { recursive: true, force: true }) })
-  harness.app.getPath.mockImplementation(name => name === 'userData' ? userData : join(userData, `desktop-test-${name}`))
+  const applicationPaths = new Map([['userData', userData]])
+  harness.app.getPath.mockImplementation(name => applicationPaths.get(name) ?? join(userData, `desktop-test-${name}`))
+  harness.app.setPath.mockImplementation((name, path) => { applicationPaths.set(name, path) })
+  harness.app.setName.mockImplementation((name) => { harness.app.name = name })
   vi.mocked(writeCrashReport).mockResolvedValue(join(harness.app.getPath('logs'), 'crash-test.log'))
   harness.dialog.showMessageBox.mockImplementation((options: { title?: string }) => {
     if (options.title !== en.startupFailed && options.title !== zh.startupFailed) return Promise.resolve({ response: 1 })
@@ -452,6 +480,7 @@ beforeEach(() => {
   vi.stubEnv('DSH_DESKTOP_MANDATORY_UPDATE_CONFIG', undefined)
   vi.stubEnv('DSH_DESKTOP_UPDATE_JOURNAL_DIR', undefined)
   vi.stubEnv('DSH_CLIENT_VERSION', '1.2.3')
+  vi.stubEnv('DSH_HOME', process.env.DSH_HOME)
   harness.analyticsEnabled = true
 })
 
@@ -471,6 +500,107 @@ afterEach(async () => {
 })
 
 describe('desktop main startup', () => {
+  it.each([undefined, '', ' \t ', '/explicit/preview-home'])('isolates packaged preview data before startup and passes home %j to the Host', async (override) => {
+    harness.embeddedDistribution = 'fork-preview'
+    vi.stubEnv('DSH_HOME', override)
+    const standardUserData = harness.app.getPath('userData')
+    const previewUserData = join(harness.app.getPath('appData'), 'deepseek-harness-miracle-preview')
+    harness.app.getPath.mockClear()
+    const host = await readyForUpdate()
+    expect(harness.app.name).toBe('DeepSeek Harness Miracle Preview')
+    expect(harness.app.setAppUserModelId).toHaveBeenCalledExactlyOnceWith('io.github.miracle-mrc.deepseek-harness.preview')
+    expect(harness.app.setPath).toHaveBeenCalledExactlyOnceWith('userData', previewUserData)
+    expect(previewUserData).not.toBe(standardUserData)
+    const setPathOrder = harness.app.setPath.mock.invocationCallOrder[0]!
+    const firstUserDataRead = harness.app.getPath.mock.calls.findIndex(([name]) => name === 'userData')
+    expect(setPathOrder).toBeLessThan(harness.app.getPath.mock.invocationCallOrder[firstUserDataRead]!)
+    expect(setPathOrder).toBeLessThan(harness.app.setAppLogsPath.mock.invocationCallOrder[0]!)
+    expect(setPathOrder).toBeLessThan(harness.app.requestSingleInstanceLock.mock.invocationCallOrder[0]!)
+    expect(process.env.DSH_HOME).toBe(override?.trim() ? override : join(homedir(), '.dsh-miracle-preview'))
+    expect(host.environment?.DSH_HOME).toBe(process.env.DSH_HOME)
+    expect(host.environment?.DSH_TEST_LOGIN_SHELL).toBe('login')
+    expect(harness.windows[0]!.urls).toEqual(['dsh-app://app/'])
+    expect(harness.app.setAsDefaultProtocolClient).toHaveBeenCalledExactlyOnceWith('dsh-miracle-preview')
+    const window = harness.windows[0]!
+    await vi.waitFor(() => { expect(window.show).toHaveBeenCalled() })
+    window.focus.mockClear()
+    harness.app.emit('open-url', { preventDefault: vi.fn() }, 'dsh://open')
+    expect(window.focus).not.toHaveBeenCalled()
+    harness.app.emit('open-url', { preventDefault: vi.fn() }, 'dsh-miracle-preview://open')
+    expect(window.focus).toHaveBeenCalledOnce()
+  })
+
+  it('omits preview update services, timers, policy authentication, and the update menu', async () => {
+    harness.embeddedDistribution = 'fork-preview'
+    harness.embeddedPolicy = { origin: 'https://policy.example.com', authentication: 'feishu-test',
+      allowedAuthOrigins: ['https://login.example.com'], allowedPageOrigins: ['https://downloads.example.com'] }
+    vi.stubEnv('DSH_DESKTOP_UPDATE_CHECK_INTERVAL_MS', 'invalid-unused-setting')
+    const request = vi.fn<typeof fetch>()
+    vi.stubGlobal('fetch', request)
+    await readyForUpdate()
+    expect(applicationMenuItems().some(item => item.label === en.checkUpdatesMenu)).toBe(false)
+    expect(harness.app.setAboutPanelOptions).toHaveBeenCalledWith(expect.objectContaining({ applicationName: 'DeepSeek Harness Miracle Preview' }))
+    expect(invoke(DESKTOP_IPC.updatesStatus, 'app')).toEqual({ phase: 'idle' })
+    await invoke(DESKTOP_IPC.updatesOpen, 'app')
+    harness.powerMonitor.emit('resume')
+    harness.windows[0]!.emit('focus')
+    await vi.advanceTimersByTimeAsync(3_600_000)
+    expect(harness.updateConstruct).not.toHaveBeenCalled()
+    expect(harness.updateCheck).not.toHaveBeenCalled()
+    expect(harness.updateDownload).not.toHaveBeenCalled()
+    expect(harness.updateInstall).not.toHaveBeenCalled()
+    expect(request).not.toHaveBeenCalled()
+    expect(testAuth.login).not.toHaveBeenCalled()
+    expect(harness.handlers.has(MANDATORY_IPC.status)).toBe(false)
+    expect(harness.powerMonitor.listenerCount('resume')).toBe(0)
+    expect(harness.dialog.showMessageBox).not.toHaveBeenCalled()
+  })
+
+  it.each(['api-key', 'skip'] as const)('opens the packaged preview workspace through normal %s onboarding', async (action) => {
+    harness.embeddedDistribution = 'fork-preview'
+    await import('../src/main.ts')
+    await harness.preparing.promise
+    harness.prepared.resolve()
+    await harness.hostStarted.promise
+    const host = harness.hosts[0]!
+    host.fetch.mockResolvedValue(Response.json({ hasApiKey: false, loggedIn: false, localePreference: 'en' }))
+    host.ready.resolve()
+    await vi.waitFor(() => { expect(harness.handlers.has(WELCOME_IPC.skip)).toBe(true) })
+    const window = harness.windows[0]!
+    const welcome = harness.windows[1]!
+    await vi.waitFor(() => { expect(window.hide).toHaveBeenCalled() })
+    expect(window.show).not.toHaveBeenCalled()
+    const event = { sender: welcome.webContents, senderFrame: welcome.webContents.mainFrame }
+    if (action === 'api-key') {
+      await expect(harness.handlers.get(WELCOME_IPC.saveApiKey)!(event, 'sk-preview-key')).resolves.toEqual({ ok: true })
+      expect(harness.saveApiKey).toHaveBeenCalledExactlyOnceWith('sk-preview-key')
+    } else {
+      await harness.handlers.get(WELCOME_IPC.skip)!(event)
+      expect(harness.saveApiKey).not.toHaveBeenCalled()
+    }
+    expect(window.urls).toEqual(['dsh-app://app/'])
+    expect(window.show).toHaveBeenCalledOnce()
+    expect(welcome.isDestroyed()).toBe(true)
+    expect(host.stop).not.toHaveBeenCalled()
+    expect(harness.updateConstruct).not.toHaveBeenCalled()
+    expect(testAuth.login).not.toHaveBeenCalled()
+  })
+
+  it.each([true, false])('keeps ordinary runtime behavior when preview is only in the environment (packaged=%s)', async (packaged) => {
+    harness.app.isPackaged = packaged
+    harness.embeddedDistribution = packaged ? undefined : 'fork-preview'
+    vi.stubEnv('DSH_DESKTOP_DISTRIBUTION', 'fork-preview')
+    vi.stubEnv('DSH_HOME', '/explicit/standard-home')
+    const host = await readyForUpdate()
+    expect(harness.app.setName).not.toHaveBeenCalled()
+    expect(harness.app.setPath).not.toHaveBeenCalled()
+    expect(host.environment?.DSH_HOME).toBe('/explicit/standard-home')
+    expect(harness.updateConstruct).toHaveBeenCalledOnce()
+    expect(harness.updateCheck).toHaveBeenCalled()
+    expect(applicationMenuItems().some(item => item.label === en.checkUpdatesMenu)).toBe(true)
+    if (packaged) expect(harness.app.setAsDefaultProtocolClient).toHaveBeenCalledExactlyOnceWith('dsh')
+  })
+
   it.each([true, false])('selects the package manager before Host startup (packaged=%s)', async (packaged) => {
     harness.app.isPackaged = packaged
     await readyForUpdate()

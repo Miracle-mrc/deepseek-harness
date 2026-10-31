@@ -1,0 +1,4 @@
+# A cancellation request returns before the producer releases its admission slot.
+- insert:
+    - id: await-job-settlement
+      name: '../../../packages/test-support/session-snapshot/tests/fixtures/job-settlement-barrier.ts'

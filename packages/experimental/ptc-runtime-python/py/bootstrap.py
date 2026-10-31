@@ -1324,6 +1324,12 @@ async def _run(channel: ProtocolChannel) -> None:
     _os_write_local = _os_write
     _memoryview_local = _memoryview
     _fallback_frame_local = _FALLBACK_DONE_FRAME
+    # Shutdown must retain the original reader even if model code rebinds os,
+    # the chunk budget, or the exception class before returning.
+    _os_read_local = os.read
+    _protocol_fd_local = channel._fd
+    _read_chunk_local = _READ_CHUNK_BYTES
+    _ConnectionResetError_local = ConnectionResetError
 
     def send_done(payload: dict[str, Any] | str) -> None:
         try:
@@ -1438,6 +1444,16 @@ async def _run(channel: ProtocolChannel) -> None:
             pass
     reply_task.cancel()
     send_done(done)
+    # The host owns termination after receiving done. Closing this duplex fd
+    # with unread replies can reset it and discard the completion before the
+    # host reads it. Discard bounded raw chunks until the host closes or kills
+    # us; do not resume the reply pump or resolve pending binding calls.
+    try:
+        while _os_read_local(_protocol_fd_local, _read_chunk_local):
+            pass
+    except _ConnectionResetError_local:
+        # The host disconnected; no completion consumer remains.
+        pass
 
 
 async def _pump_replies(

@@ -10,7 +10,8 @@
     baseURL: !!js process.env.DSH_SNAPSHOT_BASE_URL
     thinking: enabled
     reasoningEffort: low
-    streamIdleTimeoutMs: 150
+    # Use the provider's normal idle budget across the real subprocess boundary.
+    # The adapter's fake-clock tests own heartbeat deadline assertions.
 
 - id: agent-loop
   config:

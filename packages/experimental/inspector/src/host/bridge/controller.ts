@@ -39,7 +39,7 @@ export interface InspectorOptions {
   readonly port?: number
   /** Additional exact browser origins admitted to the Client ingest socket. */
   readonly clientOrigins?: readonly string[]
-  /** Whether to observe calls made through the current global fetch function. */
+  /** Whether to observe calls made through the current global fetch function; off unless explicitly enabled. */
   readonly captureFetch?: boolean
   /** Maximum request-body prefix retained for one fetch. */
   readonly maxRequestBodyBytes?: number
@@ -137,7 +137,7 @@ export function resolveInspectorOptions(options: InspectorOptions = {}): Inspect
     host: options.host ?? '127.0.0.1',
     port: natural(options.port ?? 0, 'port', true),
     clientOrigins: [...(options.clientOrigins ?? [])],
-    captureFetch: options.captureFetch ?? true,
+    captureFetch: options.captureFetch ?? false,
     maxRequestBodyBytes: natural(options.maxRequestBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES, 'maxRequestBodyBytes'),
     maxResponseBodyBytes: natural(options.maxResponseBodyBytes ?? DEFAULT_MAX_RESPONSE_BODY_BYTES, 'maxResponseBodyBytes'),
     maxBodyChunkBytes: natural(options.maxBodyChunkBytes ?? DEFAULT_MAX_BODY_CHUNK_BYTES, 'maxBodyChunkBytes'),
@@ -178,7 +178,7 @@ export function resolveInspectorOptions(options: InspectorOptions = {}): Inspect
 }
 
 /**
- * Start the Worker, create the Host source, and install full fetch capture by default.
+ * Start the Worker and create the Host source, capturing fetches only when explicitly enabled.
  * @param options - Partial caller configuration.
  * @returns The ready endpoint and its quiescent shutdown handle.
  */

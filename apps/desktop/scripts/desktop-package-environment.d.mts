@@ -1,6 +1,13 @@
 /** Select local test defaults or platform release settings without changing the caller's environment. */
 
 /**
+ * Select public fork-preview settings without reading machine configuration or credential values.
+ * @param environment Parent environment, retained for build tools, networking and public caches.
+ * @returns Isolated unsigned preview environment using the public npm registry.
+ */
+export function forkPreviewPackageEnvironment(environment?: NodeJS.ProcessEnv): NodeJS.ProcessEnv
+
+/**
  * Select local macOS test defaults without reading dotenv files or inheriting release settings.
  * @param environment Parent environment, retained for build tools and networking.
  * @returns Unsigned build environment with the standard application identifier and no update policy.
@@ -36,5 +43,5 @@ export function loadDesktopPackageEnvironment(
 export function validateDesktopPackageEnvironment(
   environment: NodeJS.ProcessEnv,
   target: { platform: 'win32' | 'darwin', arch: string },
-  options?: { unsigned?: boolean, prepareOnly?: boolean, skipNotarization?: boolean },
+  options?: { unsigned?: boolean, prepareOnly?: boolean, skipNotarization?: boolean, forkPreview?: boolean },
 ): void

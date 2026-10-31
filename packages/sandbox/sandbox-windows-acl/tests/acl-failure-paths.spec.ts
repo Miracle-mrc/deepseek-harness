@@ -47,6 +47,11 @@ function aclApi(overrides: Partial<Win32Bindings> = {}): Win32Bindings {
       return 0
     }),
     setNamedSecurityInfoW: vi.fn(() => 0),
+    getSecurityDescriptorControl: vi.fn((_descriptor: NativePtr, control: Buffer, revision: Buffer) => {
+      control.writeUInt16LE(abi.SE_DACL_AUTO_INHERITED)
+      revision.writeUInt32LE(1)
+      return 1
+    }),
     localAlloc: vi.fn(() => 11n),
     getLengthSid: vi.fn(() => 12),
     initializeAcl: vi.fn(() => 1),
@@ -171,6 +176,129 @@ function readStub(dacl: NativePtr | null, label: NativePtr | null, descriptor: b
     return 0
   })
 }
+
+describe('legacy DACL normalization before a grant', () => {
+  function fixture(initialControl = 0, refreshedControl = abi.SE_DACL_AUTO_INHERITED) {
+    const sid = craftSid(1, 0)
+    const low = craftLowLabelSid()
+    const world = craftWorldSid()
+    const initialAcl = craftAcl(abi.ACCESS_ALLOWED_ACE_TYPE, 0x1F01FF, sid, true)
+    const refreshedAcl = craftAcl(abi.ACCESS_ALLOWED_ACE_TYPE, 0x1F01FF, sid, true)
+    const control = (value: number) => (_descriptor: NativePtr, output: Buffer, revision: Buffer): number => {
+      output.writeUInt16LE(value)
+      revision.writeUInt32LE(1)
+      return 1
+    }
+    const api = {
+      ...aclApi(),
+      getNamedSecurityInfoW: readStub(refreshedAcl, null, 7n)
+        .mockImplementationOnce(readStub(initialAcl, null, 6n)),
+      getSecurityDescriptorControl: vi.fn(control(refreshedControl))
+        .mockImplementationOnce(control(initialControl)),
+      setNamedSecurityInfoW: vi.fn<Win32Bindings['setNamedSecurityInfoW']>(() => 0),
+      setEntriesInAclW: vi.fn<Win32Bindings['setEntriesInAclW']>((_count, _entries, _old, output) => {
+        koffi.encode(output, PVOID, 9n)
+        return 0
+      }),
+      localFree: vi.fn<Win32Bindings['localFree']>(() => 0n as NativePtr),
+      localAlloc: vi.fn(() => 11n as NativePtr),
+      unlockFileEx: vi.fn(() => 1),
+      closeHandle: vi.fn(() => 1),
+    }
+    const grant = () => { grantWrite(api, 'C:\\legacy', sid, low, world) }
+    return { api, grant, initialAcl, refreshedAcl }
+  }
+
+  it.each([0, abi.SE_DACL_PROTECTED])('normalizes unchanged DACL under the lock, then grants from a fresh read (protection=%i)', (protection) => {
+    const { api, grant, initialAcl, refreshedAcl } = fixture(protection, abi.SE_DACL_AUTO_INHERITED | protection)
+    vi.mocked(api.setNamedSecurityInfoW).mockImplementation((_path, _type, information) => {
+      expect(api.unlockFileEx).not.toHaveBeenCalled()
+      if (information === abi.DACL_SECURITY_INFORMATION) expect(api.localFree).not.toHaveBeenCalledWith(6n)
+      return 0
+    })
+    grant()
+    expect(api.getNamedSecurityInfoW).toHaveBeenCalledTimes(2)
+    expect(api.getSecurityDescriptorControl).toHaveBeenCalledTimes(2)
+    expect(api.setNamedSecurityInfoW).toHaveBeenNthCalledWith(
+      1, 'C:\\legacy', abi.SE_FILE_OBJECT, abi.DACL_SECURITY_INFORMATION,
+      null, null, ptrAddress(initialAcl), null,
+    )
+    expect(api.setEntriesInAclW).toHaveBeenCalledWith(2, expect.any(Buffer), ptrAddress(refreshedAcl), expect.anything())
+    expect(api.setNamedSecurityInfoW).toHaveBeenNthCalledWith(
+      2, 'C:\\legacy', abi.SE_FILE_OBJECT, abi.DACL_SECURITY_INFORMATION | abi.LABEL_SECURITY_INFORMATION,
+      null, null, 9n, 11n,
+    )
+    expect(vi.mocked(api.localFree).mock.calls.map(call => call[0])).toEqual([6n, 7n, 9n, 11n])
+    expect(api.unlockFileEx).toHaveBeenCalledTimes(1)
+    expect(api.closeHandle).toHaveBeenCalledWith(7n)
+    const neutralCall = vi.mocked(api.setNamedSecurityInfoW).mock.invocationCallOrder[0] ?? 0
+    const freedInitial = vi.mocked(api.localFree).mock.invocationCallOrder[0] ?? 0
+    const refreshedRead = vi.mocked(api.getNamedSecurityInfoW).mock.invocationCallOrder[1] ?? 0
+    const merged = vi.mocked(api.setEntriesInAclW).mock.invocationCallOrder[0] ?? 0
+    expect(neutralCall).toBeLessThan(freedInitial)
+    expect(freedInitial).toBeLessThan(refreshedRead)
+    expect(refreshedRead).toBeLessThan(merged)
+  })
+
+  it.each(['control', 'normalize', 'free', 'reread', 'refreshed-control'] as const)('stops before merging and frees owned descriptors when %s fails', (stage) => {
+    const { api, grant } = fixture()
+    let expected: string
+    switch (stage) {
+      case 'control':
+        vi.mocked(api.getSecurityDescriptorControl).mockReset().mockReturnValue(0)
+        expected = 'GetSecurityDescriptorControl'
+        break
+      case 'normalize':
+        vi.mocked(api.setNamedSecurityInfoW).mockReturnValue(5)
+        expected = 'SetNamedSecurityInfoW'
+        break
+      case 'free':
+        vi.mocked(api.localFree).mockReturnValue(1n as NativePtr)
+        expected = 'LocalFree'
+        break
+      case 'reread':
+        vi.mocked(api.getNamedSecurityInfoW).mockReturnValue(5)
+        expected = 'GetNamedSecurityInfoW'
+        break
+      case 'refreshed-control':
+        vi.mocked(api.getSecurityDescriptorControl).mockReturnValue(0)
+        expected = 'GetSecurityDescriptorControl'
+        break
+    }
+    expect(grant).toThrow(expected)
+    expect(api.setEntriesInAclW).not.toHaveBeenCalled()
+    expect(api.localAlloc).not.toHaveBeenCalled()
+    const descriptors = vi.mocked(api.localFree).mock.calls.map(call => call[0])
+    expect(descriptors.filter(value => value === 6n)).toHaveLength(1)
+    expect(descriptors.filter(value => value === 7n)).toHaveLength(stage === 'refreshed-control' ? 1 : 0)
+    expect(api.unlockFileEx).toHaveBeenCalledTimes(1)
+    expect(api.closeHandle).toHaveBeenCalledWith(7n)
+  })
+
+  it.each([
+    { before: 0, after: 0, error: 'did not establish automatic inheritance' },
+    { before: 0, after: abi.SE_DACL_AUTO_INHERITED | abi.SE_DACL_PROTECTED, error: 'changed inheritance protection' },
+    { before: abi.SE_DACL_PROTECTED, after: abi.SE_DACL_AUTO_INHERITED, error: 'changed inheritance protection' },
+  ])('rejects an unverified conversion ($error)', ({ before, after, error }) => {
+    const { api, grant } = fixture(before, after)
+    expect(grant).toThrow(error)
+    expect(api.setNamedSecurityInfoW).toHaveBeenCalledTimes(1)
+    expect(api.setEntriesInAclW).not.toHaveBeenCalled()
+    expect(vi.mocked(api.localFree).mock.calls.map(call => call[0])).toEqual([6n, 7n])
+    expect(api.unlockFileEx).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['descriptor', 'DACL'] as const)('rejects a refreshed read missing its %s', (missing) => {
+    const { api, grant, refreshedAcl } = fixture()
+    vi.mocked(api.getNamedSecurityInfoW).mockImplementation(readStub(
+      missing === 'DACL' ? null : refreshedAcl, null, missing === 'descriptor' ? null : 7n,
+    ))
+    expect(grant).toThrow('lost the security descriptor or DACL')
+    expect(api.setEntriesInAclW).not.toHaveBeenCalled()
+    expect(vi.mocked(api.localFree).mock.calls.map(call => call[0])).toEqual(missing === 'descriptor' ? [6n] : [6n, 7n])
+    expect(api.unlockFileEx).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('withPathLock failure paths', () => {
   it('fails closed when CreateFileW returns an invalid handle', () => {

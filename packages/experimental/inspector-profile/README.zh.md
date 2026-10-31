@@ -9,7 +9,7 @@ kind: "package-bundle"
 
 ## 概述
 
-启用这个可选组合包，即可在 Sidebar 检查 Session 数据、在底部面板打开 NodeJS 诊断，并增加「统计」会话页签。组合包启用两个 Inspector 和「统计」视图，但关闭 Host fetch 采集；组合包自身在插件管理器中默认关闭。
+启用这个组合包，即可在 Sidebar 检查 Session 数据、在底部面板打开 NodeJS 诊断，并增加「统计」会话页签。组合包启用两个 Inspector 和「统计」视图，但保持 Host fetch 采集关闭。Web profile 可选用此组合包，新初始化的 Desktop profile 则默认包含它。
 
 ## 目录
 
@@ -28,7 +28,7 @@ kind: "package-bundle"
 
 「对话」和「轨迹」旁的**统计**页签展示每轮/每步的上下文、耗时、缓存和工具成本，详见[性能视图包](../client-ui-stats/README.zh.md)。从 Sidebar 的新建 tab 菜单或引导页打开**会话数据诊断**。[Session Inspector](../session-inspector/README.zh.md) 提供一个视图，可选择原始数据或对话分组展示形式，初始选中原始数据。
 
-按 **Ctrl/Cmd+Shift+.** 可展开或收起底部面板中的 **NodeJS 诊断**，使用打包后的 DevTools 前端。启用组合包会启动本地调试后端，但不采集 Host 请求。显式设置 `captureFetch: true` 会记录包含凭据在内、未经脱敏的请求和响应；登录或使用真实云账户时绝不能启用。
+按 **Ctrl/Cmd+Shift+.** 可展开或收起底部面板中的 **NodeJS 诊断**，使用打包后的 DevTools 前端。启用组合包会启动本地调试后端，不需要调试参数。未经脱敏的 Host fetch 采集必须通过 `captureFetch: true` 显式覆盖启用。
 
 -----
 
@@ -38,7 +38,7 @@ kind: "package-bundle"
 <details>
 <summary>实现内部细节 — 点击展开</summary>
 
-[`cordis.patch.yml`](cordis.patch.yml) 启用会话数据诊断、「统计」会话视图和 NodeJS 诊断后端，并设置 `captureFetch: false`。profile 补丁可以显式启用采集。调试与采集行为见 Inspector [README](../inspector/README.zh.md)。每个插件负责自身行为与生命周期。
+[`cordis.patch.yml`](cordis.patch.yml) 启用会话数据诊断、「统计」会话视图和 NodeJS 诊断后端，并设置 `captureFetch: false`，不依赖调试参数。调试与采集行为见 Inspector [README](../inspector/README.zh.md)。每个插件负责自身行为与生命周期。
 
 </details>
 
@@ -58,7 +58,7 @@ kind: "package-bundle"
 <a id="known-limitations-and-deferred-work"></a>
 
 - **仅支持 Web** — 检查视图依赖 Web 应用的 Session 服务。
-- **内部诊断** — 组件开关保持可用，但没有专用 Web 调试按钮。即使关闭采集，启用后仍允许执行本地代码；仅在可信的单用户机器上使用，并参阅[安全限制](../inspector/README.zh.md#security)。
+- **内部诊断** — 组件开关保持可用，但没有专用 Web 调试按钮。即使关闭 fetch 采集，启用后仍允许执行本地代码，请参阅[安全限制](../inspector/README.zh.md#security)。
 
 <a id="dev-note"></a>
 ### 开发备注

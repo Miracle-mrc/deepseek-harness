@@ -13,6 +13,7 @@ Build Desktop installers locally or through Windows or macOS Actions, choose dep
 ## Table of Contents
 
 - [Choose a build path](#choose-a-build)
+- [Miracle fork preview](#fork-preview)
 - [Release versions](#release-versions)
 - [Configuration and local builds](#configuration-and-local-builds)
 - [Windows Actions packaging](#windows-actions)
@@ -33,6 +34,24 @@ Build Desktop installers locally or through Windows or macOS Actions, choose dep
 Run local commands from the repository root after installing locked dependencies. Use platform-specific commands for a local build, or platform Actions for the registered self-hosted runner. Choose test or production deployment independently from signed or unsigned mode. Read [Windows signing and runner operations](../windows-signing/README.md#trust-and-isolation) before any Windows signed build or shared-runner use. Installation is separate from packaging; [publication](../publishing/README.md) is a further explicit operation.
 
 Set `DSH_DESKTOP_PACKAGE_CACHE_DIR` to an absolute build-cache directory for reuse across checkouts; see [cache configuration and lifecycle](#desktop-runtime-preparation).
+
+<a id="fork-preview"></a>
+
+## Miracle fork preview
+
+After installing locked dependencies, use the matching native build host and one of these commands from the repository root:
+
+```sh
+pnpm run package:desktop:win:x64:unsigned -- --fork-preview
+pnpm run package:desktop:mac:arm64:unsigned -- --fork-preview
+pnpm run package:desktop:mac:x64:unsigned -- --fork-preview
+```
+
+`--fork-preview` implies unsigned mode and rejects `--prepare-only`, signing and notarization options, including `--skip-notarization`. It selects public configuration without reading `.env.windows`, `.env.macos`, machine presets, signing credentials or update settings. The packaging environment fixes `DSH_DESKTOP_DISTRIBUTION=fork-preview`, the [preview identity](../README.md#miracle-fork-preview), the public npm registry and disabled certificate discovery. Standard build tools, network proxies and `DSH_DESKTOP_PACKAGE_CACHE_DIR` remain available. No Apple account, EV token, COS credential, update service or private runner is required.
+
+The default version is the unchanged product version. Each target writes to `apps/desktop/.desktop-build/targets/<target>/unsigned-artifacts/`: `deepseek-harness-miracle-preview-<version>-win-x64-unsigned.exe`, `deepseek-harness-miracle-preview-<version>-mac-arm64-unsigned.dmg`, or `deepseek-harness-miracle-preview-<version>-mac-x64-unsigned.dmg`. macOS uses ad-hoc application signing and an unsigned DMG; Windows remains unsigned. No ZIP, updater feed, mandatory-update policy or standard release-completion record is generated. Operating-system trust prompts remain applicable.
+
+Add `--check` for configuration and native-toolchain validation, or `--dir` to inspect the unpacked application. Packaging retains the local build profile, complete dependency preparation, runtime integrity checks and assembled-runtime smoke. Full EXE/DMG creation, installation and API-key startup must be verified on each native Windows x64, macOS ARM64 and macOS x64 host; Linux unit tests cannot establish those results. Later previews require manual installation.
 
 <a id="release-versions"></a>
 

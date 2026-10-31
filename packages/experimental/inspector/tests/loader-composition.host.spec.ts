@@ -30,7 +30,12 @@ afterEach(async () => {
 })
 
 describe('experimental Inspector through a real Loader composition', () => {
-  it.each([false, true])('starts inspection with --inspect=%s and opens Chrome only when requested', async (flag) => {
+  it.each([
+    { flag: false, captureFetch: undefined },
+    { flag: true, captureFetch: undefined },
+    { flag: false, captureFetch: true },
+  ])('starts with --inspect=$flag and captureFetch=$captureFetch while preserving the explicit choice', async ({ flag, captureFetch }) => {
+    const nativeFetch = globalThis.fetch
     root = await mkdtemp(join(tmpdir(), 'dsh-inspector-loader-'))
     const configPath = join(root, 'cordis.yml')
     const entries = composeEntries([loadOverlayPatches('dsh', fileURLToPath(
@@ -71,7 +76,10 @@ describe('experimental Inspector through a real Loader composition', () => {
       name: 'cordis:include',
       config: {
         path: pathToFileURL(configPath).href,
-        patches: [{ insert: [inspector] }, { id: 'experimental-inspector', config: { port: 0, captureFetch: false } }],
+        patches: [{ insert: [inspector] }, {
+          id: 'experimental-inspector',
+          config: { port: 0, ...captureFetch === undefined ? {} : { captureFetch } },
+        }],
       },
     })
     await context.loader.await()
@@ -82,6 +90,8 @@ describe('experimental Inspector through a real Loader composition', () => {
     const inspectorEntry = [...context.loader.entries()]
       .find(entry => entry.options.name === '@deepseek-ai/dsh-experimental-inspector')
     expect(inspectorEntry?.disabled).toBe(false)
+    if (captureFetch === true) expect(globalThis.fetch).not.toBe(nativeFetch)
+    else expect(globalThis.fetch).toBe(nativeFetch)
     expect(open).toHaveBeenCalledTimes(flag ? 1 : 0)
     const connection = context.connection as HostConnectionService
     const api = connection.createSharedFetchHandler('/api')
@@ -94,5 +104,6 @@ describe('experimental Inspector through a real Loader composition', () => {
 
     await inspectorEntry!.fiber!.dispose()
     expect(context.get('inspector')).toBeUndefined()
+    expect(globalThis.fetch).toBe(nativeFetch)
   })
 })

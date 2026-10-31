@@ -13,6 +13,7 @@ Desktop 在原生应用中运行 Harness 工作区。本参考文档说明应用
 ## 目录
 
 - [应用概览](#application-overview)
+- [Miracle fork 预览版](#miracle-fork-preview)
 - [终端命令](#terminal-command)
 - [关闭窗口与退出](#closing-the-window-and-quitting)
 - [关键技术决策](#key-technical-decisions)
@@ -54,6 +55,23 @@ Desktop Host 的 Platform API 请求与更新策略请求用相同的 Platform �
 桌面麦克风访问仅允许主 `dsh-app://app` 页面发起的音频请求。macOS 使用系统麦克风授权、随包用途说明，以及主应用与 Helper 签名中的 `com.apple.security.device.audio-input` 权限。
 
 按 F12（多媒体功能键键盘上为 Fn+F12）、macOS 的 Command+Option+I 或 Windows 的 Ctrl+Shift+I，可切换当前获得焦点的应用页面的 DevTools，打包版本同样支持。这些原生快捷键通过隐藏的应用菜单项注册。更新遮罩和打包版本的内嵌浏览器禁用 DevTools。
+
+<a id="miracle-fork-preview"></a>
+
+## Miracle fork 预览版
+
+未签名的 Miracle fork 预览版以 **DeepSeek Harness Miracle Preview** 安装，可与标准应用并存。其打包标识如下：
+
+| 字段 | 预览版值 |
+|---|---|
+| 应用 ID | `io.github.miracle-mrc.deepseek-harness.preview` |
+| 包名 | `deepseek-harness-miracle-preview` |
+| 外部打开链接 | `dsh-miracle-preview://open` |
+| 打包发行标记 | `dshDistribution: "fork-preview"` |
+
+预览版在记录日志或获取单实例锁前，将 Electron 用户数据设为 `appData/deepseek-harness-miracle-preview`，并将 `DSH_HOME` 默认设为 `~/.dsh-miracle-preview`。显式设置的非空白 `DSH_HOME` 会保留并传给 Host。这会隔离默认的会话、凭据、插件与浏览器存储；若显式选择与其他安装相同的主目录，则会共享该目录。内部 `dsh-app://app` 和 `dsh-app://shell` 来源保持原有行为。
+
+预览构建不执行自动更新和强制更新策略请求，也不显示“检查更新”菜单操作。后续预览版需手动安装。欢迎页保留 API Key 设置和“稍后设置”；可选的平台登录可能依赖服务端选择的返回链接，仍会指向标准 `dsh` 处理程序。[预览版打包参考](packaging/README.zh.md#fork-preview)说明命令、未签名产物和原生验收要求。下文“更新”章节描述标准安装包。
 
 <a id="terminal-command"></a>
 
@@ -151,7 +169,7 @@ Electron 拥有 `$DSH_HOME/profiles/desktop`。其 `dependencies` 包含 pnpm �
 
 `dsh-app://shell/` 无需联系 Host 即可提供打包的更新文档、脚本和样式。静态请求保留 GET/HEAD、路径范围和 MIME 处理；每个更新文档继续使用隔离 preload 和所属窗口的 IPC 校验。
 
-产品 UI 保留 Web 操作，包括通过共享认证 HTTP 路由执行的“打开方式…”。Desktop 使用 Web 的自动目录选择机制，并在创建新 profile 时，在共享 Web bundle 之外默认启用 Agent Teams、Auto Review、Session Search、Plugin Market、Session Titles、Personalized Recommendations、Git Worktree、Forge 和 Developer Tools。这九个 bundle 由打包运行时提供，首次启动无需单独下载；已有 profile 保留已保存的选项。Developer Tools 会启用可执行代码的本地调试器和未脱敏的 Host fetch 捕获，因此非调试时或在共用电脑上应关闭它。
+产品 UI 保留 Web 操作，包括通过共享认证 HTTP 路由执行的“打开方式…”。Desktop 使用 Web 的自动目录选择机制，并在创建新 profile 时，在共享 Web bundle 之外默认启用 Agent Teams、Auto Review、Session Search、Plugin Market、Session Titles、Personalized Recommendations、Git Worktree、Forge 和 Developer Tools。这九个 bundle 由打包运行时提供，首次启动无需单独下载；已有 profile 保留已保存的选项。Developer Tools 会启用可执行代码的本地调试器，但 Host fetch 采集默认关闭，必须显式启用。调试器仍允许执行本地代码，因此非调试时或在共用电脑上应关闭它。
 
 升级文案完整展示版本号（包括预发布后缀），不额外添加 v 或 V。无可用更新时，弹窗标题显示检查结果，正文显示当前版本。
 
@@ -308,7 +326,7 @@ Electron 主进程在启动时读取一次 `app.getPath('userData')/desktop/sett
 
 ### 强制更新策略
 
-打包读取 `.env.windows` 或 `.env.macos`：`DSH_DESKTOP_AUTO_UPDATE_ENV=test`（默认值）选择 `DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN`；`production` 选择 `DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN`。模板将两个源站留空；在 Git 忽略的目标 dotenv 文件中填写所选部署的源站。本地 macOS 未签名构建省略此策略，不读取这两个文件。其他模式在准备产物或签名前必须配置所选源站，包括 Windows 未签名和仅准备构建；未选环境的源站可不填。这些配置不会回退到父进程环境或另一部署环境。打包将选定策略与应用 ID 写入元数据；打包应用忽略运行时覆盖。
+打包读取 `.env.windows` 或 `.env.macos`：`DSH_DESKTOP_AUTO_UPDATE_ENV=test`（默认值）选择 `DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN`；`production` 选择 `DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN`。模板将两个源站留空；在 Git 忽略的目标 dotenv 文件中填写所选部署的源站。本地 macOS 未签名构建和 [fork 预览版](#miracle-fork-preview)省略此策略，不读取这两个文件。其他模式在准备产物或签名前必须配置所选源站，包括普通 Windows 未签名和仅准备构建；未选环境的源站可不填。这些配置不会回退到父进程环境或另一部署环境。打包将选定策略与应用 ID 写入元数据；打包应用忽略运行时覆盖。
 
 `DSH_DESKTOP_MANDATORY_UPDATE_CONFIG` JSON 提供测试登录源站，以及可选的轮询和下载页面选项；打包拒绝其中的 `origin` 和 `authentication`。页面白名单默认只包含所选服务源站；需要其他已批准下载页面源站时应显式配置。测试包选择 `feishu-test`，且必须在 `DSH_DESKTOP_MANDATORY_UPDATE_CONFIG` 中配置 `allowedAuthOrigins`；正式包选择 `anonymous`，并拒绝该字段。每个登录源站必须是没有凭据、路径、查询或片段的 HTTPS origin。登录窗口仅允许文档导航到所选策略源站和这些已配置源站。策略请求拒绝重定向；仅测试鉴权携带网关 Cookie。未打包开发模式则从此变量读取完整策略 JSON，并要求 `DSH_DESKTOP_APP_ID`；缺少 JSON 会禁用开发模式策略查询，仅匿名开发允许 HTTP `127.0.0.1`。用户发起常规检查时会并发触发策略检查，但不会等待或展示策略失败。只有已确认的强更决定可以关闭常规弹窗。测试环境鉴权会等待当前常规弹窗结束，取消或失败不会丢弃 updater 结果。
 

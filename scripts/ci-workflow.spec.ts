@@ -62,6 +62,44 @@ describe('CI workflow', () => {
     }
   })
 
+  it.each([
+    ['build-preview-cloudflare.yml', 'preview', 'ubuntu-24.04', 'blacksmith-4vcpu-ubuntu-2404'],
+    ['expected-filenames.yml', 'expected-filenames', 'ubuntu-latest', 'blacksmith-4vcpu-ubuntu-2404'],
+    ['e2e.yml', 'e2e', 'ubuntu-latest', 'blacksmith-4vcpu-ubuntu-2404'],
+    ['release.yml', 'dependencies', 'ubuntu-24.04', 'blacksmith-4vcpu-ubuntu-2404'],
+    ['docs-pages.yml', 'build', 'blacksmith-8vcpu-ubuntu-2404', 'blacksmith-8vcpu-ubuntu-2404'],
+  ] as const)('gives the exact fork public-runner priority for %s / %s', (file, name, hosted, blacksmith) => {
+    const job = workflowJob(loadWorkflow('.github/workflows/' + file), name)
+    for (const repository of ['Miracle-mrc/deepseek-harness', 'deepseek-harness/deepseek-harness', 'another-owner/deepseek-harness', 'Miracle-mrc/another-repository']) {
+      for (const mode of ['', 'blacksmith', 'selfhosted', 'unexpected']) {
+        const selected = evaluateRunsOn(job['runs-on'], {
+          github: { repository, actor: 'maintainer', event_name: 'workflow_dispatch' },
+          vars: { DSH_CI_FAILOVER_LINUX: mode, DSH_CI_FAILOVER_WINDOWS: 'blacksmith' },
+        })
+        expect(selected, `${repository} mode=${mode}`)
+          .toBe(repository === 'Miracle-mrc/deepseek-harness' ? 'ubuntu-24.04' : mode === 'blacksmith' ? blacksmith : hosted)
+      }
+    }
+    expect(job['continue-on-error']).toBeUndefined()
+  })
+
+  it('keeps every sandbox kernel and architecture on its public runner in the exact fork', () => {
+    const job = workflowJob(loadWorkflow('.github/workflows/sandbox.yml'), 'sandbox-e2e')
+    if (!isRecord(job.strategy) || !isRecord(job.strategy.matrix) || !Array.isArray(job.strategy.matrix.include)) {
+      throw new TypeError('Sandbox checks must retain their platform matrix')
+    }
+    for (const row of job.strategy.matrix.include.filter(isRecord)) {
+      for (const repository of ['Miracle-mrc/deepseek-harness', 'deepseek-harness/deepseek-harness', 'Miracle-mrc/another-repository']) {
+        for (const mode of ['', 'blacksmith', 'selfhosted', 'unexpected']) {
+          expect(evaluateRunsOn(job['runs-on'], {
+            github: { repository }, matrix: row, vars: { DSH_CI_FAILOVER_LINUX: mode },
+          })).toBe(repository !== 'Miracle-mrc/deepseek-harness' && row.runner === 'bwrap' && mode === 'blacksmith'
+            ? 'blacksmith-4vcpu-ubuntu-2404' : row.os)
+        }
+      }
+    }
+  })
+
   it('keeps at most eleven worker jobs active across PR workflows while Python runtime targets follow the SDK suite', () => {
     const ci = loadWorkflow('.github/workflows/ci.yml')
     const ciWindows = loadWorkflow('.github/workflows/ci-windows.yml')
@@ -142,7 +180,7 @@ describe('CI workflow', () => {
     expect(afterSdk).toBeLessThanOrEqual(11)
   })
 
-  it('keeps the union of required PR verdicts equal to the pre-split blocking set', () => {
+  it('requires every Linux, Windows coverage, and Python PR lane in its verdict', () => {
     const verdicts = [
       ['ci.yml', 'all-checks-passed'],
       ['ci-windows.yml', 'windows-checks-passed'],
@@ -169,9 +207,6 @@ describe('CI workflow', () => {
       expect(verdict.needs.every(id => typeof id === 'string' && id in jobs)).toBe(true)
       blocking.push(...(verdict.needs as string[]))
     }
-    // Splitting the workflows only moves jobs between verdicts; the blocking
-    // set itself must stay identical, or branch protection would accept a
-    // failure it rejected before the split.
     expect(blocking.sort()).toEqual([
       'node-24',
       'node-24-bench',
@@ -182,8 +217,28 @@ describe('CI workflow', () => {
       'python-runtime',
       'python-sdk',
       'windows-build',
+      'windows-coverage',
       'windows-native-tests',
     ])
+  })
+
+  it('rejects failure, cancellation, and unexpected skips from every required Windows lane', () => {
+    const verdict = workflowJob(loadWorkflow('.github/workflows/ci-windows.yml'), 'windows-checks-passed')
+    if (!Array.isArray(verdict.needs) || !Array.isArray(verdict.steps)) throw new TypeError('Windows verdict must define needs and steps')
+    const reject = verdict.steps.filter(isRecord).find(step => step.name === 'Fail if any needed job did not succeed')
+    if (typeof reject?.if !== 'string') throw new TypeError('Windows verdict must reject non-successful results')
+    const source = reject.if.replaceAll('needs.*.result', 'results')
+    const rejected = (results: string[]): unknown => runInNewContext(source, {
+      results, contains: (values: string[], value: string) => values.includes(value),
+    }, { timeout: 1000 })
+    expect(rejected(verdict.needs.map(() => 'success'))).toBe(false)
+    for (const [index, name] of verdict.needs.entries()) {
+      for (const result of ['failure', 'cancelled', 'skipped']) {
+        expect(rejected(verdict.needs.map((_, candidate) => candidate === index ? result : 'success')), `${name}: ${result}`).toBe(true)
+      }
+    }
+    expect(reject.run).toContain('exit 1')
+    expect(reject['continue-on-error']).toBeUndefined()
   })
 
   it('retains aggregate diagnostics in required builds and protected publication', () => {
@@ -236,6 +291,129 @@ describe('CI workflow', () => {
     }
     expect(steps.find(step => step.name === 'Report preview publication failures')?.if)
       .toBe("steps.upload.outcome == 'failure' || steps.verify.outcome == 'failure' || steps.comment.outcome == 'failure'")
+  })
+
+  it('skips upstream Issue and Project policy only in the personal fork', () => {
+    const policy = workflowJob(loadWorkflow('.github/workflows/issue-policy.yml'), 'policy')
+    expect(policy.if).toBe("github.repository != 'Miracle-mrc/deepseek-harness'")
+    expect(policy['continue-on-error']).toBeUndefined()
+
+    const event = { action: 'opened', review: { state: '' }, changes: { body: null } }
+    const lifecycle = workflowJob(loadWorkflow('.github/workflows/issue-lifecycle.yml'), 'lifecycle')
+    if (typeof lifecycle.if !== 'string') throw new TypeError('Issue lifecycle must retain its original filters')
+    const condition = lifecycle.if.trim().replace(/^\$\{\{\s*|\s*\}\}$/g, '')
+    for (const repository of ['Miracle-mrc/deepseek-harness', 'deepseek-harness/deepseek-harness', 'another-owner/deepseek-harness', 'Miracle-mrc/another-repository']) {
+      expect(evaluateCondition(policy.if, { github: { repository } })).toBe(repository !== 'Miracle-mrc/deepseek-harness')
+      const selected: unknown = runInNewContext(condition, {
+        github: { repository, event_name: 'pull_request', event },
+      }, { timeout: 1000 })
+      expect(selected, `issue-lifecycle.yml in ${repository}`).toBe(repository !== 'Miracle-mrc/deepseek-harness')
+    }
+    expect(lifecycle['continue-on-error']).toBeUndefined()
+    const editedBody: unknown = runInNewContext(lifecycle.if, {
+      github: { repository: 'deepseek-harness/deepseek-harness', event_name: 'pull_request', event: { ...event, action: 'edited' } },
+    }, { timeout: 1000 })
+    expect(editedBody).toBe(false)
+  })
+
+  it('skips all upstream merge policies in the exact fork while preserving their mode and dependency filters elsewhere', () => {
+    for (const [file, name, variable] of [
+      ['pr-check-on-head-branch.yml', 'master', 'MERGE_POLICY_MASTER_DIFF'],
+      ['pr-check-on-head-branch.yml', 'pre-merge', 'MERGE_POLICY_PRE_MERGE'],
+      ['pr-check-after-approve.yml', 'approve', 'MERGE_POLICY_HEAD_DIFF'],
+      ['pr-check-after-approve.yml', 'review', 'MERGE_POLICY_REVIEW'],
+      ['pr-check-on-base-branch.yml', 'recheck', 'MERGE_POLICY_MASTER_DIFF'],
+    ] as const) {
+      const workflow = loadWorkflow('.github/workflows/' + file)
+      const job = workflowJob(workflow, name)
+      expect(workflow.name).toBe('Policy')
+      expect(job['continue-on-error']).toBeUndefined()
+      for (const repository of ['Miracle-mrc/deepseek-harness', 'deepseek-harness/deepseek-harness', 'another-owner/deepseek-harness', 'Miracle-mrc/another-repository']) {
+        for (const mode of ['', 'off', 'report', 'block', 'unexpected']) {
+          for (const draft of [false, true]) {
+            for (const result of ['success', 'failure']) {
+              const selected = evaluateCondition(job.if, {
+                github: { repository, event: { pull_request: { draft } } },
+                needs: { master: { result } },
+                vars: { [variable]: mode, MERGE_POLICY_PRE_MERGE: name === 'recheck' ? '' : mode },
+              })
+              expect(selected, `${file}/${name} ${repository} ${mode} draft=${draft} dependency=${result}`)
+                .toBe(repository !== 'Miracle-mrc/deepseek-harness' && mode !== '' && mode !== 'off'
+                  && (name !== 'master' || !draft) && (name !== 'pre-merge' || result === 'success'))
+            }
+          }
+        }
+      }
+      if (name === 'recheck') {
+        expect(evaluateCondition(job.if, {
+          github: { repository: 'Miracle-mrc/deepseek-harness' },
+          vars: { MERGE_POLICY_MASTER_DIFF: 'off', MERGE_POLICY_PRE_MERGE: 'block' },
+        })).toBe(false)
+        expect(evaluateCondition(job.if, {
+          github: { repository: 'deepseek-harness/deepseek-harness' },
+          vars: { MERGE_POLICY_MASTER_DIFF: 'off', MERGE_POLICY_PRE_MERGE: 'block' },
+        })).toBe(true)
+      }
+    }
+  })
+
+  it('skips credentialed upstream publishers in the exact fork without suppressing build and pack rehearsals', () => {
+    for (const [file, name] of [
+      ['release-publish.yml', 'publish'],
+      ['release-vendor-publish.yml', 'publish'],
+      ['node-addon-system-release.yml', 'publish'],
+      ['python-release.yml', 'publish-runtime'],
+      ['python-release.yml', 'publish-sdk'],
+      ['desktop-publish.yml', 'route'],
+      ['docs-pages.yml', 'deploy'],
+    ] as const) {
+      const job = workflowJob(loadWorkflow('.github/workflows/' + file), name)
+      for (const repository of ['Miracle-mrc/deepseek-harness', 'deepseek-harness/deepseek-harness', 'another-owner/deepseek-harness', 'Miracle-mrc/another-repository']) {
+        for (const publish of [false, true]) {
+          expect(evaluateCondition(job.if, {
+            github: { repository, event_name: 'workflow_dispatch' }, inputs: { publish },
+          }), `${file}/${name}: ${repository} publish=${publish}`)
+            .toBe(repository !== 'Miracle-mrc/deepseek-harness' && (!['node-addon-system-release.yml', 'python-release.yml'].includes(file) || publish))
+        }
+      }
+    }
+    for (const [file, names] of [
+      ['release.yml', ['dependencies', 'pack']],
+      ['release-vendor.yml', ['pack']],
+      ['release-publish.yml', ['pack']],
+      ['release-vendor-publish.yml', ['pack']],
+      ['node-addon-system-release.yml', ['matrix', 'build-prebuilds', 'pack']],
+      ['python-release.yml', ['build', 'python-compat', 'validate']],
+      ['docs-pages.yml', ['build']],
+    ] as const) {
+      for (const name of names) {
+        const job = workflowJob(loadWorkflow('.github/workflows/' + file), name)
+        expect(job.if, `${file}/${name}`).toBeUndefined()
+        expect(job['continue-on-error'], `${file}/${name}`).toBeUndefined()
+      }
+    }
+  })
+
+  it('keeps the upstream standby and runner benchmarks off the personal fork', () => {
+    const master = loadWorkflow('.github/workflows/ci-master.yml')
+    for (const [name, eventName, suite] of [
+      ['serial-linux-selfhosted', 'push', ''],
+      ['serial-windows', 'push', ''],
+      ['larger-runner-benchmark', 'workflow_dispatch', 'larger-runner-benchmark'],
+      ['consolidated-runner-benchmark', 'workflow_dispatch', 'consolidated-runner-benchmark'],
+    ] as const) {
+      const job = workflowJob(master, name)
+      if (typeof job.if !== 'string') throw new TypeError(`${name} must guard upstream-only runners`)
+      for (const repository of ['Miracle-mrc/deepseek-harness', 'deepseek-harness/deepseek-harness']) {
+        const selected: unknown = runInNewContext(job.if, {
+          github: { repository, event_name: eventName, ref: 'refs/heads/master' },
+          inputs: { suite },
+        }, { timeout: 1000 })
+        expect(selected, `${name} in ${repository}`).toBe(repository !== 'Miracle-mrc/deepseek-harness')
+      }
+    }
+    expect(workflowJob(master, 'python-runtime').if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/master'")
+    expect(workflowJob(master, 'windows').if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/master'")
   })
 
   it('selects artifact builds only for PR release and API rehearsals', () => {
@@ -295,6 +473,66 @@ describe('CI workflow', () => {
     expect(preparation).toBeGreaterThanOrEqual(0)
     expect(smoke).toBeGreaterThan(preparation)
     expect(steps[preparation]).not.toHaveProperty('continue-on-error', true)
+  })
+
+  it('requires the stalled Git probe case in the blocking native Windows lane', () => {
+    const native = workflowJob(loadWorkflow('.github/workflows/ci-windows.yml'), 'windows-native-tests')
+    if (!Array.isArray(native.steps)) throw new TypeError('Native Windows job must define steps')
+    const probe = native.steps.filter(isRecord).find(step => step.name === 'Verify stalled Git probe on Windows')
+    expect(probe).toMatchObject({
+      shell: 'pwsh',
+      run: [
+        'pnpm exec vitest run',
+        'packages/boot/plugin-market/tests/repository-cache.spec.ts',
+        "-t '^reports a stalled Git version probe as unavailable before initializing a repository$'",
+        '--maxWorkers 1',
+        '--no-file-parallelism',
+        '--testTimeout 90000',
+      ].join(' '),
+    })
+    expect(probe).not.toHaveProperty('if')
+    expect(probe).not.toHaveProperty('continue-on-error')
+    expect(native).not.toHaveProperty('continue-on-error')
+    const verdict = workflowJob(loadWorkflow('.github/workflows/ci-windows.yml'), 'windows-checks-passed')
+    expect(verdict.needs).toContain('windows-native-tests')
+  })
+
+  it('reports the fork Windows ACL, Git, and Node baselines early without suppressing failures or full coverage', () => {
+    const workflow = loadWorkflow('.github/workflows/ci-windows.yml')
+    const native = workflowJob(workflow, 'windows-native-tests')
+    if (!Array.isArray(native.steps)) throw new TypeError('Native Windows job must define steps')
+    const steps = native.steps.filter(isRecord)
+    const probe = steps.findIndex(step => step.name === 'Verify stalled Git probe on Windows')
+    const baseline = steps.findIndex(step => step.name === 'Check fork Windows ACL, Git, and Node baselines')
+    expect(probe).toBeGreaterThanOrEqual(0)
+    expect(baseline).toBe(probe + 1)
+    const step = steps[baseline]
+    expect(step).toMatchObject({
+      if: "github.repository == 'Miracle-mrc/deepseek-harness'",
+      shell: 'pwsh',
+      run: [
+        'pnpm exec vitest run',
+        'packages/sandbox/sandbox-windows-acl/tests/diagnose-script.spec.ts',
+        'packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts',
+        'packages/boot/plugin-manager/tests/git-transport.spec.ts',
+        'packages/ptc-runtime/ptc-runtime-node/tests/runtime.spec.ts',
+        '--maxWorkers 1',
+        '--no-file-parallelism',
+        '--testTimeout 90000',
+        '--retry 0',
+      ].join(' '),
+    })
+    expect(step).not.toHaveProperty('continue-on-error')
+    expect(native).not.toHaveProperty('continue-on-error')
+    expect(native['timeout-minutes']).toBe(60)
+    for (const repository of ['Miracle-mrc/deepseek-harness', 'deepseek-harness/deepseek-harness', 'another-owner/deepseek-harness', 'Miracle-mrc/another-repository']) {
+      expect(evaluateCondition(step?.if, { github: { repository } })).toBe(repository === 'Miracle-mrc/deepseek-harness')
+    }
+    const coverage = workflowJob(workflow, 'windows-coverage')
+    expect(coverage).not.toHaveProperty('continue-on-error')
+    expect(coverage.steps).toContainEqual(expect.objectContaining({ run: 'pnpm run check:ci:coverage' }))
+    expect(workflowJob(workflow, 'windows-checks-passed').needs)
+      .toEqual(['windows-build', 'windows-coverage', 'windows-native-tests'])
   })
 
   it.each(['ci.yml', 'ci-master.yml', 'e2e.yml', 'release.yml', 'release-vendor.yml'])(
@@ -590,7 +828,7 @@ describe('CI workflow', () => {
     expect(report?.run).toContain('Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append')
 
     // serial-windows: master-only standby, self-hosted, non-blocking, lives in ci-master.
-    expect(serialWindows.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/master'")
+    expect(serialWindows.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/master' && github.repository != 'Miracle-mrc/deepseek-harness'")
     expect(serialWindows['runs-on']).toEqual(['self-hosted', 'dsh-win-ci', 'windows'])
     expect(serialWindows.name).toBe('serial / windows (self-hosted standby)')
     // Its store must share the ReFS workspace volume for clone; the install
@@ -624,9 +862,8 @@ describe('CI workflow', () => {
     expect(serialGate!.env).toMatchObject({ DSH_COVERAGE_TEST_TIMEOUT_MS: '90000' })
 
     expect(aggregate.needs).not.toContain('windows')
-    // windows-coverage is temporarily non-blocking while Windows ACP
-    // half-close tests are stabilized; observational stays out too.
-    expect(windowsAggregate.needs).toEqual(['windows-build', 'windows-native-tests'])
+    // Coverage is required; only the explicitly observational steps can warn.
+    expect(windowsAggregate.needs).toEqual(['windows-build', 'windows-coverage', 'windows-native-tests'])
     expect(windowsAggregate.name).toBe('windows checks passed')
     expect(windowsAggregate['runs-on']).toBe(aggregate['runs-on'])
     expect(windowsAggregate.if).toBe(aggregate.if)
@@ -888,13 +1125,13 @@ describe('CI workflow', () => {
       if (!isRecord(job)) throw new TypeError(`${name} must be defined`)
       expect(job.concurrency).toBeUndefined()
       // Standby drills remain post-merge work, but share run cancellation.
-      expect(job.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/master'")
+      expect(job.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/master' && github.repository != 'Miracle-mrc/deepseek-harness'")
     }
 
     // Pin the post-merge runtime, Wine, and standby inventory.
     const NOT_PUSH_REACHABLE = new Set([
-      "github.event_name == 'workflow_dispatch' && inputs.suite == 'larger-runner-benchmark'",
-      "github.event_name == 'workflow_dispatch' && inputs.suite == 'consolidated-runner-benchmark'",
+      "github.event_name == 'workflow_dispatch' && inputs.suite == 'larger-runner-benchmark' && github.repository != 'Miracle-mrc/deepseek-harness'",
+      "github.event_name == 'workflow_dispatch' && inputs.suite == 'consolidated-runner-benchmark' && github.repository != 'Miracle-mrc/deepseek-harness'",
       "github.event_name == 'workflow_dispatch' && inputs.suite == 'ssh-helper'",
     ])
     const pushReachable = Object.entries(workflow.jobs)
@@ -1118,12 +1355,16 @@ describe('Runtime and LLM e2e Blacksmith routing', () => {
       ['node24-macos-arm64', 'macos-latest', 'DSH_CI_FAILOVER_LINUX', 'macos-latest', 'macos-15-xlarge'],
       ['node24-macos-x64', 'macos-15-intel', 'DSH_CI_FAILOVER_LINUX', 'macos-15-intel', 'macos-15-large'],
     ] as const) {
-      for (const ci of [false, true]) {
-        for (const release of [false, true]) {
-          for (const mode of ['', 'selfhosted', 'unexpected', 'blacksmith']) {
-            const vars = { DSH_CI_FAILOVER_LINUX: 'blacksmith', DSH_CI_FAILOVER_WINDOWS: 'blacksmith', [variable]: mode }
-            expect(evaluateRunsOn(build['runs-on'], { inputs: { ci, release }, vars, matrix: { target, runner } }), `${target} ci=${ci} release=${release} mode=${mode}`)
-              .toBe(release ? releaseRunner : ci && mode === 'blacksmith' ? blacksmith : runner)
+      for (const repository of ['Miracle-mrc/deepseek-harness', 'deepseek-harness/deepseek-harness', 'another-owner/deepseek-harness', 'Miracle-mrc/another-repository']) {
+        for (const ci of [false, true]) {
+          for (const release of [false, true]) {
+            for (const mode of ['', 'selfhosted', 'unexpected', 'blacksmith']) {
+              const vars = { DSH_CI_FAILOVER_LINUX: 'blacksmith', DSH_CI_FAILOVER_WINDOWS: 'blacksmith', [variable]: mode }
+              expect(evaluateRunsOn(build['runs-on'], {
+                github: { repository }, inputs: { ci, release }, vars, matrix: { target, runner },
+              }), `${repository} ${target} ci=${ci} release=${release} mode=${mode}`)
+                .toBe(repository === 'Miracle-mrc/deepseek-harness' ? runner : release ? releaseRunner : ci && mode === 'blacksmith' ? blacksmith : runner)
+            }
           }
         }
       }
@@ -1132,11 +1373,15 @@ describe('Runtime and LLM e2e Blacksmith routing', () => {
 
   it.each(['plan', 'sdk-wheel'])('routes runtime %s only for non-release CI', (name) => {
     const job = workflowJob(loadWorkflow('.github/workflows/build-exe-for-python-sdk.yml'), name)
-    for (const ci of [false, true]) {
-      for (const release of [false, true]) {
-        for (const mode of ['', 'selfhosted', 'unexpected', 'blacksmith']) {
-          expect(evaluateRunsOn(job['runs-on'], { inputs: { ci, release }, vars: { DSH_CI_FAILOVER_LINUX: mode } }))
-            .toBe(ci && !release && mode === 'blacksmith' ? 'blacksmith-4vcpu-ubuntu-2404' : 'ubuntu-latest')
+    for (const repository of ['Miracle-mrc/deepseek-harness', 'deepseek-harness/deepseek-harness', 'another-owner/deepseek-harness', 'Miracle-mrc/another-repository']) {
+      for (const ci of [false, true]) {
+        for (const release of [false, true]) {
+          for (const mode of ['', 'selfhosted', 'unexpected', 'blacksmith']) {
+            expect(evaluateRunsOn(job['runs-on'], {
+              github: { repository }, inputs: { ci, release }, vars: { DSH_CI_FAILOVER_LINUX: mode },
+            })).toBe(repository === 'Miracle-mrc/deepseek-harness' ? 'ubuntu-24.04'
+              : ci && !release && mode === 'blacksmith' ? 'blacksmith-4vcpu-ubuntu-2404' : 'ubuntu-latest')
+          }
         }
       }
     }
@@ -1157,6 +1402,45 @@ describe('bubblewrap preparation script', () => {
 })
 
 describe('DeepSeek e2e workflow', () => {
+  it('requires explicit fork opt-in and trusted events, with a mandatory secret preflight once enabled', () => {
+    const workflow = loadWorkflow('.github/workflows/e2e.yml')
+    const job = workflowJob(workflow, 'e2e')
+    if (!Array.isArray(job.steps)) throw new TypeError('DeepSeek e2e must define steps')
+    expect(workflow.on).not.toHaveProperty('pull_request_target')
+    expect(job['continue-on-error']).toBeUndefined()
+    for (const repository of ['Miracle-mrc/deepseek-harness', 'deepseek-harness/deepseek-harness', 'another-owner/deepseek-harness', 'Miracle-mrc/another-repository']) {
+      for (const enabled of ['', 'false', 'true', 'unexpected']) {
+        for (const eventName of ['pull_request', 'push', 'workflow_dispatch', 'schedule']) {
+          for (const fork of [false, true]) {
+            for (const login of ['maintainer', 'dependabot[bot]']) {
+              expect(evaluateCondition(job.if, {
+                github: { repository, event_name: eventName, event: { pull_request: { head: { repo: { fork } }, user: { login } } } },
+                vars: { DSH_FORK_LIVE_API_ENABLED: enabled },
+              }), `${repository} enabled=${enabled} ${eventName} fork=${fork} author=${login}`)
+                .toBe((repository !== 'Miracle-mrc/deepseek-harness' || enabled === 'true')
+                  && (eventName !== 'pull_request' || (!fork && login !== 'dependabot[bot]')))
+            }
+          }
+        }
+      }
+    }
+    const preflight = job.steps.filter(isRecord).find(step => step.name === 'Preflight (require DEEPSEEK_API_KEY)')
+    expect(preflight).toMatchObject({ env: { DEEPSEEK_API_KEY: '${{ secrets.DEEPSEEK_API_KEY_EXTERNAL }}' } })
+    expect(preflight).not.toHaveProperty('if')
+    expect(preflight).not.toHaveProperty('continue-on-error')
+    if (typeof preflight?.run !== 'string') throw new TypeError('Enabled e2e requires a secret preflight')
+    if (process.platform !== 'win32') {
+      const missing = spawnSync('bash', ['-c', preflight.run], { encoding: 'utf8', timeout: 10_000, env: { ...process.env, DEEPSEEK_API_KEY: '' } })
+      expect(missing.signal).toBeNull()
+      expect(missing.status).toBe(1)
+      expect(missing.stdout).toContain('DEEPSEEK_API_KEY is empty')
+      const present = spawnSync('bash', ['-c', preflight.run], { encoding: 'utf8', timeout: 10_000, env: { ...process.env, DEEPSEEK_API_KEY: 'test-only-placeholder' } })
+      expect(present.signal).toBeNull()
+      expect(present.status).toBe(0)
+      expect(present.stdout).not.toContain('test-only-placeholder')
+    }
+  })
+
   it('prepares bubblewrap from the pinned payload without a package transaction', () => {
     const workflow = loadWorkflow('.github/workflows/e2e.yml')
     const e2e = workflowJob(workflow, 'e2e')
@@ -1227,13 +1511,13 @@ describe('Python release workflows', () => {
     expect(authorize.run).toContain('[ "$REPOSITORY" = "$PYPI_PUBLISHER_REPOSITORY" ]')
     expect(validateSteps).toContain('100000000')
     expect(publishRuntime).toMatchObject({
-      if: "github.event_name == 'workflow_dispatch' && inputs.publish",
+      if: "github.repository != 'Miracle-mrc/deepseek-harness' && github.event_name == 'workflow_dispatch' && inputs.publish",
       needs: 'validate',
       environment: 'pypi-runtime',
       permissions: { contents: 'read', 'id-token': 'write' },
     })
     expect(publishSdk).toMatchObject({
-      if: "github.event_name == 'workflow_dispatch' && inputs.publish",
+      if: "github.repository != 'Miracle-mrc/deepseek-harness' && github.event_name == 'workflow_dispatch' && inputs.publish",
       needs: ['validate', 'publish-runtime'],
       environment: 'pypi',
       permissions: { contents: 'read', 'id-token': 'write' },
@@ -1291,6 +1575,7 @@ describe('Python release workflows', () => {
     }
     expect(call.inputs).toHaveProperty('targets')
     expect(call.inputs).toMatchObject({
+      source_ref: { type: 'string', required: false, default: '' },
       ci: { type: 'boolean', default: false },
       release: { type: 'boolean', default: false },
     })
@@ -1359,6 +1644,94 @@ describe('Python release workflows', () => {
     expect(JSON.stringify(installedRealApiWindows)).toContain('--scenario sdk-live --installed-wheel')
     expect(manylinuxSmoke).toMatchObject({ if: "runner.os == 'Linux'" })
     expect(JSON.stringify(manylinuxSmoke)).toContain('-e DSH_TELEMETRY_DISABLED')
+    for (const step of [cleanVenvPosix, cleanVenvWindows, manylinuxSmoke]) {
+      if (!isRecord(step) || typeof step.run !== 'string') throw new TypeError('Local wheel installation must define a command')
+      expect(step.run).toContain('-m pip install --no-index ')
+      expect(step.run).toContain('pydantic>=2.12,<3')
+      expect(step.run).toContain('SDK_WHEEL')
+      expect(step.run).toContain('RUNTIME_WHEEL')
+    }
+  })
+
+  it('builds all native wheel artifacts from one explicit source commit without persisting credentials', () => {
+    const workflow = loadWorkflow('.github/workflows/build-exe-for-python-sdk.yml')
+    for (const name of ['plan', 'sdk-wheel', 'build']) {
+      const job = workflowJob(workflow, name)
+      if (!Array.isArray(job.steps)) throw new TypeError('Native wheel builder must define checkout steps')
+      const checkouts = job.steps.filter(isRecord).filter(step => String(step.uses).startsWith('actions/checkout@'))
+      expect(checkouts).toHaveLength(1)
+      expect(checkouts[0]).toMatchObject({ with: {
+        ref: '${{ inputs.source_ref || github.sha }}', 'persist-credentials': false,
+      } })
+      for (const sourceRef of ['', 'selected-tag-commit']) {
+        expect(evaluateRunsOn('${{ inputs.source_ref || github.sha }}', {
+          inputs: { source_ref: sourceRef }, github: { sha: 'triggering-commit' },
+        })).toBe(sourceRef || 'triggering-commit')
+      }
+    }
+  })
+
+  it('makes only the personal fork live API checks optional without a configured key', () => {
+    const workflow = loadWorkflow('.github/workflows/build-exe-for-python-sdk.yml')
+    const build = workflowJob(workflow, 'build')
+    if (!isRecord(build.env) || !Array.isArray(build.steps)) throw new TypeError('Python wheel CI must declare its live API selection')
+    const enabled = build.env.DSH_PYTHON_REAL_API_ENABLED
+    expect(enabled).toBe("${{ github.repository != 'Miracle-mrc/deepseek-harness' || secrets.DEEPSEEK_API_KEY_EXTERNAL != '' }}")
+    if (typeof enabled !== 'string') throw new TypeError('The live API selection must be an expression')
+    const steps = build.steps.filter(isRecord)
+    const cases = [
+      ['Miracle-mrc/deepseek-harness', '', true, 'push', false, 'maintainer', false],
+      ['Miracle-mrc/deepseek-harness', 'configured', true, 'push', false, 'maintainer', true],
+      ['deepseek-harness/deepseek-harness', '', true, 'push', false, 'maintainer', true],
+      ['another-owner/deepseek-harness', '', true, 'push', false, 'maintainer', true],
+      ['Miracle-mrc/another-repository', '', true, 'push', false, 'maintainer', true],
+      ['Miracle-mrc/deepseek-harness', '', true, 'pull_request', false, 'maintainer', false],
+      ['Miracle-mrc/deepseek-harness', 'configured', true, 'pull_request', false, 'maintainer', true],
+      ['deepseek-harness/deepseek-harness', '', true, 'pull_request', false, 'maintainer', true],
+      ['Miracle-mrc/deepseek-harness', 'configured', true, 'pull_request', true, 'maintainer', false],
+      ['deepseek-harness/deepseek-harness', 'configured', true, 'pull_request', true, 'maintainer', false],
+      ['deepseek-harness/deepseek-harness', 'configured', true, 'pull_request', false, 'dependabot[bot]', false],
+      ['Miracle-mrc/deepseek-harness', 'configured', true, 'pull_request', false, 'dependabot[bot]', false],
+      ['Miracle-mrc/deepseek-harness', 'configured', false, 'workflow_dispatch', false, 'maintainer', false],
+      ['deepseek-harness/deepseek-harness', '', false, 'workflow_dispatch', false, 'maintainer', false],
+    ] as const
+    for (const [repository, key, ci, eventName, fork, login, expected] of cases) {
+      const github = { repository, event_name: eventName, event: { pull_request: { head: { repo: { fork } }, user: { login } } } }
+      const selection: unknown = runInNewContext(enabled.trim().slice(3, -2), {
+        github, secrets: { DEEPSEEK_API_KEY_EXTERNAL: key },
+      }, { timeout: 1000 })
+      const env = { DSH_PYTHON_REAL_API_ENABLED: String(selection) }
+      for (const os of ['Linux', 'macOS', 'Windows']) {
+        const context = { github, env, inputs: { ci }, runner: { os } }
+        for (const platform of ['POSIX', 'Windows']) {
+          const selectedPlatform = (os === 'Windows') === (platform === 'Windows')
+          for (const name of ['Preflight installed-wheel real API test', 'Run installed-wheel real API black-box test']) {
+            const step = steps.find(candidate => candidate.name === `${name} (${platform})`)
+            if (typeof step?.if !== 'string') throw new TypeError(`${name} must select trusted CI events`)
+            expect(step['continue-on-error']).toBeUndefined()
+            expect(runInNewContext(step.if, context, { timeout: 1000 }), `${repository} key=${key !== ''} ${eventName} ${os} ${name}`)
+              .toBe(expected && selectedPlatform)
+          }
+        }
+        const notice = steps.find(step => step.name === 'Report keyless fork validation')
+        if (typeof notice?.if !== 'string') throw new TypeError('Keyless fork validation must report skipped live checks')
+        expect(runInNewContext(notice.if, context, { timeout: 1000 })).toBe(ci && repository === 'Miracle-mrc/deepseek-harness' && key === '')
+      }
+    }
+    for (const platform of ['POSIX', 'Windows']) {
+      const preflight = steps.find(step => step.name === `Preflight installed-wheel real API test (${platform})`)
+      expect(preflight?.run).toContain('DEEPSEEK_API_KEY_EXTERNAL is empty')
+      expect(preflight?.run).toContain(platform === 'POSIX' ? 'exit 1' : 'throw ')
+      const keyless = steps.find(step => step.name === `Run installed-wheel keyless black-box tests (${platform})`)
+      expect(keyless?.if).toBe(platform === 'POSIX' ? "runner.os != 'Windows'" : "runner.os == 'Windows'")
+      expect(keyless?.['continue-on-error']).toBeUndefined()
+    }
+    expect(build).not.toHaveProperty('if')
+    expect(build).not.toHaveProperty('continue-on-error')
+    expect(steps.find(step => step.name === 'Build single-exe')).not.toHaveProperty('if')
+    expect(steps.find(step => step.name === 'Build release-shaped runtime wheel')).not.toHaveProperty('if')
+    expect(steps.find(step => step.name === 'Run wheel in a manylinux 2.28 container')?.if).toBe("runner.os == 'Linux'")
+    expect(steps.find(step => step.name === 'Check macOS payload architecture and deployment target')?.if).toBe("runner.os == 'macOS'")
   })
 
   it('uses the shared macOS deployment-target check in GitLab', () => {
@@ -1414,6 +1787,37 @@ describe('Python release workflows', () => {
 })
 
 describe('Weighted approval workflow', () => {
+  it('skips the fork publisher and review relay while retaining event filters in other repositories', () => {
+    const publisher = workflowJob(loadWorkflow('.github/workflows/weighted-approval.yml'), 'publish-status')
+    const relay = workflowJob(loadWorkflow('.github/workflows/weighted-approval-review-event.yml'), 'record-review-event')
+    for (const repository of ['Miracle-mrc/deepseek-harness', 'deepseek-harness/deepseek-harness', 'another-owner/deepseek-harness', 'Miracle-mrc/another-repository']) {
+      for (const [eventName, state, conclusion, issuePr, body, previous, eligible] of [
+        ['pull_request_target', 'open', '', true, '', '', true],
+        ['pull_request_target', 'closed', '', true, '', '', false],
+        ['workflow_run', 'open', 'success', true, '', '', true],
+        ['workflow_run', 'open', 'failure', true, '', '', false],
+        ['workflow_run', 'open', 'skipped', true, '', '', false],
+        ['issue_comment', 'open', '', true, '/delegate @reviewer', '', true],
+        ['issue_comment', 'open', '', true, '', '/delegate @reviewer', true],
+        ['issue_comment', 'open', '', true, 'ordinary comment', '', false],
+        ['issue_comment', 'closed', '', true, '/delegate @reviewer', '', false],
+        ['issue_comment', 'open', '', false, '/delegate @reviewer', '', false],
+      ] as const) {
+        expect(evaluateCondition(publisher.if, {
+          github: { repository, event_name: eventName, event: {
+            pull_request: { state }, workflow_run: { conclusion }, issue: { state, pull_request: issuePr },
+            comment: { body }, changes: { body: { from: previous } },
+          } },
+          contains: (value: string, fragment: string) => value.includes(fragment),
+        })).toBe(repository !== 'Miracle-mrc/deepseek-harness' && eligible)
+      }
+      for (const state of ['open', 'closed']) {
+        expect(evaluateCondition(relay.if, { github: { repository, event: { pull_request: { state } } } }))
+          .toBe(repository !== 'Miracle-mrc/deepseek-harness' && state === 'open')
+      }
+    }
+  })
+
   it('publishes from the trusted default branch after pull request and review updates', () => {
     const publisher = loadWorkflow('.github/workflows/weighted-approval.yml')
     const reviewEvent = loadWorkflow('.github/workflows/weighted-approval-review-event.yml')
@@ -1453,7 +1857,8 @@ describe('Weighted approval workflow', () => {
       'cancel-in-progress': false,
     })
     expect(job).toMatchObject({
-      if: "(github.event_name != 'pull_request_target' || github.event.pull_request.state == 'open') && "
+      if: "github.repository != 'Miracle-mrc/deepseek-harness' && "
+        + "(github.event_name != 'pull_request_target' || github.event.pull_request.state == 'open') && "
         + "(github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') && "
         + "(github.event_name != 'issue_comment' || (github.event.issue.pull_request && github.event.issue.state == 'open' &&\n"
         + "  (contains(github.event.comment.body, '/delegate') || contains(github.event.changes.body.from, '/delegate'))))",
@@ -1518,7 +1923,7 @@ describe('Weighted approval workflow', () => {
       run: 'node .github/review-ownership/check-approval.mjs',
     })
     expect(recordJob).toMatchObject({
-      if: "github.event.pull_request.state == 'open'",
+      if: "github.repository != 'Miracle-mrc/deepseek-harness' && github.event.pull_request.state == 'open'",
       name: 'record weighted approval review event',
       'runs-on': 'ubuntu-latest',
       'timeout-minutes': 2,
@@ -1584,7 +1989,7 @@ describe('Issue lifecycle workflow', () => {
     expect(preflightStep?.run).toContain('if [ -f .github/issue-management/selective-preflight.json ]; then')
     expect(preflightStep?.run).toContain('node .github/issue-management/policy.mjs pr-preflight')
     expect(preflightStep?.if).toBeUndefined()
-    expect(policyJob.if).toBeUndefined()
+    expect(policyJob.if).toBe("github.repository != 'Miracle-mrc/deepseek-harness'")
     expect(validateStep?.if).toBe("${{ steps.preflight.outputs.legacy-automated != 'true' }}")
 
     expect(tokenStep).toMatchObject({
@@ -1746,6 +2151,11 @@ function loadWorkflow(path: string): Record<string, unknown> {
   return workflow
 }
 
+function evaluateCondition(condition: unknown, context: Record<string, unknown>): unknown {
+  if (typeof condition !== 'string') throw new TypeError('Workflow condition must be a string')
+  return runInNewContext(condition.trim().replace(/^\$\{\{\s*|\s*\}\}$/g, ''), context, { timeout: 1000 })
+}
+
 function nodeStepSource(job: Record<string, unknown>, id: string): string {
   if (!Array.isArray(job.steps)) throw new Error('Node workflow job must define steps')
   const step: unknown = job.steps.find(value => isRecord(value) && value.id === id)
@@ -1784,7 +2194,9 @@ describe('Policy workflow shells', () => {
         if (!isRecord(job) || !Array.isArray(job.steps)) continue
         for (const step of job.steps) {
           if (!isRecord(step) || typeof step.run !== 'string') continue
-          const parsed = spawnSync('bash', ['-n'], { input: step.run, encoding: 'utf8' })
+          const parsed = spawnSync('bash', ['-n'], { input: step.run, encoding: 'utf8', timeout: 10_000 })
+          expect(parsed.signal).toBeNull()
+          expect(parsed.error).toBeUndefined()
           expect(`${String(step.name ?? step.id)}: ${parsed.status}: ${parsed.stderr}`).toBe(`${String(step.name ?? step.id)}: 0: `)
         }
       }

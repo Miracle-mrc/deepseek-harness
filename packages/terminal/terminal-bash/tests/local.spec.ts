@@ -187,13 +187,16 @@ describe.skipIf(process.platform === 'win32')('terminal-bash real shell', () => 
     })
     const created = await ctx.terminals.spawn(agent, { type: 'shell' })
     const readerPidFile = join(root, 'tty-reader.pid')
+    const ready = 'WAITING'
+    const command = `bash -c 'exec </dev/tty; printf "%s" "$BASHPID" > "$1"; printf "WAIT%s\\n" ING; read -r answer; printf "ANSWER=%s\\n" "$answer"' dsh "${readerPidFile}"`
+    expect(command).not.toContain(ready)
 
     const waiting = ctx.terminals.startSend(agent, created.sessionId, {
-      text: `bash -c 'exec </dev/tty; printf "%s" "$BASHPID" > "$1"; printf "WAITING\\n"; read -r answer; printf "ANSWER=%s\\n" "$answer"' dsh "${readerPidFile}"`,
+      text: command,
       submit: true,
     })
-    await waitForOutput(waiting, 'WAITING')
     const result = await waiting.done
+    expect(result.viewport.split('\n')).toContain(ready)
     const readerPid = Number(readFileSync(readerPidFile, 'utf8'))
     expect(readerPid).toBeGreaterThan(0)
     expect(result.waitReason).toBe(canReadLinuxProcessSyscall(readerPid) ? 'stdin_read' : 'inferred_idle')

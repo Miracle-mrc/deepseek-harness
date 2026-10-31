@@ -21,6 +21,7 @@ permissions:
 
 jobs:
   route:
+    if: github.repository != 'Miracle-mrc/deepseek-harness'
     runs-on: ubuntu-latest
     outputs:
       selection: ${{ steps.route.outputs.selection }}

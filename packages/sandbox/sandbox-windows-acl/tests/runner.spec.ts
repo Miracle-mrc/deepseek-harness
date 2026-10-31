@@ -10,7 +10,7 @@ import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wri
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vitest'
 
 import { resolvePwshPath } from '@deepseek-ai/dsh-pwsh-local'
 import { AclWriteGrant, tempWriteSid, workspaceWriteSid } from '../src/index.ts'
@@ -446,14 +446,26 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
     // FILE_DELETE_CHILD right, which the capability intersection never reaches.
     // The grant denies that right, leaving the capability DELETE bit as the
     // only delete authority inside a granted root.
+    const createGrant = (sid: string): AclWriteGrant => {
+      const grant = AclWriteGrant.create(sid)
+      onTestFinished(() => { grant.dispose() })
+      return grant
+    }
+    const nestedParent = (root: string): string => {
+      const child = join(root, 'inherited-child')
+      mkdirSync(child)
+      return child
+    }
     const otherWorkspace = join(scratchRoot, 'other-workspace')
     const otherTemp = join(scratchRoot, 'other-temp')
     mkdirSync(otherWorkspace)
     mkdirSync(otherTemp)
+    const otherWorkChild = nestedParent(otherWorkspace)
+    const otherTempChild = nestedParent(otherTemp)
     const otherWorkspaceSid = workspaceWriteSid(otherWorkspace)
     const otherTempSid = tempWriteSid(otherTemp)
-    const otherWorkspaceGrant = AclWriteGrant.create(otherWorkspaceSid)
-    const otherTempGrant = AclWriteGrant.create(otherTempSid)
+    const otherWorkspaceGrant = createGrant(otherWorkspaceSid)
+    const otherTempGrant = createGrant(otherTempSid)
     otherWorkspaceGrant.add(otherWorkspace, true)
     otherTempGrant.add(otherTemp)
     // Session A's own roots, granted the same way, run through the runner.
@@ -461,46 +473,50 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
     const ownTemp = join(scratchRoot, 'own-temp')
     mkdirSync(ownWorkspace)
     mkdirSync(ownTemp)
+    const ownWorkChild = nestedParent(ownWorkspace)
+    const ownTempChild = nestedParent(ownTemp)
     const ownWorkspaceSid = workspaceWriteSid(ownWorkspace)
     const ownTempSid = tempWriteSid(ownTemp)
-    const ownWorkspaceGrant = AclWriteGrant.create(ownWorkspaceSid)
-    const ownTempGrant = AclWriteGrant.create(ownTempSid)
+    const ownWorkspaceGrant = createGrant(ownWorkspaceSid)
+    const ownTempGrant = createGrant(ownTempSid)
     ownWorkspaceGrant.add(ownWorkspace, true)
     ownTempGrant.add(ownTemp)
-    try {
-      const victims = {
-        ownWork: join(ownWorkspace, 'victim.txt'),
-        otherWork: join(otherWorkspace, 'victim.txt'),
-        ownTemp: join(ownTemp, 'victim.txt'),
-        otherTemp: join(otherTemp, 'victim.txt'),
-      }
-      for (const path of Object.values(victims)) writeFileSync(path, 'delete me')
-      const probe = [
-        "$ErrorActionPreference='SilentlyContinue';",
-        ...Object.entries(victims).map(([name, path]) =>
-          `try{[System.IO.File]::Delete('${path}');'${name}: DELETED'}catch{'${name}: DENIED'};`),
-      ].join('')
-      const result = runRunner([
-        '--workspace', ownWorkspace, '--temp', ownTemp, '--mode', 'workspace-write',
-        '--write-sid', ownWorkspaceSid, '--temp-write-sid', ownTempSid,
-        '--', 'pwsh', '/NoLogo', '/NonInteractive', '/NoProfile', '/Command', probe,
-      ])
-      expect(result.status, `stderr: ${result.stderr}`).toBe(0)
-      expect(result.stdout).toContain('ownWork: DELETED')
-      expect(result.stdout).toContain('ownTemp: DELETED')
-      expect(result.stdout).toContain('otherWork: DENIED')
-      expect(result.stdout).toContain('otherTemp: DENIED')
-      expect(existsSync(victims.otherWork)).toBe(true)
-      expect(existsSync(victims.otherTemp)).toBe(true)
-      expect(existsSync(victims.ownWork)).toBe(false)
-      expect(existsSync(victims.ownTemp)).toBe(false)
-    } finally {
-      ownWorkspaceGrant.dispose()
-      ownTempGrant.dispose()
-      otherWorkspaceGrant.dispose()
-      otherTempGrant.dispose()
-      rmSync(ownTemp, { recursive: true, force: true })
-      rmSync(otherTemp, { recursive: true, force: true })
+    const victims = {
+      ownWork: join(ownWorkspace, 'victim.txt'),
+      otherWork: join(otherWorkspace, 'victim.txt'),
+      ownTemp: join(ownTemp, 'victim.txt'),
+      otherTemp: join(otherTemp, 'victim.txt'),
+      ownWorkInherited: join(ownWorkChild, 'victim.txt'),
+      otherWorkInherited: join(otherWorkChild, 'victim.txt'),
+      ownTempInherited: join(ownTempChild, 'victim.txt'),
+      otherTempInherited: join(otherTempChild, 'victim.txt'),
+    }
+    for (const path of Object.values(victims)) writeFileSync(path, 'delete me')
+    const probe = [
+      "$ErrorActionPreference='SilentlyContinue';",
+      ...Object.entries(victims).map(([name, path]) =>
+        `try{[System.IO.File]::Delete('${path}');'${name}: DELETED'}catch{'${name}: DENIED'};`),
+    ].join('')
+    const result = runRunner([
+      '--workspace', ownWorkspace, '--temp', ownTemp, '--mode', 'workspace-write',
+      '--write-sid', ownWorkspaceSid, '--temp-write-sid', ownTempSid,
+      '--', 'pwsh', '/NoLogo', '/NonInteractive', '/NoProfile', '/Command', probe,
+    ])
+    expect(result.error, `stderr: ${result.stderr}`).toBeUndefined()
+    expect(result.signal, `stderr: ${result.stderr}`).toBeNull()
+    expect(result.status, `stderr: ${result.stderr}`).toBe(0)
+    expect(result.stdout).toContain('ownWork: DELETED')
+    expect(result.stdout).toContain('ownTemp: DELETED')
+    expect(result.stdout).toContain('otherWork: DENIED')
+    expect(result.stdout).toContain('otherTemp: DENIED')
+    expect(existsSync(victims.otherWork)).toBe(true)
+    expect(existsSync(victims.otherTemp)).toBe(true)
+    expect(existsSync(victims.ownWork)).toBe(false)
+    expect(existsSync(victims.ownTemp)).toBe(false)
+    for (const [name, path] of Object.entries(victims)) {
+      const own = name.startsWith('own')
+      expect(result.stdout, `victim: ${name}`).toContain(`${name}: ${own ? 'DELETED' : 'DENIED'}`)
+      expect(existsSync(path), `victim: ${name}`).toBe(!own)
     }
   }, 60_000)
 
@@ -539,29 +555,111 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
     writeFileSync(join(granted, 'file.txt'), 'x')
     writeFileSync(join(child, 'deep.txt'), 'x')
     const grant = AclWriteGrant.create(workspaceWriteSid(granted))
-    grant.add(granted, true)
     try {
+      const quote = (path: string): string => `'${path.replaceAll("'", "''")}'`
       const probe = `
-$ErrorActionPreference='SilentlyContinue'
+$ErrorActionPreference='Stop'
 Add-Type -Namespace P -Name F -MemberDefinition @'
 [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode, EntryPoint="CreateFileW")]
-public static extern IntPtr CreateFileW(string n, uint a, uint s, IntPtr sa, uint d, uint f, IntPtr t);
-[DllImport("kernel32.dll", SetLastError=true)]
-public static extern bool CloseHandle(IntPtr h);
-'@ | Out-Null
-function TryOpen([string]$label, [string]$path) {
-  $h = [P.F]::CreateFileW($path, 0x10000000, 7, [IntPtr]::Zero, 3, 0x02000000, [IntPtr]::Zero)
-  if ($h -eq [IntPtr]::new(-1)) { "$($label): DENIED" } else { [void][P.F]::CloseHandle($h); "$($label): OK" }
+private static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(
+  string n, uint a, uint s, IntPtr sa, uint d, uint f, IntPtr t);
+public static bool CanOpen(string path) {
+  using (var handle = CreateFileW(path, 0x10000000, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero)) {
+    if (!handle.IsInvalid) { return true; }
+    int error = Marshal.GetLastWin32Error();
+    if (error == 5) { return false; }
+    throw new System.ComponentModel.Win32Exception(error, "FullControl access check: " + path);
+  }
 }
-TryOpen 'FILE' '${join(granted, 'file.txt')}'
-TryOpen 'NESTED-FILE' '${join(child, 'deep.txt')}'
-TryOpen 'DIRECTORY' '${child}'
+[StructLayout(LayoutKind.Sequential)]
+public struct Luid { public uint Low; public int High; }
+[DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+private static extern bool LookupPrivilegeValueW(string system, string name, out Luid id);
+[DllImport("advapi32.dll", SetLastError=true)]
+private static extern bool GetTokenInformation(IntPtr token, int infoClass, IntPtr info, uint length, out uint returned);
+public static bool PrivilegeEnabled(IntPtr token, string name) {
+  Luid id;
+  if (!LookupPrivilegeValueW(null, name, out id)) {
+    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), name);
+  }
+  uint length;
+  GetTokenInformation(token, 3, IntPtr.Zero, 0, out length);
+  if (length < 4) {
+    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), name);
+  }
+  IntPtr buffer = Marshal.AllocHGlobal(checked((int)length));
+  try {
+    if (!GetTokenInformation(token, 3, buffer, length, out length)) {
+      throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), name);
+    }
+    int count = Marshal.ReadInt32(buffer);
+    for (int i = 0; i < count; i++) {
+      IntPtr entry = IntPtr.Add(buffer, 4 + i * 12);
+      if (unchecked((uint)Marshal.ReadInt32(entry)) == id.Low && Marshal.ReadInt32(entry, 4) == id.High) {
+        return (Marshal.ReadInt32(entry, 8) & 2) != 0;
+      }
+    }
+    return false;
+  } finally { Marshal.FreeHGlobal(buffer); }
+}
+'@ | Out-Null
+$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = [System.Security.Principal.WindowsPrincipal]::new($identity)
+$diagnostics = @{
+  caller = @{
+    sid = $identity.User.Value
+    administratorEnabled = $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+    backupEnabled = [P.F]::PrivilegeEnabled($identity.Token, 'SeBackupPrivilege')
+    restoreEnabled = [P.F]::PrivilegeEnabled($identity.Token, 'SeRestorePrivilege')
+    takeOwnershipEnabled = [P.F]::PrivilegeEnabled($identity.Token, 'SeTakeOwnershipPrivilege')
+  }
+  objects = @(@(${quote(granted)}, ${quote(child)}, ${quote(join(granted, 'file.txt'))}, ${quote(join(child, 'deep.txt'))}) | ForEach-Object {
+    $path = $_
+    $acl = Get-Acl -LiteralPath $path
+    $index = 0
+    @{
+      path = $path
+      owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+      protected = $acl.AreAccessRulesProtected
+      sddl = $acl.Sddl
+      entries = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | ForEach-Object {
+        @{
+          index = $index; sid = $_.IdentityReference.Value; rights = [int]$_.FileSystemRights
+          type = [string]$_.AccessControlType; inherited = $_.IsInherited
+          inheritance = [int]$_.InheritanceFlags; propagation = [int]$_.PropagationFlags
+        }
+        $index++
+      })
+    }
+  })
+}
+'ACL_DIAGNOSTICS ' + ($diagnostics | ConvertTo-Json -Depth 6 -Compress)
+function TryOpen([string]$label, [string]$path) {
+  if ([P.F]::CanOpen($path)) { "$($label): OK" } else { "$($label): DENIED" }
+}
+TryOpen 'FILE' ${quote(join(granted, 'file.txt'))}
+TryOpen 'NESTED-FILE' ${quote(join(child, 'deep.txt'))}
+TryOpen 'DIRECTORY' ${quote(child)}
 `
-      const result = spawnSync('pwsh', ['-NoLogo', '-NonInteractive', '-NoProfile', '-Command', probe], { encoding: 'utf8', timeout: 60_000 })
-      expect(result.status, `stderr: ${result.stderr}`).toBe(0)
-      expect(result.stdout).toContain('FILE: OK')
-      expect(result.stdout).toContain('NESTED-FILE: OK')
-      expect(result.stdout).toContain('DIRECTORY: DENIED')
+      const runProbe = () => spawnSync('pwsh', ['-NoLogo', '-NonInteractive', '-NoProfile', '-Command', probe], { encoding: 'utf8', timeout: 60_000 })
+      const before = runProbe()
+      const beforeDetails = `before grant:\n${before.stdout}\nstderr: ${before.stderr}`
+      expect(before.error, beforeDetails).toBeUndefined()
+      expect(before.signal, beforeDetails).toBeNull()
+      expect(before.status, beforeDetails).toBe(0)
+      expect(before.stdout, beforeDetails).toContain('FILE: OK')
+      expect(before.stdout, beforeDetails).toContain('NESTED-FILE: OK')
+      expect(before.stdout, beforeDetails).toContain('DIRECTORY: OK')
+
+      grant.add(granted, true)
+      const result = runProbe()
+      const details = `${beforeDetails}\nafter grant:\n${result.stdout}\nstderr: ${result.stderr}`
+      expect(result.error, details).toBeUndefined()
+      expect(result.signal, details).toBeNull()
+      expect(result.status, details).toBe(0)
+      expect(result.stdout, details).toContain('FILE: OK')
+      expect(result.stdout, details).toContain('NESTED-FILE: OK')
+      expect(result.stdout, details).toContain('DIRECTORY: DENIED')
     } finally {
       grant.dispose()
       rmSync(granted, { recursive: true, force: true })

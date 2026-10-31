@@ -127,7 +127,7 @@ export function withPathLock<T>(api: Win32Bindings, path: string, action: () => 
 }
 
 /**
- * Read the directory's current explicit DACL and mandatory label via
+ * Read the directory's current DACL and mandatory label via
  * GetNamedSecurityInfoW.
  * Allocation contract (the POC's RevokeAccess, minus its missing checks): the
  * returned ACL pointer sits INSIDE the security descriptor allocation — only
@@ -136,7 +136,7 @@ export function withPathLock<T>(api: Win32Bindings, path: string, action: () => 
  * corrupts the heap (verified the hard way).
  * @param api - the binding table.
  * @param path - the directory whose DACL and label are read.
- * @returns the current explicit DACL and label ACL (null when the directory carries none) plus their owning descriptor.
+ * @returns the current DACL and label ACL (null when the directory carries none) plus their owning descriptor.
  */
 function readCurrentSecurity(
   api: Win32Bindings,
@@ -153,6 +153,52 @@ function readCurrentSecurity(
   )
   if (readResult !== abi.ERROR_SUCCESS) throwWin32(api, 'GetNamedSecurityInfoW', readResult, path)
   return { oldAcl: decodePtr(daclSlot), labelAcl: decodePtr(saclSlot), descriptor: decodePtr(descriptorSlot) }
+}
+
+/** Read the inheritance control bits of an owned security descriptor. */
+function descriptorControl(api: Win32Bindings, descriptor: NativePtr, path: string): number {
+  const control = Buffer.alloc(2)
+  const revision = Buffer.alloc(4)
+  if (api.getSecurityDescriptorControl(descriptor, control, revision) === 0) {
+    throwLastError(api, 'GetSecurityDescriptorControl', path)
+  }
+  return control.readUInt16LE()
+}
+
+/** Convert legacy inheritance before a new deny can turn inherited allows into explicit child ACEs. */
+function readGrantSecurity(api: Win32Bindings, path: string): ReturnType<typeof readCurrentSecurity> {
+  const initial = readCurrentSecurity(api, path)
+  if (initial.descriptor === null || initial.oldAcl === null) return initial
+  let originalControl: number
+  try {
+    originalControl = descriptorControl(api, initial.descriptor, path)
+    if ((originalControl & abi.SE_DACL_AUTO_INHERITED) !== 0) return initial
+    const result = api.setNamedSecurityInfoW(
+      path, abi.SE_FILE_OBJECT, abi.DACL_SECURITY_INFORMATION, null, null, initial.oldAcl, null,
+    )
+    if (result !== abi.ERROR_SUCCESS) throwWin32(api, 'SetNamedSecurityInfoW', result, `normalize DACL(${path})`)
+  } catch (error) {
+    api.localFree(initial.descriptor)
+    throw error
+  }
+  if (!isNullPtr(api.localFree(initial.descriptor))) throwLastError(api, 'LocalFree', `normalize DACL(${path}) descriptor`)
+  const current = readCurrentSecurity(api, path)
+  try {
+    if (current.descriptor === null || current.oldAcl === null) {
+      throw new Error(`DACL normalization lost the security descriptor or DACL: ${path}`)
+    }
+    const control = descriptorControl(api, current.descriptor, path)
+    if ((control & abi.SE_DACL_AUTO_INHERITED) === 0) {
+      throw new Error(`DACL normalization did not establish automatic inheritance: ${path}`)
+    }
+    if ((control & abi.SE_DACL_PROTECTED) !== (originalControl & abi.SE_DACL_PROTECTED)) {
+      throw new Error(`DACL normalization changed inheritance protection: ${path}`)
+    }
+    return current
+  } catch (error) {
+    if (current.descriptor !== null) api.localFree(current.descriptor)
+    throw error
+  }
 }
 
 /**
@@ -382,7 +428,7 @@ export function grantWrite(
   worldSidPtr: NativePtr,
 ): void {
   withPathLock(api, path, () => {
-    const { oldAcl, labelAcl, descriptor } = readCurrentSecurity(api, path)
+    const { oldAcl, labelAcl, descriptor } = readGrantSecurity(api, path)
     if (oldAcl !== null && labelAcl !== null
       && hasExactGrant(oldAcl, sidPtr) && hasExactDeny(oldAcl, worldSidPtr)
       && hasExactLabel(labelAcl, lowLabelSidPtr)) {

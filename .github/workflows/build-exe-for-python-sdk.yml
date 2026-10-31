@@ -6,11 +6,16 @@ name: Build single-exe
 # dispatch retains the SDK wheel and selected runtime wheels. Bare executables
 # and source closures are test inputs. Run manually or call it from the Python
 # release workflow. There is no `pull_request` trigger: a label trigger would
-# list gray skipped checks on every unrelated PR label event. Checkout uses the
-# triggering ref, so dispatch needs no separate ref input.
+# list gray skipped checks on every unrelated PR label event. Reusable callers
+# can pin source_ref; direct dispatch uses the triggering commit.
 on:
   workflow_call:
     inputs:
+      source_ref:
+        description: Commit to build; empty uses the triggering commit.
+        type: string
+        required: false
+        default: ''
       targets:
         description: Comma-separated pkg targets to build; empty builds all five.
         type: string
@@ -28,7 +33,7 @@ on:
         default: false
     secrets:
       DEEPSEEK_API_KEY_EXTERNAL:
-        description: Real DeepSeek API key for trusted installed-wheel pull-request tests.
+        description: Real DeepSeek API key for trusted installed-wheel CI tests.
         required: false
   workflow_dispatch:
     inputs:
@@ -64,7 +69,8 @@ jobs:
     name: plan targets
     if: inputs.ci || inputs.release || github.event_name == 'workflow_dispatch'
     runs-on: >-
-      ${{ inputs.ci && !inputs.release && vars.DSH_CI_FAILOVER_LINUX == 'blacksmith'
+      ${{ github.repository == 'Miracle-mrc/deepseek-harness' && 'ubuntu-24.04'
+          || inputs.ci && !inputs.release && vars.DSH_CI_FAILOVER_LINUX == 'blacksmith'
           && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
@@ -73,6 +79,9 @@ jobs:
       repository-version: ${{ steps.version.outputs.repository-version }}
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+          persist-credentials: false
 
       - name: Resolve repository version
         id: version
@@ -126,11 +135,15 @@ jobs:
     needs: plan
     name: deepseek_harness_sdk-${{ needs.plan.outputs.version }}-py3-none-any.whl
     runs-on: >-
-      ${{ inputs.ci && !inputs.release && vars.DSH_CI_FAILOVER_LINUX == 'blacksmith'
+      ${{ github.repository == 'Miracle-mrc/deepseek-harness' && 'ubuntu-24.04'
+          || inputs.ci && !inputs.release && vars.DSH_CI_FAILOVER_LINUX == 'blacksmith'
           && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+          persist-credentials: false
 
       - uses: actions/setup-python@v6.3.0
         with:
@@ -153,13 +166,17 @@ jobs:
           retention-days: 7
 
   # Blacksmith x64 CI builds use 2 vCPU for compilation, bundling, and wheel smokes.
-  # Release macOS builds use larger GitHub runners; ordinary CI and direct
-  # builder dispatches retain the standard native target matrix.
+  # Upstream release macOS builds use larger GitHub runners. This fork always
+  # uses the standard native target matrix, including release-owned builds.
   build:
     needs: [plan, sdk-wheel]
     name: ${{ matrix.target }}
+    env:
+      # Only the personal fork permits keyless CI; upstream preflights stay strict.
+      DSH_PYTHON_REAL_API_ENABLED: ${{ github.repository != 'Miracle-mrc/deepseek-harness' || secrets.DEEPSEEK_API_KEY_EXTERNAL != '' }}
     runs-on: >-
-      ${{ inputs.release && matrix.target == 'node24-macos-x64' && 'macos-15-large'
+      ${{ github.repository == 'Miracle-mrc/deepseek-harness' && matrix.runner
+          || inputs.release && matrix.target == 'node24-macos-x64' && 'macos-15-large'
           || inputs.release && matrix.target == 'node24-macos-arm64' && 'macos-15-xlarge'
           || inputs.ci && !inputs.release && matrix.target == 'node24-linux-x64'
           && vars.DSH_CI_FAILOVER_LINUX == 'blacksmith' && 'blacksmith-2vcpu-ubuntu-2404'
@@ -174,6 +191,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
         with:
+          ref: ${{ inputs.source_ref || github.sha }}
           persist-credentials: false
 
       - uses: pnpm/action-setup@v5.0.0
@@ -335,7 +353,8 @@ jobs:
           venv="$(python -c 'import tempfile; print(tempfile.mkdtemp(prefix="dsh-sdk-smoke-"))')"
           python -m venv "$venv"
           smoke_python="$venv/bin/python"
-          "$smoke_python" -m pip install \
+          "$smoke_python" -m pip install 'pydantic>=2.12,<3'
+          "$smoke_python" -m pip install --no-index \
             "dist-python/$SDK_WHEEL" \
             "dist-python/$RUNTIME_WHEEL"
           echo "python=$smoke_python" >> "$GITHUB_OUTPUT"
@@ -351,7 +370,9 @@ jobs:
           $venv = (& python -c 'import tempfile; print(tempfile.mkdtemp(prefix="dsh-sdk-smoke-"))').Trim()
           python -m venv $venv
           $smokePython = Join-Path $venv 'Scripts\python.exe'
-          & $smokePython -m pip install "dist-python/$env:SDK_WHEEL" "dist-python/$env:RUNTIME_WHEEL"
+          & $smokePython -m pip install 'pydantic>=2.12,<3'
+          if ($LASTEXITCODE -ne 0) { throw "SDK dependency installation failed with exit code $LASTEXITCODE" }
+          & $smokePython -m pip install --no-index "dist-python/$env:SDK_WHEEL" "dist-python/$env:RUNTIME_WHEEL"
           if ($LASTEXITCODE -ne 0) { throw "Wheel installation failed with exit code $LASTEXITCODE" }
           "python=$smokePython" >> $env:GITHUB_OUTPUT
 
@@ -382,9 +403,15 @@ jobs:
             Pop-Location
           }
 
+      - name: Report keyless fork validation
+        if: inputs.ci && github.repository == 'Miracle-mrc/deepseek-harness' && env.DSH_PYTHON_REAL_API_ENABLED != 'true'
+        run: >-
+          node -e "require('node:fs').appendFileSync(process.env.GITHUB_STEP_SUMMARY, 'Live DeepSeek API checks skipped: this fork has no DEEPSEEK_API_KEY_EXTERNAL. Build, installed-wheel keyless tests and platform checks remain required.\n')"
+
       - name: Preflight installed-wheel real API test (POSIX)
         if: >-
           inputs.ci
+          && env.DSH_PYTHON_REAL_API_ENABLED == 'true'
           && runner.os != 'Windows'
           && (github.event_name != 'pull_request'
               || !(github.event.pull_request.head.repo.fork
@@ -401,6 +428,7 @@ jobs:
       - name: Preflight installed-wheel real API test (Windows)
         if: >-
           inputs.ci
+          && env.DSH_PYTHON_REAL_API_ENABLED == 'true'
           && runner.os == 'Windows'
           && (github.event_name != 'pull_request'
               || !(github.event.pull_request.head.repo.fork
@@ -416,6 +444,7 @@ jobs:
       - name: Run installed-wheel real API black-box test (POSIX)
         if: >-
           inputs.ci
+          && env.DSH_PYTHON_REAL_API_ENABLED == 'true'
           && runner.os != 'Windows'
           && (github.event_name != 'pull_request'
               || !(github.event.pull_request.head.repo.fork
@@ -436,6 +465,7 @@ jobs:
       - name: Run installed-wheel real API black-box test (Windows)
         if: >-
           inputs.ci
+          && env.DSH_PYTHON_REAL_API_ENABLED == 'true'
           && runner.os == 'Windows'
           && (github.event_name != 'pull_request'
               || !(github.event.pull_request.head.repo.fork
@@ -501,7 +531,8 @@ jobs:
           esac
           docker run --rm -e RUNTIME_WHEEL -e SDK_WHEEL -e DSH_TELEMETRY_DISABLED -v "$PWD:/work" -w /work "$image" bash -euxo pipefail -c '
             /opt/python/cp310-cp310/bin/python -m venv /tmp/dsh-sdk
-            /tmp/dsh-sdk/bin/python -m pip install "/work/dist-python/$SDK_WHEEL" "/work/dist-python/$RUNTIME_WHEEL"
+            /tmp/dsh-sdk/bin/python -m pip install "pydantic>=2.12,<3"
+            /tmp/dsh-sdk/bin/python -m pip install --no-index "/work/dist-python/$SDK_WHEEL" "/work/dist-python/$RUNTIME_WHEEL"
             mkdir -p /tmp/dsh-sdk-manylinux-smoke
             cd /tmp/dsh-sdk-manylinux-smoke
             env -u PYTHONPATH -u DSH_RUNTIME_MODE /tmp/dsh-sdk/bin/python /work/scripts/smoke-python-runtime.py --scenario sdk-default --installed-wheel
