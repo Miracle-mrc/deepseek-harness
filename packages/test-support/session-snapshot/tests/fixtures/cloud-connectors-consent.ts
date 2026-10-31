@@ -207,6 +207,21 @@ export function apply(ctx: Context, config: Config = {}): void {
     assert.deepEqual(pendingConsent.tools.map(tool => tool.name), ['execute_sql', 'apply_migration'])
     assert.deepEqual(pendingConsent.enabledTools, [])
     assert.deepEqual(ctx.tools.schemas().filter(tool => cloudTool(tool.name)), [])
+    const replacement = await ctx.cloudConnections.start('supabase', '')
+    await state(view => view.authorizationUrl !== undefined && view.prompt !== undefined)
+    const cancelled = (await ctx.cloudConnections.cancel('supabase', replacement.attemptId))
+      .find(view => view.provider === 'supabase')
+    assert(cancelled !== undefined)
+    assert.equal(cancelled.status, 'failed')
+    assert.equal(cancelled.errorCode, 'connection-failed')
+    assert.deepEqual(cancelled.tools, [])
+    assert.deepEqual(ctx.tools.schemas().filter(tool => cloudTool(tool.name)), [])
+    const restored = (await ctx.cloudConnections.restore('supabase')).find(view => view.provider === 'supabase')
+    assert(restored !== undefined)
+    assert.equal(restored.status, 'choose-permissions')
+    assert.deepEqual(restored.enabledTools, [])
+    assert.deepEqual(restored.tools.map(tool => tool.name), ['execute_sql', 'apply_migration'])
+    assert.deepEqual(ctx.tools.schemas().filter(tool => cloudTool(tool.name)), [])
     const denied = await ctx.tools.execute({
       calls: [{ type: 'tool-call', id: ToolCallId('before-consent'), name: SQL, arguments: '{}' }],
       signal: exec.signal,

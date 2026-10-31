@@ -49,7 +49,13 @@ function fixture(scripts: { version?: string; login?: string; token?: string } =
     calls.push({ executable, args, options: spawnOptions })
     const source = args[0] === '--version'
       ? scripts.version ?? 'console.log(\'aws-cli/2.42.0 Python/3.13 fixture\')'
-      : args[0] === 'signin' ? scripts.token ?? `console.log(${JSON.stringify(JSON.stringify(token))})`
+      : args[0] === 'signin' ? scripts.token ?? `
+        if (process.argv[2] !== 'create-oauth2-token-with-iam') {
+          console.error('aws: error: argument operation: Invalid choice');
+          process.exit(252);
+        }
+        console.log(${JSON.stringify(JSON.stringify(token))});
+      `
         : scripts.login ?? 'process.exit(0)'
     const child = spawn(process.execPath, ['--input-type=module', '--eval', source, '--', ...args], spawnOptions)
     children.add(child)
@@ -98,7 +104,7 @@ describe('AWS CLI managed MCP authorization', () => {
     expect(calls.map(call => call.args)).toEqual([
       ['--version'],
       ['login', '--remote', '--profile', 'dsh-cloud', '--region', 'us-east-1', '--no-cli-pager', '--no-cli-auto-prompt'],
-      ['signin', 'create-o-auth2-token-with-iam', '--grant-type', 'client_credentials', '--resource',
+      ['signin', 'create-oauth2-token-with-iam', '--grant-type', 'client_credentials', '--resource',
         'aws-mcp.amazonaws.com', '--output', 'json', '--profile', 'dsh-cloud', '--region', 'us-east-1',
         '--no-cli-pager', '--no-cli-auto-prompt'],
     ])

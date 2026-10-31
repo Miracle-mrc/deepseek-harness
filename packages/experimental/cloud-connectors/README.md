@@ -34,7 +34,7 @@ Open Plugins, find AWS or Supabase, and select **Connect**. Complete the provide
 
 ### AWS prerequisites and sign-in
 
-Install the latest [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) on the computer running the Harness Host. The integration rejects versions older than 2.32.0 and also requires the `signin create-o-auth2-token-with-iam` command. An older v2 build can therefore still need an update. Select the AWS MCP region, CLI profile, and sign-in method. The default profile is `dsh-cloud`; using a dedicated profile keeps this login separate from other CLI work.
+Install the latest [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) on the computer running the Harness Host. The integration rejects versions older than 2.32.0 and also requires the [`signin create-oauth2-token-with-iam` command](https://docs.aws.amazon.com/cli/latest/reference/signin/create-oauth2-token-with-iam.html). An older v2 build can therefore still need an update. Select the AWS MCP region, CLI profile, and sign-in method. The default profile is `dsh-cloud`; using a dedicated profile keeps this login separate from other CLI work.
 
 | Method | Behavior |
 |---|---|
@@ -52,7 +52,7 @@ Supabase connects to the fixed hosted endpoint `https://mcp.supabase.com/mcp`. T
 
 The browser may run on another computer. AWS `login` uses the private browser response described above; SSO uses its public device code. Supabase normally returns to a one-time `127.0.0.1` callback on the Host. If your browser cannot reach that callback, copy the complete failed callback URL from its address bar into **Browser callback URL (optional)**. The Host validates its origin, path, and state, accepts it once, and preserves the issuer for the OAuth exchange. Never put an authorization response or callback URL into agent chat or command arguments.
 
-The terminal uses hidden input for private responses; [`--secret-stdin`](../cloud-connectors-cli/README.md#use-this-package) enables explicit non-terminal input. Cancel sign-in to stop that attempt without disconnecting another caller's saved connection. These flows do not expose a public callback relay.
+The terminal uses hidden input for private responses; [`--secret-stdin`](../cloud-connectors-cli/README.md#use-this-package) enables explicit non-terminal input. Cancel sign-in to stop that attempt without disconnecting another caller's saved connection. If cancellation leaves a saved login without a live connection, the card offers **Try again**; cloud tools remain unavailable until connection succeeds, and an unconfirmed selection still requires approval. These flows do not expose a public callback relay.
 
 ### Credentials and disconnect
 
@@ -99,6 +99,8 @@ These controls select whole MCP tools; provider authorization still limits what 
 The [Host service](src/index.ts) owns authorization attempts, credential reconciliation, MCP discovery, and reversible tool registrations. The [Web client](src/client/CloudConnectionCard.tsx) and [terminal application](../cloud-connectors-cli/README.md) consume the same operations. Public state carries status, offered tool descriptions, permitted names, safe failure categories, and attempt/prompt identities; it excludes stored tokens and client secrets. Private responses return only to their matching live prompt.
 
 The [AWS CLI adapter](src/aws-cli.ts) runs fixed argument lists without a shell and obtains MCP-scoped bearer tokens. The [Supabase OAuth provider](src/oauth-provider.ts) uses SDK discovery, dynamic registration, and refresh. The [endpoint catalog](src/catalog.ts) fixes the two provider URLs and supported AWS regions; callers cannot substitute another endpoint. The [MCP subsystem reference](../../../docs/subsystems/mcp.md#ctxcloudconnections--cloudconnections) owns the generated service-method reference.
+
+The [local callback receiver](src/oauth-loopback.ts) releases browser connections when sign-in finishes or is cancelled, after flushing any callback response already queued for delivery.
 
 </details>
 

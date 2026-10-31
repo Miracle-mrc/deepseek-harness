@@ -568,7 +568,8 @@ export class LocalPtySession implements TerminalBackendSession {
       }
       if (this.active !== operation || this.closing || this.interrupting === operation) return
       const idleFor = Date.now() - this.lastOutputAt
-      if (this.promptSeen && foreground !== undefined && this.shellPgid === undefined) {
+      if (this.promptSeen && foreground !== undefined && this.shellPgid === undefined
+        && (this.config.shellDialect !== 'pwsh' || this.promptTextSeen)) {
         this.shellPgid = foreground.processGroupId
       }
       if (this.promptSeen && this.promptTextSeen && idleFor >= this.config.pollIntervalMs
@@ -576,6 +577,9 @@ export class LocalPtySession implements TerminalBackendSession {
         this.settleActive('stdin_read')
         return
       }
+      // Pwsh's initial PSReadLine read can precede execution of the queued
+      // bootstrap. Only its installed prompt establishes startup readiness.
+      if (this.config.shellDialect === 'pwsh' && this.shellPgid === undefined) return
       const elapsed = Date.now() - operation.startedAt
       const startupHasOutput = !this.initializing || !this.scrollback.isEmpty
       const acceptsStdinWait = startupHasOutput && foreground !== undefined

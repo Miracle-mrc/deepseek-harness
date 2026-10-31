@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveExampleLaunch } from '@deepseek-ai/dsh-loader-smoke'
+import { Context } from '@deepseek-ai/cordis'
+import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import { execa } from 'execa'
 import { describe, expect, it, onTestFinished } from 'vitest'
 
@@ -12,7 +14,8 @@ const deadlineMs = 60_000
 
 async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-cloud-profile-'))
-  onTestFinished(() => rm(dir, { recursive: true, force: true }))
+  const ctx = new Context()
+  onTestFinished(async () => { await ctx.fiber.dispose(); await rm(dir, { recursive: true, force: true }) })
   const home = join(dir, 'home')
   const runDsh = async (args: string[], input = '') => {
     const launch = resolveExampleLaunch({
@@ -29,7 +32,7 @@ async function fixture() {
     return result
   }
   return {
-    dir, home, runDsh,
+    dir, home, runDsh, ctx,
     run: (args: string[], input = '') => runDsh(['cloud', ...args], input),
     async enable() {
       const result = await runDsh(['plugin', '--profile', 'cloud', 'enable', '--empty', '@deepseek-ai/dsh-experimental-cloud-connectors-cli'])
@@ -208,5 +211,70 @@ export function apply(ctx) {
       { operation: 'confirm', provider: 'aws', names: ['search_docs', 'execute_cli'] },
       { operation: 'confirm', provider: 'aws', names: [] },
     ])
+  })
+
+  it.each(['callback', 'cancel'] as const)('releases a native terminal after Supabase %s completion', async (completion) => {
+    const f = await fixture()
+    await f.enable()
+    const patch = join(f.dir, 'oauth.patch.yml')
+    await writeFile(patch, JSON.stringify([{ insert: [{
+      id: 'cloud-oauth-http-fixture',
+      name: fileURLToPath(new URL('./fixtures/cloud-oauth-http.mjs', import.meta.url)),
+    }] }]) + '\n')
+    const launch = resolveExampleLaunch({
+      srcBin: join(repo, 'apps/cli/src/bin.ts'), sourceImport: 'tsx/esm', tsconfigPath: join(repo, 'tsconfig.json'),
+      configArgs: ['cloud', '--patch', patch, 'login', 'supabase'],
+      env: { DSH_HOME: f.home, DSH_AGENTS_HOME: join(f.dir, 'agents'), DSH_TELEMETRY_DISABLED: '1', NODE_OPTIONS: undefined },
+    })
+    const env: Record<string, string> = {}
+    for (const [key, value] of Object.entries(launch.env)) if (value !== undefined) env[key] = value
+    await f.ctx.plugin(LocalSubprocessRuntime)
+    const terminal = await f.ctx.subprocess.spawnTerminal({
+      argv: [launch.command, ...launch.args], cwd: f.dir, env,
+      rows: 24, cols: 160, terminalType: 'dumb', graceMs: 1_000,
+    })
+    let output = ''
+    const prompted = Promise.withResolvers<undefined>()
+    const drained = Promise.withResolvers<undefined>()
+    terminal.output.on('data', (chunk: Buffer) => {
+      output += chunk.toString()
+      if (output.includes('Browser response or verification code (input hidden):')) prompted.resolve(undefined)
+    })
+    terminal.output.once('end', () => { drained.resolve(undefined) })
+    terminal.output.once('error', (error: Error) => { prompted.reject(error); drained.reject(error) })
+    void terminal.done.then(() => { prompted.reject(new Error('CLI exited before acquiring terminal input')) }, prompted.reject)
+    let timedOut = false
+    let termination: Promise<void> | undefined
+    const timeout = setTimeout(() => {
+      timedOut = true
+      termination = terminal.terminate()
+      void termination.catch(() => undefined)
+    }, deadlineMs)
+    try {
+      await prompted.promise
+      if (completion === 'callback') {
+        const authorization = /https:\/\/identity\.cloud-cli-pty\.invalid\/authorize\?[^\s]+/.exec(output)?.[0]
+        expect(authorization, output).toBeDefined()
+        const parameters = new URL(authorization!).searchParams
+        const callback = new URL(parameters.get('redirect_uri')!)
+        callback.searchParams.set('state', parameters.get('state')!)
+        callback.searchParams.set('code', 'fixture-private-callback-code')
+        const response = await fetch(callback)
+        expect(response.status).toBe(200)
+        expect(await response.text()).toBe('Authorization received. Return to DeepSeek Harness.')
+      } else await terminal.write('\u0003')
+      const result = await terminal.done
+      await drained.promise
+      expect(timedOut, output).toBe(false)
+      expect(result.signal, output).toBeNull()
+      expect(result.exitCode, output).toBe(completion === 'callback' ? 0 : 130)
+      expect(output).toContain(completion === 'callback' ? 'supabase: signed in.' : 'Sign-in was cancelled')
+      expect(output).not.toContain('fixture-private-callback-code')
+      expect(output).not.toContain('fixture-private-access-token')
+      expect(output).not.toContain('fixture-private-refresh-token')
+    } finally {
+      clearTimeout(timeout)
+      await termination
+    }
   })
 })

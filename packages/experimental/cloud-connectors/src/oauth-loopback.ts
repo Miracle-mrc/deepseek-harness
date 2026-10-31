@@ -2,7 +2,7 @@
 
 import { createServer, type Server } from 'node:http'
 import { randomUUID } from 'node:crypto'
-import type { AddressInfo } from 'node:net'
+import type { AddressInfo, Socket } from 'node:net'
 
 /** Authorization response from a verified callback URL. */
 export interface OAuthCallback {
@@ -21,6 +21,7 @@ export class OAuthLoopback {
   /** One verified response; rejects on provider refusal or cancellation. */
   readonly result: Promise<OAuthCallback>
   private readonly server: Server
+  private readonly sockets = new Set<Socket>()
   private settle!: (callback: OAuthCallback) => void
   private fail!: (error: Error) => void
   private settled = false
@@ -29,6 +30,10 @@ export class OAuthLoopback {
   private constructor(server: Server, url: string) {
     this.server = server
     this.url = url
+    server.on('connection', (socket) => {
+      this.sockets.add(socket)
+      socket.once('close', () => { this.sockets.delete(socket) })
+    })
     this.result = new Promise((resolve, reject) => {
       this.settle = resolve
       this.fail = reject
@@ -101,7 +106,7 @@ export class OAuthLoopback {
     return 'authorized'
   }
 
-  /** Stop listening and reject an unfinished attempt. */
+  /** Stop listening, flush callback responses, close accepted sockets, and reject an unfinished attempt. */
   async close(): Promise<void> {
     if (this.closing !== undefined) {
       await this.closing
@@ -119,6 +124,9 @@ export class OAuthLoopback {
         else reject(error)
       })
     })
+    // Browsers may preconnect without sending HTTP. server.close() alone
+    // retains those sockets; destroySoon preserves an already queued response.
+    for (const socket of this.sockets) socket.destroySoon()
     await this.closing
   }
 }
