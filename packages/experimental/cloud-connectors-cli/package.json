@@ -19,7 +19,7 @@
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
-  "files": ["icon.svg", "locale/*.json", "lib/*.js", "lib/types/**/*.d.ts", "cordis.patch.yml"],
+  "files": ["icon.svg", "locale/*.json", "lib/index.js", "cordis.patch.yml", "lib/types/**/*.d.ts"],
   "license": "MIT",
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
   "dependencies": {
