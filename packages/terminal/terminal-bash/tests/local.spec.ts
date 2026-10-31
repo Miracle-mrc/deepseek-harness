@@ -336,9 +336,7 @@ describe.skipIf(!hasPwsh)('terminal-bash pwsh real shell', () => {
         timeoutMs: 8_000,
       }, 'pwsh')
       const created = await ctx.terminals.spawn(agent, { type: 'shell', name: 'main', cwd: root })
-      // stdin_read can precede delivery of the printable prompt to the PTY reader.
-      await expect.poll(() => ctx.terminals.read(agent, created.sessionId, { offset: 0, count: 100 }).text,
-        { timeout: 8_000 }).toContain('dsh> ')
+      expect(created.motd).toContain('dsh> ')
 
       const releaseFile = join(root, 'release-command')
       // Hold the command across the silence settlement without relying on host load.
@@ -377,7 +375,9 @@ describe.skipIf(!hasPwsh)('terminal-bash pwsh real shell', () => {
 
   it('pins UTF-8 output encoding so non-ASCII output survives the byte decode', async () => {
     const { ctx, root, agent } = await harness('danger-full-access', {
-      idleSilenceMs: 300,
+      // Startup must finish from prompt evidence even when the provider has no
+      // exact stdin probe and the silence window exceeds the absolute deadline.
+      idleSilenceMs: 10_000,
       handoffGraceMs: 300,
       timeoutMs: 8_000,
     }, 'pwsh')
