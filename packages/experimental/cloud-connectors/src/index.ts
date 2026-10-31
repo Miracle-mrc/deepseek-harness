@@ -1,23 +1,70 @@
-/** OAuth-backed, opt-in AWS and Supabase MCP tools for the Desktop plugin page. */
+/** Opt-in AWS CLI and Supabase OAuth connections for GUI and terminal consumers. */
 
 import { Client, SdkErrorCode, SdkHttpError, StreamableHTTPClientTransport, auth } from '@modelcontextprotocol/client'
 import { Context, Service } from '@deepseek-ai/cordis'
-import type { AuthorizationSession } from '@deepseek-ai/dsh-authorization'
+import type { AuthorizationPrompt, AuthorizationSession } from '@deepseek-ai/dsh-authorization'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import z from '@deepseek-ai/schemastery'
+import { randomUUID } from 'node:crypto'
 import { createMcpToolDefinition, publicToolName } from '@deepseek-ai/dsh-mcp-client'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { AWS_MCP_REGIONS, cloudMcpUrl, type CloudProvider } from './catalog.ts'
-import type { CloudConnectionView, CloudSignIn } from './types.ts'
+import type {
+  AwsLoginMethod, CloudAttemptId, CloudConnectionErrorCode, CloudConnectionPrompt,
+  CloudConnectionView, CloudPromptId, CloudSignIn, CloudStartOptions,
+} from './types.ts'
 import {
-  CloudOAuthProvider, CloudOAuthReconnectRequiredError, cloudAuthorizationFetch, cloudCredentialKey, parseCloudGrant, type CloudGrant,
+  CloudOAuthProvider, CloudOAuthReconnectRequiredError, cloudAuthorizationFetch, cloudCredentialKey,
 } from './oauth-provider.ts'
 import { OAuthLoopback } from './oauth-loopback.ts'
+import { CloudConnectionError } from './errors.ts'
+import { authorizeAwsCli } from './aws-cli.ts'
+import { createAwsCliAuth, createAwsCliGrant } from './aws-grant.ts'
+import { parseConnectionGrant, type CloudConnectionGrant } from './connection-grant.ts'
 
 export type { CloudProvider } from './catalog.ts'
 export { AWS_MCP_REGIONS } from './catalog.ts'
-export type { CloudConnectionView, CloudSignIn } from './types.ts'
+export type {
+  AwsLoginMethod, CloudAttemptId, CloudConnectionErrorCode, CloudConnectionPrompt,
+  CloudConnectionView, CloudPromptId, CloudSignIn, CloudStartOptions,
+} from './types.ts'
+export { CloudConnectionError } from './errors.ts'
+
+/** Deployment settings for cloud authorization and MCP requests. */
+export interface Config {
+  /** Restore saved connections during startup; CLI help disables this. */
+  restoreOnStart?: boolean
+  /** Named AWS CLI profile, isolated from the default profile unless explicitly changed. */
+  awsProfile?: string
+  /** Official AWS CLI sign-in method used when a caller omits its selection. */
+  awsMethod?: AwsLoginMethod
+  /** Region used by generic authorization callers which do not supply a selection. */
+  awsRegion?: typeof AWS_MCP_REGIONS[number]
+  /** Trusted local AWS CLI executable, resolved by the Host. */
+  awsExecutable?: string
+  /** Complete browser/CLI authorization deadline in milliseconds. */
+  authorizationTimeoutMs?: number
+  /** AWS CLI version/token command deadline in milliseconds. */
+  awsCommandTimeoutMs?: number
+  /** Complete MCP tool-call deadline in milliseconds. */
+  mcpTimeoutMs?: number
+}
+
+/** Validated defaults, shared by direct construction and Cordis composition. */
+export const Config = z.object({
+  restoreOnStart: z.boolean().default(true),
+  awsProfile: z.string().pattern(/^[A-Za-z0-9_][A-Za-z0-9_.@+-]{0,127}$/).default('dsh-cloud'),
+  awsMethod: z.union([z.const('login'), z.const('sso'), z.const('existing')]).default('login'),
+  awsRegion: z.union(AWS_MCP_REGIONS.map(region => z.const(region))).default('us-east-1'),
+  awsExecutable: z.string().pattern(/\S/).default('aws'),
+  authorizationTimeoutMs: z.number().min(1).step(1).default(300_000),
+  awsCommandTimeoutMs: z.number().min(1).max(25_000).step(1).default(20_000),
+  mcpTimeoutMs: z.number().min(1).step(1).default(60_000),
+})
 
 interface LiveClient {
+  provider: CloudProvider
   client: Client
   transport: StreamableHTTPClientTransport
   controller: AbortController
@@ -29,9 +76,15 @@ interface LiveClient {
 }
 
 interface Attempt {
-  region?: string
+  id: CloudAttemptId
+  region: string
+  awsProfile: string
+  awsMethod: AwsLoginMethod
   controller: AbortController
-  url: PromiseWithResolvers<string>
+  signal: AbortSignal
+  authorizationUrl?: string
+  code?: string
+  prompt?: { view: CloudConnectionPrompt; resolve: (response: string) => void }
   authorization: Promise<void>
   done: Promise<void>
 }
@@ -45,7 +98,6 @@ declare module '@deepseek-ai/cordis' {
 
 /** The two fixed provider ids, never accepting an arbitrary user-controlled MCP endpoint. */
 const PROVIDERS: readonly CloudProvider[] = ['aws', 'supabase']
-const AUTH_WAIT_MS = 5 * 60_000
 
 /** Resolve a wire string without allowing the caller to choose another provider. */
 function providerOf(value: string): CloudProvider {
@@ -62,67 +114,68 @@ function cancellableFetch(signal: AbortSignal): typeof fetch {
 }
 
 /**
- * Owns short-lived local OAuth callbacks and MCP tool registration. It starts
+ * Owns browser authorization, AWS CLI sign-in, and MCP tool registration. It starts
  * without connecting to either cloud service when the Harness home has no saved grants.
  */
 export class CloudConnections extends TypertRemoteService {
   static inject = ['credentials', 'authorization', 'tools']
+  static Config = Config
   private readonly home: Context
   private readonly live = new Map<CloudProvider, LiveClient>()
   private readonly attempts = new Map<CloudProvider, Attempt>()
-  private readonly failed = new Map<CloudProvider, string>()
+  private readonly disconnecting = new Set<CloudProvider>()
+  private readonly failed = new Map<CloudProvider, CloudConnectionErrorCode>()
   private readonly lifetime = new AbortController()
   private readonly clients = new Set<LiveClient>()
   private readonly operations = new Map<CloudProvider, Promise<void>>()
   private readonly pending = new Set<Promise<unknown>>()
+  private stopping?: Promise<void>
+  private readonly spec: Required<Config>
 
-  constructor(ctx: Context) {
+  constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'cloudConnections')
     this.home = ctx
+    this.spec = Config(config)
     for (const provider of PROVIDERS) {
       ctx.authorization.registerFlow({
         key: cloudCredentialKey(provider), label: provider === 'aws' ? 'AWS' : 'Supabase',
         methods: [{ id: 'oauth', label: 'Sign in with browser' }],
-        run: (session) => {
-          const attempt = this.attempts.get(provider)
-          if (attempt === undefined) throw new Error('Cloud connections: missing authorization attempt')
-          attempt.authorization = this.authorize(provider, session)
-          return attempt.authorization
-        },
+        run: session => this.runRegisteredFlow(provider, session),
       })
     }
-    ctx.effect(() => async () => {
-      this.lifetime.abort()
-      for (const attempt of this.attempts.values()) attempt.controller.abort()
-      const closing = Promise.allSettled([...this.clients].map(item => this.closeClient(item)))
-      // AuthorizationService can settle cancellation before its runner exits.
-      // Each attempt includes that runner's cleanup, and negotiating clients
-      // are owned before their first network request.
-      await Promise.allSettled([...this.pending])
-      const outcomes = await closing
-      this.live.clear()
-      const errors: unknown[] = []
-      for (const outcome of outcomes) if (outcome.status === 'rejected') errors.push(outcome.reason)
-      if (errors.length > 0) throw new AggregateError(errors, 'Cloud connections: client cleanup failed')
-    }, 'cloud-connectors: stop MCP clients')
+    ctx.on('credentials/record-updated', (key) => {
+      const provider = PROVIDERS.find(item => cloudCredentialKey(item) === key)
+      // The admitted sign-in reconciles its committed record before settling.
+      if (provider === undefined || this.attempts.has(provider) || this.disconnecting.has(provider) || this.lifetime.signal.aborted) return
+      void this.enqueue(provider, () => this.reconcile(provider)).catch((error: unknown) => {
+        if (!this.lifetime.signal.aborted) this.failed.set(provider, this.failureCode(error, 'connection-failed'))
+      })
+    })
+    // Cordis announces unload before awaiting an unfinished Service.init().
+    // Stop its requests now; effect cleanup joins the same owned shutdown.
+    // oxlint-disable-next-line typescript/no-misused-promises -- Cordis contains observer failures; the effect also awaits this promise.
+    ctx.on('internal/plugin', (fiber) => {
+      if (fiber !== ctx.fiber || fiber.uid !== null) return
+      return this.stop()
+    }, { global: true })
+    ctx.effect(() => () => this.stop(), 'cloud-connectors: stop MCP clients')
   }
 
   protected async [Service.init](): Promise<void> {
     // A saved login can rediscover pending consent; only confirmed selections
     // register tools. A Harness home without grants sends no cloud requests.
+    if (!this.spec.restoreOnStart) return
     await Promise.all(PROVIDERS.map(provider => this.enqueue(provider, async () => {
-      const grant = parseCloudGrant(provider, await this.home.credentials.readRecord(cloudCredentialKey(provider)))
-      if (grant === undefined) return
       try {
-        await this.connectClient(provider, grant)
-      } catch {
-        if (!this.lifetime.signal.aborted) this.failed.set(provider, 'Could not restore the cloud MCP connection. Reconnect to authenticate again.')
+        await this.reconcile(provider)
+      } catch (error) {
+        if (!this.lifetime.signal.aborted) this.failed.set(provider, this.failureCode(error, 'connection-failed'))
       }
     })))
   }
 
   /**
-   * Current connection facts, including tool-level selection after OAuth.
+   * Current connection facts, including tool-level selection after sign-in.
    * @returns Credential-free provider status and available tool selections.
    * @throws If the owning plugin is stopping.
    */
@@ -130,80 +183,150 @@ export class CloudConnections extends TypertRemoteService {
   async list(): Promise<CloudConnectionView[]> {
     this.assertActive()
     return await Promise.all(PROVIDERS.map(async (provider) => {
-      const grant = parseCloudGrant(provider, await this.home.credentials.readRecord(cloudCredentialKey(provider)))
+      const grant = parseConnectionGrant(provider, await this.home.credentials.readRecord(cloudCredentialKey(provider)))
       const attempt = this.attempts.get(provider)
       const live = this.live.get(provider)
+      const currentLive = live !== undefined && !live.controller.signal.aborted && live.grantId === grant?.grantId ? live : undefined
       const status: CloudConnectionView['status'] = attempt !== undefined ? 'authorizing'
         : this.failed.has(provider) ? 'failed'
           : grant === undefined ? 'not-connected'
-            : grant.confirmed && live !== undefined ? 'connected' : 'choose-permissions'
-      const tools = live?.tools.map(tool => ({ name: tool.name, description: tool.description })) ?? []
+            : grant.confirmed && currentLive !== undefined ? 'connected' : 'choose-permissions'
+      const tools = currentLive?.tools.map(tool => ({ name: tool.name, description: tool.description })) ?? []
       const failure = this.failed.get(provider)
       return { provider, status, tools, enabledTools: grant?.allowedTools ?? [],
-        ...(failure === undefined ? {} : { error: failure }) }
+        ...(failure === undefined ? {} : { errorCode: failure }),
+        ...(attempt === undefined ? {} : {
+          attemptId: attempt.id,
+          ...(attempt.authorizationUrl === undefined ? {} : { authorizationUrl: attempt.authorizationUrl }),
+          ...(attempt.code === undefined ? {} : { code: attempt.code }),
+          ...(attempt.prompt === undefined ? {} : { prompt: attempt.prompt.view }),
+        }),
+        ...(provider !== 'aws' ? {} : {
+          awsProfile: attempt?.awsProfile ?? (grant !== undefined && 'profile' in grant ? grant.profile : this.spec.awsProfile),
+          awsMethod: attempt?.awsMethod ?? (grant !== undefined && 'loginMethod' in grant ? grant.loginMethod : this.spec.awsMethod),
+        }),
+      }
     }))
   }
 
   /**
-   * Begin a browser OAuth grant. The browser URL is returned without waiting
-   * for login; the loopback callback completes the attempt asynchronously.
+   * Admit one sign-in without waiting for provider I/O. Notices and private
+   * prompts are projected by list(); cancellation uses the returned identity.
    * @param providerId - AWS or Supabase.
    * @param awsRegion - Region of the AWS-managed MCP endpoint.
-   * @returns Browser authorization page.
+   * @param options - Explicit AWS CLI selectors; omitted fields use plugin configuration.
+   * @returns Identity of this caller's admitted authorization operation.
    */
   @Remote
-  async start(providerId: string, awsRegion: string): Promise<CloudSignIn> {
+  async start(providerId: string, awsRegion: string, options?: CloudStartOptions): Promise<CloudSignIn> {
     const provider = providerOf(providerId)
     if (provider === 'aws' && !(AWS_MCP_REGIONS as readonly string[]).includes(awsRegion)) {
       throw new Error('Cloud connections: select a supported AWS region')
     }
     const attempt = await this.enqueue(provider, async () => {
-      if (this.attempts.has(provider)) throw new Error('Cloud connections: sign-in already in progress')
+      if (this.attempts.has(provider) || this.disconnecting.has(provider)) throw new Error('Cloud connections: sign-in already in progress')
       await this.dropClient(provider)
       this.assertActive()
-      const url = Promise.withResolvers<string>()
-      // Failure may precede the Remote caller receiving this attempt.
-      void url.promise.catch(() => undefined)
-      const attempt: Attempt = {
-        ...(provider === 'aws' ? { region: awsRegion } : {}), controller: new AbortController(),
-        url, authorization: Promise.resolve(), done: Promise.resolve(),
-      }
+      const attempt = this.createAttempt(provider === 'aws' ? awsRegion : undefined, options ?? {})
       this.attempts.set(provider, attempt)
       this.failed.delete(provider)
       attempt.done = this.track(this.home.authorization.begin({
         key: cloudCredentialKey(provider), method: 'oauth',
-        signal: AbortSignal.any([this.lifetime.signal, attempt.controller.signal]),
+        signal: attempt.signal,
         interaction: {
           notify: (notice) => {
-            if (notice.url !== undefined) url.resolve(notice.url)
+            if (notice.url !== undefined) {
+              const url = URL.parse(notice.url)
+              if (url === null || url.protocol !== 'https:' || url.username !== '' || url.password !== '') {
+                throw new CloudConnectionError('authorization-failed')
+              }
+              attempt.authorizationUrl = url.href
+            }
+            if (notice.code !== undefined) attempt.code = notice.code
           },
-          prompt: () => Promise.reject(new Error('Cloud connections: unexpected identity-provider prompt')),
+          prompt: request => this.requestResponse(attempt, request),
         },
       }).then(async (outcome) => {
         if (outcome.status !== 'authorized') throw new Error('Cloud connections: authorization was cancelled')
         await this.enqueue(provider, async () => {
-          attempt.controller.signal.throwIfAborted()
-          const grant = parseCloudGrant(provider, await this.home.credentials.readRecord(cloudCredentialKey(provider)))
-          if (grant === undefined) throw new Error('Cloud connections: authorization did not store its grant')
-          await this.connectClient(provider, grant, attempt.controller.signal)
+          attempt.signal.throwIfAborted()
+          await this.reconcile(provider, attempt.signal)
         })
-      }).catch(() => {
+      }).catch((error: unknown) => {
         // Identity-provider failures can contain credentials or sensitive URLs.
         if (!this.lifetime.signal.aborted && !attempt.controller.signal.aborted) {
-          this.failed.set(provider, 'Cloud sign-in failed. Try again or check the provider\'s authorization policy.')
+          this.failed.set(provider, this.failureCode(error, 'authorization-failed'))
         }
-        url.reject(new Error('Cloud connections: sign-in failed; see connection status'))
       }).then(async () => {
         await Promise.allSettled([attempt.authorization])
-        if (this.attempts.get(provider) === attempt) this.attempts.delete(provider)
+        this.attempts.delete(provider)
       }))
       return attempt
     })
-    return { url: await Promise.race([attempt.url.promise, attempt.done.then(() => { throw new Error('Cloud connections: sign-in ended before browser authorization') })]) }
+    return { attemptId: attempt.id,
+      ...(attempt.authorizationUrl === undefined ? {} : { url: attempt.authorizationUrl }) }
   }
 
   /**
-   * Confirm the selected subset of tools after OAuth. Tool names not offered
+   * Return a browser response to its exact pending prompt without logging it.
+   * @param providerId - Provider whose sign-in is waiting.
+   * @param promptId - Identity supplied by list(); stale prompts are rejected.
+   * @param response - Private authorization response or callback URL from the browser.
+   * @returns Connection state without echoing the supplied response.
+   */
+  @Remote
+  async complete(providerId: string, promptId: CloudPromptId, response: string): Promise<CloudConnectionView[]> {
+    this.assertActive()
+    const attempt = this.attempts.get(providerOf(providerId))
+    const prompt = attempt?.prompt
+    if (attempt === undefined || prompt === undefined || prompt.view.id !== promptId || attempt.controller.signal.aborted) {
+      throw new CloudConnectionError('authorization-failed')
+    }
+    if (response.length === 0 || Buffer.byteLength(response, 'utf8') > 65_536) {
+      throw new CloudConnectionError('authorization-failed')
+    }
+    if (prompt.view.kind === 'select' && response !== 'yes' && response !== 'no') {
+      throw new CloudConnectionError('authorization-failed')
+    }
+    delete attempt.prompt
+    prompt.resolve(response)
+    return await this.list()
+  }
+
+  /**
+   * Cancel only the caller's admitted operation; never disconnect another login.
+   * @param providerId - Provider of the sign-in operation.
+   * @param attemptId - Identity returned by start(); a stale identity is a no-op.
+   * @returns State after the owned authorization runner has stopped.
+   */
+  @Remote
+  async cancel(providerId: string, attemptId: CloudAttemptId): Promise<CloudConnectionView[]> {
+    this.assertActive()
+    const attempt = this.attempts.get(providerOf(providerId))
+    if (attempt?.id === attemptId) {
+      attempt.controller.abort()
+      await attempt.done
+    }
+    return await this.list()
+  }
+
+  /**
+   * Restore saved credentials only when a noninteractive consumer requests it.
+   * @param providerId - Provider to restore; missing credentials leave it disconnected.
+   * @returns Connection facts after MCP discovery, or a safe failed state.
+   */
+  async restore(providerId: string): Promise<CloudConnectionView[]> {
+    const provider = providerOf(providerId)
+    await this.enqueue(provider, async () => {
+      try { await this.reconcile(provider) } catch (error) {
+        this.failed.set(provider, this.failureCode(error, 'connection-failed'))
+      }
+    })
+    return await this.list()
+  }
+
+  /**
+   * Confirm the selected subset of tools after sign-in. Tool names not offered
    * by the connected MCP server are refused; no IAM/database privilege is
    * granted by toggling a tool here.
    * @param providerId - Provider to enable.
@@ -223,7 +346,7 @@ export class CloudConnections extends TypertRemoteService {
       await this.home.credentials.modifyRecord(cloudCredentialKey(provider), (record) => {
         this.assertActive()
         client.controller.signal.throwIfAborted()
-        const grant = parseCloudGrant(provider, record)
+        const grant = parseConnectionGrant(provider, record)
         if (grant?.grantId !== client.grantId) throw new Error('Cloud connections: connection changed; sign in again')
         return Promise.resolve({ kind: 'grant', payload: { ...grant, confirmed: true, allowedTools: [...selected] } })
       })
@@ -234,7 +357,7 @@ export class CloudConnections extends TypertRemoteService {
       } catch (error) {
         // Never resurrect a disconnected or replaced grant during rollback.
         await this.home.credentials.modifyRecord(cloudCredentialKey(provider), (record) => {
-          const grant = parseCloudGrant(provider, record)
+          const grant = parseConnectionGrant(provider, record)
           return Promise.resolve(grant?.grantId !== client.grantId ? undefined : {
             kind: 'grant', payload: { ...grant, confirmed: false, allowedTools: [] },
           })
@@ -246,7 +369,7 @@ export class CloudConnections extends TypertRemoteService {
   }
 
   /**
-   * Remove the local OAuth grant and every associated model tool. External
+   * Remove the local cloud grant and every associated model tool. External
    * token revocation is controlled by the identity provider, not this action.
    * @param providerId - Provider to disconnect.
    * @returns Updated connection facts.
@@ -255,28 +378,83 @@ export class CloudConnections extends TypertRemoteService {
   async disconnect(providerId: string): Promise<CloudConnectionView[]> {
     const provider = providerOf(providerId)
     this.assertActive()
+    this.disconnecting.add(provider)
     this.attempts.get(provider)?.controller.abort()
-    this.live.get(provider)?.controller.abort()
-    const attempt = await this.enqueue(provider, async () => {
-      const attempt = this.attempts.get(provider)
-      attempt?.controller.abort()
-      await this.dropClient(provider)
-      await this.home.credentials.deleteRecord(cloudCredentialKey(provider))
-      this.failed.delete(provider)
-      return attempt
-    })
-    // A cancelled attempt may have queued its connect behind this operation.
-    // Wait outside the provider queue so it can observe cancellation and exit.
-    await attempt?.done
+    for (const client of this.clients) if (client.provider === provider) client.controller.abort()
+    try {
+      const attempt = await this.enqueue(provider, async () => {
+        const attempt = this.attempts.get(provider)
+        attempt?.controller.abort()
+        await this.dropClient(provider)
+        await this.home.credentials.deleteRecord(cloudCredentialKey(provider))
+        this.failed.delete(provider)
+        return attempt
+      })
+      // A cancelled attempt may have queued its connect behind this operation.
+      // Wait outside the provider queue so it can observe cancellation and exit.
+      await attempt?.done
+    } finally {
+      this.disconnecting.delete(provider)
+    }
     return await this.list()
   }
 
-  private async authorize(provider: CloudProvider, session: AuthorizationSession): Promise<void> {
-    const attempt = this.attempts.get(provider)
-    if (attempt === undefined) throw new Error('Cloud connections: missing authorization attempt')
+  private createAttempt(region: string | undefined, options: CloudStartOptions = {}): Attempt {
+    const controller = new AbortController()
+    return {
+      id: brandString<CloudAttemptId>(randomUUID()),
+      region: region ?? this.spec.awsRegion, controller,
+      signal: AbortSignal.any([this.lifetime.signal, controller.signal, AbortSignal.timeout(this.spec.authorizationTimeoutMs)]),
+      awsProfile: options.awsProfile ?? this.spec.awsProfile,
+      awsMethod: options.awsMethod ?? this.spec.awsMethod,
+      authorization: Promise.resolve(), done: Promise.resolve(),
+    }
+  }
+
+  /** The registered flow is also usable by a neutral authorization consumer. */
+  private runRegisteredFlow(provider: CloudProvider, session: AuthorizationSession): Promise<void> {
+    const admitted = this.attempts.get(provider)
+    if (admitted !== undefined) {
+      admitted.authorization = this.authorize(provider, session, admitted)
+      return admitted.authorization
+    }
+    const attempt = this.createAttempt(provider === 'aws' ? this.spec.awsRegion : undefined)
+    this.attempts.set(provider, attempt)
+    this.failed.delete(provider)
+    const runner = this.track((async () => {
+      try {
+        await this.authorize(provider, session, attempt)
+        await this.enqueue(provider, () => this.reconcile(provider, attempt.signal))
+      } catch (error) {
+        if (!this.lifetime.signal.aborted && !attempt.controller.signal.aborted && !session.signal.aborted) {
+          this.failed.set(provider, this.failureCode(error, 'authorization-failed'))
+        }
+        throw error
+      } finally {
+        this.attempts.delete(provider)
+      }
+    })())
+    attempt.authorization = runner
+    attempt.done = runner.then(() => undefined, () => undefined)
+    return runner
+  }
+
+  private async authorize(provider: CloudProvider, session: AuthorizationSession, attempt: Attempt): Promise<void> {
     const endpoint = cloudMcpUrl(provider, attempt.region)
-    const signal = AbortSignal.any([session.signal, this.lifetime.signal, AbortSignal.timeout(AUTH_WAIT_MS)])
+    const signal = AbortSignal.any([session.signal, attempt.signal])
     signal.throwIfAborted()
+    if (provider === 'aws') {
+      const token = await authorizeAwsCli({
+        executable: this.spec.awsExecutable, profile: attempt.awsProfile, method: attempt.awsMethod,
+        region: attempt.region, signal, commandTimeoutMs: this.spec.awsCommandTimeoutMs,
+        notify: (notice) => { session.notify(notice) }, prompt: request => session.prompt(request),
+      })
+      signal.throwIfAborted()
+      await session.commit({ kind: 'grant', payload: createAwsCliGrant(
+        attempt.region, attempt.awsProfile, attempt.awsMethod, token,
+      ) })
+      return
+    }
     const loopback = await OAuthLoopback.listen(signal)
     const oauth = new CloudOAuthProvider(this.home, provider, loopback.url, (url) => {
       session.notify({ message: 'Continue in your browser to authorize this cloud connection', url: url.href })
@@ -285,30 +463,51 @@ export class CloudConnections extends TypertRemoteService {
       const fetchFn = cloudAuthorizationFetch(cancellableFetch(signal))
       const initial = await auth(oauth, { serverUrl: endpoint, forceReauthorization: true, fetchFn })
       if (initial !== 'REDIRECT') throw new Error('Cloud connections: identity provider did not offer browser authorization')
-      const callback = await loopback.result
+      const manual = new AbortController()
+      const manualCallback = (async () => {
+        while (true) {
+          const response = await session.prompt({ kind: 'secret', signal: manual.signal,
+            message: 'If the browser cannot reach this Host, paste its callback URL here.' })
+          if (loopback.completeCallback(response.trim())) return await loopback.result
+          session.notify({ message: 'That callback does not match this sign-in. Copy the complete callback URL from the browser.' })
+        }
+      })()
+      let callback: Awaited<typeof loopback.result>
+      try {
+        callback = await Promise.race([loopback.result, manualCallback])
+      } finally {
+        manual.abort()
+        await Promise.allSettled([manualCallback])
+      }
       signal.throwIfAborted()
       const completed = await auth(oauth, { serverUrl: endpoint, authorizationCode: callback.code, fetchFn,
         ...(callback.iss === undefined ? {} : { iss: callback.iss }) })
       if (completed !== 'AUTHORIZED') throw new Error('Cloud connections: OAuth code exchange was not completed')
-      await session.commit({ kind: 'grant', payload: oauth.toGrant(endpoint, attempt.region) })
+      await session.commit({ kind: 'grant', payload: oauth.toGrant(endpoint, undefined) })
     } finally {
       await loopback.close()
     }
   }
 
-  private async connectClient(provider: CloudProvider, grant: CloudGrant, signal = this.lifetime.signal): Promise<void> {
+  private async connectClient(provider: CloudProvider, grant: CloudConnectionGrant, signal: AbortSignal): Promise<boolean> {
     await this.dropClient(provider)
     this.assertActive()
     signal.throwIfAborted()
-    const oauth = CloudOAuthProvider.fromGrant(this.home, provider, grant)
-    const client = new Client({ name: 'dsh-cloud-connectors', version: '0.2.2' })
     const controller = new AbortController()
-    const connectionSignal = AbortSignal.any([this.lifetime.signal, signal, controller.signal])
+    const connectionSignal = AbortSignal.any([this.lifetime.signal, controller.signal])
+    const abortSetup = () => { controller.abort() }
+    signal.addEventListener('abort', abortSetup, { once: true })
+    const authProvider = 'authMethod' in grant
+      ? createAwsCliAuth(this.home, grant, {
+        executable: this.spec.awsExecutable, commandTimeoutMs: this.spec.awsCommandTimeoutMs,
+      }, connectionSignal)
+      : CloudOAuthProvider.fromGrant(this.home, provider, grant).transportAuth()
+    const client = new Client({ name: 'dsh-cloud-connectors', version: '0.2.2' })
     const transport = new StreamableHTTPClientTransport(new URL(grant.endpoint), {
-      authProvider: oauth.transportAuth(), fetch: cancellableFetch(connectionSignal),
+      authProvider, fetch: cancellableFetch(connectionSignal),
     })
     const live: LiveClient = {
-      client, transport, controller, grantId: grant.grantId, tools: [], allowedTools: new Set(), disposers: [],
+      provider, client, transport, controller, grantId: grant.grantId, tools: [], allowedTools: new Set(), disposers: [],
     }
     this.clients.add(live)
     try {
@@ -321,13 +520,27 @@ export class CloudConnections extends TypertRemoteService {
         ...(tool.outputSchema === undefined ? {} : { outputSchema: tool.outputSchema }),
         taskRequired: tool.execution?.taskSupport === 'required',
       }))
+      const record = await this.home.credentials.modifyRecord(cloudCredentialKey(provider), () => Promise.resolve(undefined))
+      connectionSignal.throwIfAborted()
+      const current = parseConnectionGrant(provider, record)
+      // Another Host may replace or withdraw the login during discovery.
+      // Never publish that older client's catalog or its cached consent.
+      if (current?.grantId !== grant.grantId) {
+        await this.closeClient(live)
+        return false
+      }
       this.live.set(provider, live)
       this.failed.delete(provider)
-      if (grant.confirmed) this.registerTools(provider, live, grant.allowedTools)
+      if (current.confirmed) this.registerTools(provider, live, current.allowedTools)
+      return true
     } catch (error) {
       if (this.live.get(provider) === live) this.live.delete(provider)
       await this.closeClient(live)
       throw error
+    } finally {
+      // Once published, the connection belongs to its own lifetime rather
+      // than the completed sign-in request's deadline.
+      signal.removeEventListener('abort', abortSetup)
     }
   }
 
@@ -368,7 +581,7 @@ export class CloudConnections extends TypertRemoteService {
       // file under its lock without rewriting it or holding it across MCP I/O.
       const record = await this.home.credentials.modifyRecord(cloudCredentialKey(provider), () => Promise.resolve(undefined))
       this.assertToolActive(provider, live, name, execution.signal)
-      const grant = parseCloudGrant(provider, record)
+      const grant = parseConnectionGrant(provider, record)
       if (grant?.grantId !== live.grantId) throw new CloudOAuthReconnectRequiredError()
       if (!grant.confirmed || !grant.allowedTools.includes(name)) {
         this.registerTools(provider, live, grant.confirmed ? grant.allowedTools : [])
@@ -376,21 +589,91 @@ export class CloudConnections extends TypertRemoteService {
       }
       return await live.client.callTool(
         { name, arguments: args },
-        { signal: AbortSignal.any([execution.signal, live.controller.signal]), timeout: 60_000 },
+        { signal: AbortSignal.any([execution.signal, live.controller.signal]), timeout: this.spec.mcpTimeoutMs },
       )
     } catch (error) {
       if (error instanceof CloudOAuthReconnectRequiredError ||
+        error instanceof CloudConnectionError && error.code === 'session-expired' ||
         error instanceof SdkHttpError && error.code === SdkErrorCode.ClientHttpAuthentication) {
         if (this.live.get(provider) === live && !this.lifetime.signal.aborted && !live.controller.signal.aborted) {
           this.live.delete(provider)
-          this.failed.set(provider, 'Cloud authentication is no longer valid. Reconnect to authenticate again.')
+          this.failed.set(provider, 'session-expired')
           await this.closeClient(live)
         }
         // The SDK may attach provider-controlled HTTP fields. Neither those
         // fields nor an old generation's error belong in model-facing results.
+        if (error instanceof CloudConnectionError) throw error
         throw new CloudOAuthReconnectRequiredError()
       }
-      throw error
+      if (error instanceof CloudConnectionError) throw error
+      if (execution.signal.aborted || live.controller.signal.aborted || this.lifetime.signal.aborted) {
+        throw new CloudConnectionError('connection-failed')
+      }
+      // SDK transport errors may retain response bodies or echoed credentials.
+      // Provider tool-result content follows its ordinary MCP result path.
+      throw new CloudConnectionError('connection-failed')
+    }
+  }
+
+  private failureCode(error: unknown, fallback: CloudConnectionErrorCode): CloudConnectionErrorCode {
+    if (error instanceof CloudConnectionError) return error.code
+    if (error instanceof CloudOAuthReconnectRequiredError) return 'session-expired'
+    return fallback
+  }
+
+  /** Reconcile one committed shared credential without restarting a client for token rotation. */
+  private async reconcile(provider: CloudProvider, requestedSignal?: AbortSignal): Promise<void> {
+    const signal = requestedSignal ?? AbortSignal.any([this.lifetime.signal, AbortSignal.timeout(this.spec.mcpTimeoutMs)])
+    for (;;) {
+      this.assertActive()
+      if (this.disconnecting.has(provider)) return
+      signal.throwIfAborted()
+      const record = await this.home.credentials.modifyRecord(cloudCredentialKey(provider), () => Promise.resolve(undefined))
+      if (this.disconnecting.has(provider)) return
+      const grant = parseConnectionGrant(provider, record)
+      const live = this.live.get(provider)
+      if (grant === undefined) {
+        await this.dropClient(provider)
+        this.failed.delete(provider)
+        return
+      }
+      if (live?.grantId === grant.grantId && !live.controller.signal.aborted) {
+        const selected = grant.confirmed ? grant.allowedTools : []
+        if (selected.length !== live.allowedTools.size || selected.some(name => !live.allowedTools.has(name))) {
+          this.registerTools(provider, live, selected)
+        }
+        this.failed.delete(provider)
+        return
+      }
+      if (await this.connectClient(provider, grant, signal)) return
+      // Only a committed credential-generation change restarts discovery;
+      // a transport failure is reported without retrying it here.
+    }
+  }
+
+  /** One private prompt owns its settlement and removes both abort listeners before returning. */
+  private async requestResponse(attempt: Attempt, request: AuthorizationPrompt): Promise<string> {
+    if (request.kind === 'text' || attempt.prompt !== undefined) throw new CloudConnectionError('authorization-failed')
+    if (request.kind === 'select' && (request.options.length !== 2
+      || !request.options.some(option => option.id === 'yes') || !request.options.some(option => option.id === 'no'))) {
+      throw new CloudConnectionError('authorization-failed')
+    }
+    const signal = AbortSignal.any([this.lifetime.signal, attempt.controller.signal,
+      ...(request.signal === undefined ? [] : [request.signal])])
+    signal.throwIfAborted()
+    const response = Promise.withResolvers<string>()
+    const id = brandString<CloudPromptId>(randomUUID())
+    const view: CloudConnectionPrompt = request.kind === 'secret' ? { id, kind: 'secret' }
+      : { id, kind: 'select', purpose: 'replace-aws-login' }
+    const prompt = { view, resolve: response.resolve }
+    attempt.prompt = prompt
+    const abort = () => { response.reject(new CloudConnectionError('authorization-failed')) }
+    signal.addEventListener('abort', abort, { once: true })
+    try {
+      return await response.promise
+    } finally {
+      signal.removeEventListener('abort', abort)
+      if (attempt.prompt === prompt) delete attempt.prompt
     }
   }
 
@@ -398,7 +681,7 @@ export class CloudConnections extends TypertRemoteService {
     this.assertActive()
     signal.throwIfAborted()
     live.controller.signal.throwIfAborted()
-    if (this.live.get(provider) !== live || !live.allowedTools.has(name)) {
+    if (this.disconnecting.has(provider) || this.live.get(provider) !== live || !live.allowedTools.has(name)) {
       throw new Error('Cloud connections: tool permission was withdrawn')
     }
   }
@@ -418,9 +701,32 @@ export class CloudConnections extends TypertRemoteService {
     for (const dispose of live.disposers) dispose()
     live.disposers = []
     live.closing = (async () => {
-      try { await live.transport.close() } finally { await live.client.close() }
+      try {
+        try { await live.transport.close() } finally { await live.client.close() }
+      } catch {
+        // SDK close failures may carry the same sensitive HTTP fields as requests.
+        throw new CloudConnectionError('connection-failed')
+      }
     })().finally(() => { this.clients.delete(live) })
     return live.closing
+  }
+
+  private stop(): Promise<void> {
+    this.stopping ??= (async () => {
+      this.lifetime.abort()
+      for (const attempt of this.attempts.values()) attempt.controller.abort()
+      const closing = Promise.allSettled([...this.clients].map(item => this.closeClient(item)))
+      // AuthorizationService can settle cancellation before its runner exits.
+      // Each attempt includes that runner's cleanup, and negotiating clients
+      // are owned before their first network request.
+      await Promise.allSettled([...this.pending])
+      const outcomes = await closing
+      this.live.clear()
+      const errors: unknown[] = []
+      for (const outcome of outcomes) if (outcome.status === 'rejected') errors.push(outcome.reason)
+      if (errors.length > 0) throw new AggregateError(errors, 'Cloud connections: client cleanup failed')
+    })()
+    return this.stopping
   }
 
   private assertActive(): void {

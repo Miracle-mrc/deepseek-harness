@@ -10,8 +10,8 @@
  * `dsh --profile tui --resume abc` boots the tui profile with `--resume abc`,
  * and `dsh --profile web -h` prints the web app's help, not this one's.
  *
- * `dsh <name>` abbreviates `dsh --profile <name>`; `plugin` manages a profile's
- * plugin dependencies by forwarding to pnpm.
+ * `dsh <name>` abbreviates `dsh --profile <name>`; `plugin` activates carried
+ * optional bundles and manages a profile's dependencies through pnpm.
  * @module @deepseek-ai/dsh/args
  */
 
@@ -49,11 +49,11 @@ interface DumpConfigSchemaInvocation {
   patches: string[]
 }
 
-/** Manage a profile's plugins: forward `args` to pnpm inside the profile directory. */
+/** Activate carried bundles or manage a profile's packages through pnpm. */
 interface PluginInvocation {
   mode: 'plugin'
   profile: string
-  /** Raw pnpm arguments, verbatim. */
+  /** Bundle activation, compatibility management, or raw pnpm arguments. */
   args: string[]
 }
 
@@ -90,6 +90,9 @@ function rejectElectronProfile(program: Command, profile: string): void {
 const HELP_EXAMPLES = `
 Examples:
   dsh web                                   boot the web profile (same as: dsh --profile web)
+  dsh plugin --profile cloud enable --empty @deepseek-ai/dsh-experimental-cloud-connectors-cli
+                                            enable the optional cloud command profile without npm access
+  dsh cloud login supabase                   sign in, then choose cloud tool permissions separately
   dsh rescue --from-default-profile web
                                             recreate rescue from the shipped web template, then boot it
   dsh headless "run the tests"              answer one task, print the result, and exit
@@ -185,7 +188,7 @@ export function parseDshArgs(argv: readonly string[], version: string, manageDes
     })
 
   if (first === 'plugin') {
-    const plugin = program.command('plugin').description('manage a profile\'s plugins by forwarding the remaining arguments to pnpm in the profile directory')
+    const plugin = program.command('plugin').description('enable carried optional bundles or manage a profile\'s packages through pnpm')
     plugin
       // Commander copies the launcher's disabled help option into subcommands. The
       // forwarder restores its own help and stops reading options at forwarded pnpm input.
@@ -193,11 +196,11 @@ export function parseDshArgs(argv: readonly string[], version: string, manageDes
       .passThroughOptions()
       .requiredOption('--profile <name>', 'the profile whose plugins to manage (initialized on first use)', selectProfile)
       .allowUnknownOption()
-      .argument('[args...]', 'pnpm arguments, forwarded verbatim (add <pkg>, remove <pkg>, why <pkg>, ...)')
+      .argument('[args...]', 'enable [--empty] <bundle>, or pnpm arguments (add <pkg>, remove <pkg>, why <pkg>, ...)')
       .action((args: string[], options: { profile: string }) => {
         if (options.profile === '') program.error('error: --profile needs a name')
         if (!manageDesktopProfile) rejectElectronProfile(plugin, options.profile)
-        if (args.length === 0) program.error('error: plugin needs pnpm arguments to forward (e.g. add <package>)')
+        if (args.length === 0) program.error('error: plugin needs enable <bundle> or pnpm arguments (e.g. add <package>)')
         resolved = { mode: 'plugin', profile: options.profile.toLowerCase() === 'desktop' ? 'desktop' : options.profile, args }
       })
   }

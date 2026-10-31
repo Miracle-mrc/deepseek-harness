@@ -965,6 +965,9 @@ export const FOUNDATION_TYPE_NAMES: ReadonlySet<string> = new Set([
 /** Project types deliberately documented outside the subsystems catalog. */
 export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   CloudConnectionView: 'credential-free connection status and tool-selection view owned by packages/experimental/cloud-connectors/README.md and src/types.ts',
+  CloudStartOptions: 'non-secret AWS CLI selectors owned by packages/experimental/cloud-connectors/README.md and src/types.ts',
+  CloudPromptId: 'private prompt identity owned by packages/experimental/cloud-connectors/README.md and src/types.ts',
+  CloudAttemptId: 'authorization cancellation identity owned by packages/experimental/cloud-connectors/README.md and src/types.ts',
   CloudSignIn: 'browser authorization hand-off owned by packages/experimental/cloud-connectors/README.md and src/types.ts',
   ActionCardDecision: 'packages/experimental/action-cards/README.md',
   ActionCardKind: 'packages/experimental/action-cards/README.md',

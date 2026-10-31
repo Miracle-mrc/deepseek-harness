@@ -1,16 +1,70 @@
 /** Profile package management and explicit, exact-version compatibility approvals. */
 import { runPluginCommand, runProfilePnpm, setProfileVersionExemption, type PackageOperationOptions } from '@deepseek-ai/dsh-plugin-manager/operations'
 import { INSTALL_ANCHOR } from './profile-boot.ts'
-import { initProfile, readProfileCompatibility, resolveProfileDir, type ProfileContext } from '@deepseek-ai/dsh-app-boot'
-import { PROFILE_TEMPLATES, DEFAULT_PROFILE_BUNDLES } from '@deepseek-ai/dsh-official-bundles'
+import {
+  assertBundlePlatform, evaluatePluginCompatibility, initProfile, pluginCompatibilityWarning, readProfileCompatibility,
+  readProfileManifest, resolveBundleDir, resolveProfileDir, writeProfileBundles, type ProfileContext,
+} from '@deepseek-ai/dsh-app-boot'
+import { PROFILE_TEMPLATES, DEFAULT_PROFILE_BUNDLES, OPTIONAL_BUNDLES } from '@deepseek-ai/dsh-official-bundles'
 import { withFileLock } from '@deepseek-ai/dsh-atomic-write'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 function requireDesktopProfile(dir: string): void {
   if (!existsSync(join(dir, 'package.json'))) {
     throw new Error('Open DeepSeek Harness Desktop once to initialize its profile, then fully quit it before running dsh plugin --profile desktop.')
+  }
+}
+
+/** Activate an installation-carried optional bundle without invoking a package manager. */
+async function enableBundleCommand(profile: string, args: readonly string[]): Promise<number | undefined> {
+  const [command, ...rest] = args
+  if (command !== 'enable') return undefined
+  try {
+    let bundleName: string | undefined
+    let empty = false
+    for (const argument of rest) {
+      if (argument === '--empty' && !empty) empty = true
+      else if (!argument.startsWith('-') && bundleName === undefined) bundleName = argument
+      else throw new Error('usage: dsh plugin --profile <name> enable [--empty] <carried-optional-bundle>')
+    }
+    if (bundleName === undefined) throw new Error('usage: dsh plugin --profile <name> enable [--empty] <carried-optional-bundle>')
+    if (!OPTIONAL_BUNDLES.includes(bundleName)) throw new Error('enable requires an optional bundle carried by this dsh installation')
+    const selectedBundle = bundleName
+    // The second anchor deliberately repeats the installation, never a profile-local replacement.
+    const bundleDir = resolveBundleDir('dsh', bundleName, INSTALL_ANCHOR, dirname(INSTALL_ANCHOR))
+    const installed = readProfileManifest('dsh', bundleDir)
+    const patch = installed.dsh?.bundle?.patch
+    if (installed.name !== bundleName || typeof patch !== 'string' || patch.trim() === ''
+      || !statSync(resolve(bundleDir, patch)).isFile()) {
+      throw new Error('the installed optional package must declare an available bundle patch')
+    }
+    assertBundlePlatform(installed.dsh?.bundle?.platforms, process.platform)
+    const dir = resolveProfileDir(profile)
+    if (profile !== 'desktop') await mkdir(dir, { recursive: true })
+    await withFileLock(join(dir, 'package.json'), () => {
+      if (profile === 'desktop') requireDesktopProfile(dir)
+      const compatibility = readProfileCompatibility(dir)
+      for (const warning of compatibility.warnings) process.stderr.write(`dsh: warning: ${warning}\n`)
+      const issue = evaluatePluginCompatibility(installed, compatibility.exemptions)
+      if (issue !== undefined && !issue.exempted) throw new Error(pluginCompatibilityWarning(issue))
+      if (!existsSync(join(dir, 'package.json'))) {
+        initProfile(dir, empty ? [] : PROFILE_TEMPLATES[profile]?.bundles ?? DEFAULT_PROFILE_BUNDLES)
+      }
+      const manifest = readProfileManifest('dsh', dir)
+      const bundles = manifest.dsh?.profile?.bundles ?? []
+      if (!Array.isArray(bundles) || bundles.some(value => typeof value !== 'string')) {
+        throw new Error('the profile bundle list must contain only package names; repair its package.json before enabling a bundle')
+      }
+      if (!bundles.includes(selectedBundle)) writeProfileBundles(dir, manifest, [...bundles, selectedBundle])
+      process.stdout.write(`dsh: enabled ${selectedBundle} in profile ${profile}\n`)
+      return Promise.resolve()
+    }, { waitMs: 120000 })
+    return 0
+  } catch (error) {
+    process.stderr.write(`dsh: ${String(error)}\n`)
+    return 1
   }
 }
 
@@ -64,7 +118,7 @@ async function versionCommand(profile: string, args: readonly string[]): Promise
 
 /** Run package management for a profile.
  * @param profile Profile name; Desktop's reserved profile must already be initialized by the application.
- * @param args DSH exemption command or pnpm arguments relative to the invoking directory.
+ * @param args DSH bundle activation, exemption command, or pnpm arguments relative to the invoking directory.
  * @param packageManager Installation-owned executable and environment for pnpm operations.
  * @returns Zero on success; nonzero on invalid approval or package-manager failure.
  */
@@ -75,6 +129,8 @@ export async function runPlugin(profile: string, args: readonly string[], packag
       return 1
     }
   }
+  const enabled = await enableBundleCommand(profile, args)
+  if (enabled !== undefined) return enabled
   const versionResult = await versionCommand(profile, args)
   if (versionResult !== undefined) return versionResult
   const dir = resolveProfileDir(profile)

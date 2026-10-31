@@ -1084,6 +1084,23 @@ export interface Config {
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-experimental-client-ui-forge -->
 
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-experimental-cloud-connectors-cli -->
+<a id="deepseek-aidsh-experimental-cloud-connectors-cli"></a>
+
+## `@deepseek-ai/dsh-experimental-cloud-connectors-cli`
+
+- `inject`: `cmdlineArgs`
+- `source`: [`packages/experimental/cloud-connectors-cli/src/index.ts:16`](../packages/experimental/cloud-connectors-cli/src/index.ts)
+
+```ts config-catalog
+/** CLI display pacing; provider request deadlines belong to cloud-connectors. */
+export interface Config {
+  /** Delay between status reads while an owned sign-in is pending. */
+  pollIntervalMs?: number
+}
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-experimental-cloud-connectors-cli -->
+
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-experimental-computer-use-cua-driver-mcp -->
 <a id="deepseek-aidsh-experimental-computer-use-cua-driver-mcp"></a>
 

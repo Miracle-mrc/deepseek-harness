@@ -8,10 +8,11 @@ import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '../src/client/index.ts'
 import { CloudConnectionCard, type CloudConnectionActions } from '../src/client/CloudConnectionCard.tsx'
 import type { CloudProvider } from '../src/catalog.ts'
-import type { CloudConnectionView } from '../src/types.ts'
+import type { CloudAttemptId, CloudConnectionView } from '../src/types.ts'
 import { en, zh, NS } from '../src/client/locales.ts'
 
 const runtimes: SlotTestRuntime[] = []
+const attemptId = 'fixture-attempt' as CloudAttemptId
 
 beforeEach(() => { vi.useFakeTimers() })
 afterEach(async () => {
@@ -47,7 +48,9 @@ async function renderConsent(provider: CloudProvider, tools: CloudConnectionView
   const confirm = vi.fn(async () => [])
   const actions: CloudConnectionActions = {
     list: async () => [{ provider, status: 'choose-permissions', enabledTools: [], tools }],
-    start: async () => ({ url: 'https://example.test/login' }),
+    start: async () => ({ attemptId, url: 'https://example.test/login' }),
+    complete: async () => [],
+    cancel: async () => [],
     confirm,
     disconnect: async () => [],
   }
@@ -135,7 +138,9 @@ async function renderDeferredCard() {
       reads.push(read)
       return read.promise
     }),
-    start: async () => ({ url: 'https://provider.example.test/authorize' }),
+    start: async () => ({ attemptId, url: 'https://provider.example.test/authorize' }),
+    complete: async () => [],
+    cancel: async () => [],
     confirm: vi.fn(() => confirmation.promise),
     disconnect: vi.fn(() => disconnection.promise),
   }
@@ -144,6 +149,54 @@ async function renderDeferredCard() {
 }
 
 describe('cloud consent observation ordering', () => {
+  it('lets a connected account change its tool selection without signing in again', async () => {
+    let current = connectionSnapshot('connected')
+    const actions: CloudConnectionActions = {
+      list: async () => current,
+      start: vi.fn(async () => ({ attemptId })),
+      complete: vi.fn(async () => []),
+      cancel: vi.fn(async () => []),
+      confirm: vi.fn<CloudConnectionActions['confirm']>(async (_provider, selected) => {
+        current = [{ ...current[0]!, enabledTools: selected }]
+        return current
+      }),
+      disconnect: async () => [],
+    }
+    await renderCard('supabase', actions)
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: en.editPermissions }))
+    expect(screen.getByRole('checkbox', { name: /execute_sql/ })).toHaveProperty('checked', true)
+    expect(screen.getByRole('checkbox', { name: /apply_migration/ })).toHaveProperty('checked', false)
+    fireEvent.click(screen.getByRole('checkbox', { name: /execute_sql/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /apply_migration/ }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
+    expect(screen.getByRole('checkbox', { name: /execute_sql/ })).toHaveProperty('checked', false)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.savePermissions })) })
+
+    expect(actions.confirm).toHaveBeenCalledExactlyOnceWith('supabase', ['apply_migration'])
+    expect(actions.start).not.toHaveBeenCalled()
+    expect(actions.complete).not.toHaveBeenCalled()
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    expect(screen.getByText(en['status.connected'])).toBeTruthy()
+  })
+
+  it('keeps unchecked tools when discovery adds another tool', async () => {
+    let current = connectionSnapshot('choose-permissions')
+    const actions: CloudConnectionActions = {
+      list: async () => current,
+      start: async () => ({ attemptId }), complete: async () => [], cancel: async () => [],
+      confirm: vi.fn(async () => []), disconnect: async () => [],
+    }
+    await renderCard('supabase', actions)
+    fireEvent.click(screen.getByRole('checkbox', { name: /execute_sql/ }))
+    current = [{ ...current[0]!, tools: [...databaseTools, { name: 'list_tables', description: 'Inspect schema' }] }]
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
+
+    expect(screen.getByRole('checkbox', { name: /execute_sql/ })).toHaveProperty('checked', false)
+    expect(screen.getByRole('checkbox', { name: /list_tables/ })).toHaveProperty('checked', true)
+    expect(actions.confirm).not.toHaveBeenCalled()
+  })
+
   it('publishes a settled read while a newer status request is still pending', async () => {
     const { reads } = await renderDeferredCard()
     await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
@@ -211,8 +264,10 @@ describe('cloud consent observation ordering', () => {
       start: async () => {
         // OAuth and discovery finish before the next status poll.
         current = connectionSnapshot('choose-permissions')
-        return { url: 'https://provider.example.test/authorize' }
+        return { attemptId, url: 'https://provider.example.test/authorize' }
       },
+      complete: async () => [],
+      cancel: async () => [],
       confirm: vi.fn(async () => []),
       disconnect: async () => {
         current = connectionSnapshot('not-connected')

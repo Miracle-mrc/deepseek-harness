@@ -1,0 +1,42 @@
+- id: llm-deepseek
+  disabled: true
+
+- id: plugin-package-inventory-deepseek
+  disabled: true
+
+- id: session-title-llm
+  disabled: true
+
+- id: session-persistence-jsonl
+  config:
+    root: !!js dshHomePath('sessions')
+    compression: none
+
+- id: sandbox
+  config:
+    runnerCommand:
+      - bash
+      - -c
+      - while [ "$1" != "--" ]; do shift; done; shift; exec "$@"
+      - passthrough-runner
+    runnerFailureSignatures:
+      - 'passthrough-runner: profile rejected'
+
+- id: credentials
+  disabled: false
+  config:
+    watch: false
+
+- id: authorization
+  disabled: false
+
+- insert:
+    - id: llm-replay
+      name: '@deepseek-ai/dsh-llm-replay'
+      config:
+        providers:
+          - id: deepseek-official
+            models:
+              - id: deepseek-v4-flash
+    - id: cloud-connectors-consent
+      name: '../../../packages/test-support/session-snapshot/tests/fixtures/cloud-connectors-consent.ts'

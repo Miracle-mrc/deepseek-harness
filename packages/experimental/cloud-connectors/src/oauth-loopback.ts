@@ -57,29 +57,48 @@ export class OAuthLoopback {
     // install a rejection observer so early aborts never become unhandled.
     void callback.result.catch(() => undefined)
     server.on('request', (request, response) => {
-      const url = URL.parse(request.url ?? '/', callback.url)
-      // Invalid targets must not terminate or consume the pending sign-in.
-      // Responses never echo the OAuth code, state, or identity-provider error.
-      if (url === null || url.origin !== origin || request.method !== 'GET' || url.pathname !== '/oauth/callback'
-        || url.searchParams.get('state') !== callback.state || callback.settled) {
+      const outcome = request.method === 'GET'
+        ? callback.acceptCallback(URL.parse(request.url ?? '/', callback.url)) : 'invalid'
+      if (outcome === 'invalid') {
         response.writeHead(400, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }).end('Invalid authorization callback')
         return
       }
-      callback.settled = true
-      const error = url.searchParams.get('error')
-      const code = url.searchParams.get('code')
-      if (error !== null || code === null || code.length === 0) {
-        callback.fail(new Error('The identity provider declined or returned no authorization code'))
+      // Responses never echo the OAuth code, state, or identity-provider error.
+      if (outcome === 'declined') {
         response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }).end('Authorization was not completed. Return to DeepSeek Harness.')
         return
       }
-      const issuer = url.searchParams.get('iss')
-      callback.settle({ code, ...(issuer === null ? {} : { iss: issuer }) })
       response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }).end('Authorization received. Return to DeepSeek Harness.')
     })
     if (signal.aborted) void callback.close().catch(() => undefined)
     else signal.addEventListener('abort', () => { void callback.close().catch(() => undefined) }, { once: true })
     return callback
+  }
+
+  /**
+   * Complete this attempt with the full callback URL copied from another device's browser.
+   * Invalid or already consumed URLs leave the result unchanged; provider denials reject it.
+   * @param rawURL - Absolute URL matching this attempt's registered callback and state.
+   * @returns Whether the URL belonged to and settled this pending attempt.
+   */
+  completeCallback(rawURL: string): boolean {
+    return this.acceptCallback(URL.parse(rawURL)) !== 'invalid'
+  }
+
+  private acceptCallback(url: URL | null): 'invalid' | 'declined' | 'authorized' {
+    if (url === null || url.origin !== new URL(this.url).origin || url.pathname !== '/oauth/callback'
+      || url.username !== '' || url.password !== '' || url.hash !== ''
+      || url.searchParams.get('state') !== this.state || this.settled) return 'invalid'
+    this.settled = true
+    const error = url.searchParams.get('error')
+    const code = url.searchParams.get('code')
+    if (error !== null || code === null || code.length === 0) {
+      this.fail(new Error('The identity provider declined or returned no authorization code'))
+      return 'declined'
+    }
+    const issuer = url.searchParams.get('iss')
+    this.settle({ code, ...(issuer === null ? {} : { iss: issuer }) })
+    return 'authorized'
   }
 
   /** Stop listening and reject an unfinished attempt. */

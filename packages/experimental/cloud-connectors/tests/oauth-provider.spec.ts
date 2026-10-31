@@ -1,14 +1,19 @@
-/** OAuth uses the installed SDK with only provider HTTP and credential storage replaced. */
+/** OAuth exercises the installed SDK, with focused cancellation cases at its discovery-fetch adapter. */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { Context } from '@deepseek-ai/cordis'
-import { auth, type FetchLike, type OAuthDiscoveryState } from '@modelcontextprotocol/client'
+import { auth, discoverOAuthServerInfo, type FetchLike, type OAuthDiscoveryState } from '@modelcontextprotocol/client'
 import type { CredentialRecord } from '@deepseek-ai/dsh-credentials'
 import { cloudMcpUrl } from '../src/catalog.ts'
 import {
   cloudAuthorizationFetch, CloudOAuthProvider, CloudOAuthReconnectRequiredError, parseCloudGrant, type CloudGrant,
 } from '../src/oauth-provider.ts'
+
+vi.mock('@modelcontextprotocol/client', async (original) => {
+  const actual = await original<typeof import('@modelcontextprotocol/client')>()
+  return { ...actual, discoverOAuthServerInfo: vi.fn(actual.discoverOAuthServerInfo) }
+})
 
 const endpoint = cloudMcpUrl('supabase')
 const issuer = 'https://identity.example'
@@ -21,7 +26,7 @@ const metadata = {
   response_types_supported: ['code'],
   grant_types_supported: ['authorization_code', 'refresh_token'],
   code_challenge_methods_supported: ['S256'],
-  token_endpoint_auth_methods_supported: ['none'],
+  token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
   scopes_supported: ['mcp:read', 'mcp:write', 'offline_access'],
   authorization_response_iss_parameter_supported: true,
 }
@@ -41,7 +46,10 @@ function grant(): CloudGrant {
   return {
     grantId: randomUUID(), provider: 'supabase', endpoint, redirectUri,
     tokens: { access_token: 'old-access', refresh_token: 'old-refresh', token_type: 'Bearer', issuer },
-    clientInformation: { client_id: 'registered-client', redirect_uris: [redirectUri], token_endpoint_auth_method: 'none', issuer },
+    clientInformation: {
+      client_id: 'registered-client', client_secret: 'registered-client-secret',
+      redirect_uris: [redirectUri], token_endpoint_auth_method: 'client_secret_basic', issuer,
+    },
     confirmed: true, allowedTools: ['execute_sql'],
   }
 }
@@ -74,7 +82,7 @@ function json(body: object): Response {
   return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } })
 }
 
-function fakeIdentity(token: (body: URLSearchParams) => Response | Promise<Response>, register = false) {
+function fakeIdentity(token: (body: URLSearchParams, headers: Headers) => Response | Promise<Response>, register = false) {
   return vi.fn<typeof fetch>(async (input, init) => {
     const url = input instanceof Request ? input.url : String(input)
     if (url === 'https://mcp.supabase.com/.well-known/oauth-protected-resource/mcp') return json(discovery.resourceMetadata!)
@@ -84,7 +92,7 @@ function fakeIdentity(token: (body: URLSearchParams) => Response | Promise<Respo
       if (typeof init?.body !== 'string') throw new Error('Expected a JSON registration request')
       expect(JSON.parse(init.body)).toMatchObject({
         redirect_uris: [redirectUri], grant_types: ['authorization_code', 'refresh_token'],
-        response_types: ['code'], token_endpoint_auth_method: 'none', application_type: 'native',
+        response_types: ['code'], token_endpoint_auth_method: 'client_secret_basic', application_type: 'native',
         scope: 'mcp:read mcp:write offline_access',
       })
       return json(grant().clientInformation)
@@ -94,18 +102,20 @@ function fakeIdentity(token: (body: URLSearchParams) => Response | Promise<Respo
       if (typeof init?.body !== 'string' && !(init?.body instanceof URLSearchParams)) {
         throw new Error('Expected a form token request')
       }
-      return token(new URLSearchParams(init.body))
+      return token(new URLSearchParams(init.body), new Headers(init.headers))
     }
     throw new Error('Unexpected OAuth fixture request')
   })
 }
 
 describe('cloud OAuth provider', () => {
-  it('keeps discovery and PKCE bound to the browser exchange and creates an unconfirmed grant', async () => {
+  it('uses Supabase registration credentials and PKCE without exposing secrets in the browser URL', async () => {
     const store = credentialStore()
     const redirect = vi.fn<(url: URL) => void>()
     const provider = new CloudOAuthProvider(store.ctx, 'supabase', redirectUri, redirect, 'callback-state')
-    const token = vi.fn((body: URLSearchParams) => {
+    const token = vi.fn((body: URLSearchParams, headers: Headers) => {
+      expect(headers.get('Authorization')).toBe(`Basic ${btoa('registered-client:registered-client-secret')}`)
+      expect(body.has('client_secret')).toBe(false)
       expect(body.get('grant_type')).toBe('authorization_code')
       expect(body.get('code')).toBe('one-time-code')
       expect(body.get('code_verifier')).toBe(provider.codeVerifier())
@@ -121,8 +131,12 @@ describe('cloud OAuth provider', () => {
     expect(url?.origin).toBe(issuer)
     expect(url?.searchParams.get('state')).toBe('callback-state')
     expect(url?.searchParams.get('code_challenge_method')).toBe('S256')
+    expect(url?.searchParams.get('code_challenge')).toBe(createHash('sha256').update(provider.codeVerifier()).digest('base64url'))
     expect(url?.searchParams.get('scope')).toBe('mcp:read mcp:write offline_access')
     expect(url?.searchParams.get('resource')).toBe(endpoint)
+    expect(url?.href).not.toContain('registered-client-secret')
+    expect(url?.href).not.toContain('authorized-access')
+    expect(url?.href).not.toContain('authorized-refresh')
 
     const beforeCallback = fetchFn.mock.calls.length
     await expect(auth(provider, { serverUrl: endpoint, fetchFn, authorizationCode: 'one-time-code', iss: issuer }))
@@ -130,10 +144,33 @@ describe('cloud OAuth provider', () => {
     expect(fetchFn.mock.calls.length - beforeCallback).toBe(1)
     expect(token).toHaveBeenCalledOnce()
     const result = provider.toGrant(endpoint, undefined)
-    expect(result).toMatchObject({ redirectUri, confirmed: false, allowedTools: [], tokens: { issuer } })
+    expect(result).toMatchObject({
+      redirectUri, confirmed: false, allowedTools: [], tokens: { issuer },
+      clientInformation: { client_id: 'registered-client', client_secret: 'registered-client-secret', token_endpoint_auth_method: 'client_secret_basic', issuer },
+    })
     expect(provider.toGrant(endpoint, undefined).grantId).toBe(result.grantId)
     expect(parseCloudGrant('supabase', { kind: 'grant', payload: result })).toEqual(result)
     expect(store.modifyRecord).not.toHaveBeenCalled()
+  })
+
+  it('retains public-client registration metadata for the legacy AWS OAuth path', () => {
+    const { ctx } = credentialStore()
+    const provider = new CloudOAuthProvider(ctx, 'aws', redirectUri, () => undefined, 'callback-state')
+    expect(provider.clientMetadata.token_endpoint_auth_method).toBe('none')
+  })
+
+  it('refuses incomplete sign-in state and never reuses an interactive callback after restoration', async () => {
+    const { ctx } = credentialStore()
+    const provider = new CloudOAuthProvider(ctx, 'aws', redirectUri, () => undefined)
+    expect(() => provider.state()).toThrow(CloudOAuthReconnectRequiredError)
+    expect(() => provider.codeVerifier()).toThrow('Cloud OAuth: missing PKCE verifier')
+    expect(() => provider.toGrant(cloudMcpUrl('aws'), 'us-east-1')).toThrow(/no usable tokens or client registration/)
+    await provider.saveTokens({ access_token: 'new-token', token_type: 'Bearer' })
+    expect(() => provider.toGrant(cloudMcpUrl('aws'), 'us-east-1')).toThrow(/no usable tokens or client registration/)
+    provider.saveClientInformation({ client_id: 'new-client' })
+    expect(provider.toGrant(cloudMcpUrl('aws'), 'us-east-1')).toMatchObject({ provider: 'aws', region: 'us-east-1' })
+    const restored = CloudOAuthProvider.fromGrant(ctx, 'supabase', grant())
+    expect(() => restored.state()).toThrow(CloudOAuthReconnectRequiredError)
   })
 
   it('refuses a callback from a different issuer before exchanging the code', async () => {
@@ -153,10 +190,10 @@ describe('cloud OAuth provider', () => {
     const store = credentialStore(original)
     const provider = CloudOAuthProvider.fromGrant(store.ctx, 'supabase', original)
     const redirect = vi.spyOn(provider, 'redirectToAuthorization')
-    const token = vi.fn((body: URLSearchParams) => {
+    const token = vi.fn((body: URLSearchParams, headers: Headers) => {
       expect(body.get('grant_type')).toBe('refresh_token')
       expect(body.get('refresh_token')).toBe('old-refresh')
-      expect(body.get('client_id')).toBe('registered-client')
+      expect(headers.get('Authorization')).toBe(`Basic ${btoa('registered-client:registered-client-secret')}`)
       expect(body.get('resource')).toBe(endpoint)
       return json({ access_token: 'new-access', refresh_token: 'rotated-refresh', token_type: 'Bearer' })
     })
@@ -431,6 +468,103 @@ describe('cloud OAuth provider', () => {
     expect(parseCloudGrant('supabase', store.read())).toEqual(original)
   })
 
+  it('refuses a transport refresh for another server before sending credentials', async () => {
+    const original = grant()
+    const store = credentialStore(original)
+    const provider = CloudOAuthProvider.fromGrant(store.ctx, 'supabase', original)
+    const fetchFn = vi.fn<FetchLike>()
+    await expect(provider.transportAuth().onUnauthorized!({
+      serverUrl: new URL('https://unrelated.example/mcp'), fetchFn, response: new Response(null, { status: 401 }),
+    })).rejects.toBeInstanceOf(CloudOAuthReconnectRequiredError)
+    expect(fetchFn).not.toHaveBeenCalled()
+    expect(parseCloudGrant('supabase', store.read())).toEqual(original)
+  })
+
+  it.each(['stored-slash', 'discovered-slash'] as const)('retains the SDK issuer equivalence for %s', async (variant) => {
+    const original = grant()
+    const discoveredIssuer = variant === 'discovered-slash' ? `${issuer}/` : issuer
+    if (variant === 'stored-slash') {
+      original.tokens['issuer'] = `${issuer}/`
+      original.clientInformation['issuer'] = `${issuer}/`
+    }
+    const store = credentialStore(original)
+    const provider = CloudOAuthProvider.fromGrant(store.ctx, 'supabase', original)
+    const identity = fakeIdentity(() => json({ access_token: 'refreshed-token', refresh_token: 'new-refresh', token_type: 'Bearer' }))
+    const fetchFn: FetchLike = (input, init) => {
+      const url = input instanceof Request ? input.url : String(input)
+      if (url === 'https://mcp.supabase.com/.well-known/oauth-protected-resource/mcp') {
+        return Promise.resolve(json({ ...discovery.resourceMetadata, authorization_servers: [discoveredIssuer] }))
+      }
+      if (url === `${issuer}/.well-known/oauth-authorization-server`) return Promise.resolve(json({ ...metadata, issuer: discoveredIssuer }))
+      return identity(input, init)
+    }
+    await expect(provider.transportAuth().onUnauthorized!({
+      serverUrl: new URL(endpoint), fetchFn, response: new Response(null, { status: 401 }),
+    })).resolves.toBeUndefined()
+    expect(provider.tokens()).toMatchObject({ access_token: 'refreshed-token', issuer: discoveredIssuer })
+  })
+
+  it.each([false, true])('refreshes legacy metadata discovery with an explicit resource validator: %s', async (explicitResource) => {
+    const original = grant()
+    const fallbackIssuer = 'https://mcp.supabase.com/'
+    original.tokens['issuer'] = fallbackIssuer
+    original.clientInformation['issuer'] = fallbackIssuer
+    const store = credentialStore(original)
+    const provider = CloudOAuthProvider.fromGrant(store.ctx, 'supabase', original)
+    const validate = vi.fn(async () => new URL(endpoint))
+    if (explicitResource) Object.assign(provider, { validateResourceURL: validate })
+    const token = vi.fn((body: URLSearchParams) => {
+      expect(body.get('resource')).toBe(explicitResource ? endpoint : null)
+      return json({ access_token: 'legacy-refreshed-token', refresh_token: 'new-refresh', token_type: 'Bearer' })
+    })
+    const fetchFn: FetchLike = async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input)
+      if (url.startsWith('https://mcp.supabase.com/.well-known/')) return new Response(null, { status: 404 })
+      if (url === 'https://mcp.supabase.com/token' && init?.body instanceof URLSearchParams) return token(init.body)
+      throw new Error('Unexpected legacy discovery request')
+    }
+    await expect(provider.transportAuth().onUnauthorized!({
+      serverUrl: new URL(endpoint), fetchFn, response: new Response(null, { status: 401 }),
+    })).resolves.toBeUndefined()
+    expect(token).toHaveBeenCalledOnce()
+    expect(provider.discoveryState()?.authorizationServerMetadata).toBeUndefined()
+    expect(provider.tokens()).toMatchObject({ access_token: 'legacy-refreshed-token', issuer: fallbackIssuer })
+    if (explicitResource) expect(validate).toHaveBeenCalledWith(new URL(endpoint), undefined)
+  })
+
+  it.each(['request', 'init'] as const)('keeps the %s cancellation signal when SDK discovery supplies a Request and request init', async (cancelled) => {
+    const original = grant()
+    const store = credentialStore(original)
+    const provider = CloudOAuthProvider.fromGrant(store.ctx, 'supabase', original)
+    const request = new AbortController()
+    const init = new AbortController()
+    const entered = Promise.withResolvers<undefined>()
+    vi.mocked(discoverOAuthServerInfo).mockImplementationOnce(async (_endpoint, options) => {
+      if (options?.fetchFn === undefined) throw new Error('Expected a bounded discovery fetch')
+      // Exercise the native fetch Request input at the JavaScript SDK boundary, beyond its narrower URL declaration.
+      const pending: unknown = Reflect.apply(options.fetchFn, undefined, [
+        new Request(`${issuer}/discovery-probe`, { signal: request.signal }), { signal: init.signal },
+      ])
+      await pending
+      return discovery
+    })
+    const fetchFn: FetchLike = (_input, options) => new Promise((_resolve, reject) => {
+      const signal = options?.signal
+      if (signal == null) throw new Error('Expected the combined cancellation signal')
+      signal.addEventListener('abort', () => { reject(new Error('private-request-cancellation-detail')) }, { once: true })
+      entered.resolve(undefined)
+    })
+    const pending = provider.transportAuth().onUnauthorized!({
+      serverUrl: new URL(endpoint), fetchFn, response: new Response(null, { status: 401 }),
+    })
+    const rejected = expect(pending).rejects.toMatchObject({ code: 'refresh-unavailable' })
+    await entered.promise
+    if (cancelled === 'request') request.abort()
+    else init.abort()
+    await rejected
+    expect(parseCloudGrant('supabase', store.read())).toEqual(original)
+  })
+
   it('keeps refreshed tokens private until their durable replacement succeeds', async () => {
     const original = grant()
     const store = credentialStore(original)
@@ -554,6 +688,11 @@ describe('interactive OAuth response privacy', () => {
 })
 
 describe('cloud grant validation', () => {
+  it('refuses an unsupported AWS region even when all persisted OAuth fields are present', () => {
+    expect(parseCloudGrant('aws', { kind: 'grant', payload: {
+      ...grant(), provider: 'aws', endpoint: cloudMcpUrl('aws'), region: 'unsupported-region',
+    } })).toBeUndefined()
+  })
   it('requires a sign-in identity and registered loopback redirect instead of upgrading legacy grants', () => {
     const { grantId: _identity, redirectUri: _redirect, ...legacy } = grant()
     expect(parseCloudGrant('supabase', { kind: 'grant', payload: legacy })).toBeUndefined()

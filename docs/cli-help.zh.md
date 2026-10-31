@@ -50,6 +50,9 @@ Options:
 
 Examples:
   dsh web                                   boot the web profile (same as: dsh --profile web)
+  dsh plugin --profile cloud enable --empty @deepseek-ai/dsh-experimental-cloud-connectors-cli
+                                            enable the optional cloud command profile without npm access
+  dsh cloud login supabase                   sign in, then choose cloud tool permissions separately
   dsh rescue --from-default-profile web
                                             recreate rescue from the shipped web template, then boot it
   dsh headless "run the tests"              answer one task, print the result, and exit
@@ -68,12 +71,11 @@ Examples:
 ```text
 Usage: dsh plugin [options] [args...]
 
-manage a profile's plugins by forwarding the remaining arguments to pnpm in the
-profile directory
+enable carried optional bundles or manage a profile's packages through pnpm
 
 Arguments:
-  args              pnpm arguments, forwarded verbatim (add <pkg>, remove <pkg>,
-                    why <pkg>, ...)
+  args              enable [--empty] <bundle>, or pnpm arguments (add <pkg>,
+                    remove <pkg>, why <pkg>, ...)
 
 Options:
   --profile <name>  the profile whose plugins to manage (initialized on first

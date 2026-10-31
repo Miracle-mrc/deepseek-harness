@@ -1,0 +1,46 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/experimental/cloud-connectors-cli/README.md
+/:
+  en: 3092dee880d70c98
+  zh: fb01f6a9546a0db0
+/deepseek-ai-dsh-experimental-cloud-connectors-cli:
+  en: fa0bb5da2fe21c0b
+  zh: 66935bbd4d4296f5
+/deepseek-ai-dsh-experimental-cloud-connectors-cli/summary:
+  en: 29534dc3d51e683e
+  zh: 60d7d72cbf309e02
+/deepseek-ai-dsh-experimental-cloud-connectors-cli/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 0fa203a334ffb450
+/deepseek-ai-dsh-experimental-cloud-connectors-cli/use-this-package:
+  en: dec6caff38482aca
+  zh: 9b67b866eeea0fb8
+/deepseek-ai-dsh-experimental-cloud-connectors-cli/understand-the-implementation:
+  en: 9e3f7854e74eec33
+  zh: 78014413e3cae19a
+/deepseek-ai-dsh-experimental-cloud-connectors-cli/further-exploration:
+  en: f0c3b656146b82bb
+  zh: b560692857f28f2d
+/deepseek-ai-dsh-experimental-cloud-connectors-cli/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-experimental-cloud-connectors-cli/model-experience/terminal-connection-commands:
+  en: 39546b405952aac8
+  zh: 4d2c7012394bd7e4
+/deepseek-ai-dsh-experimental-cloud-connectors-cli/model-experience/terminal-connection-commands/what-the-model-sees:
+  en: 8b4fdc7c067f0c61
+  zh: 55cceab55ba1af86
+/deepseek-ai-dsh-experimental-cloud-connectors-cli/model-experience/terminal-connection-commands/token-effect:
+  en: 62350d0fcdca735d
+  zh: d51ce970df77728d
+/deepseek-ai-dsh-experimental-cloud-connectors-cli/model-experience/terminal-connection-commands/kv-cache-effect:
+  en: d5900541f8736089
+  zh: aa8abedca5930f3a
+/deepseek-ai-dsh-experimental-cloud-connectors-cli/known-limitations-and-deferred-work:
+  en: a6b0832fad74d00b
+  zh: d58195aae9c498f0
+/deepseek-ai-dsh-experimental-cloud-connectors-cli/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: 6c5f9788c6536776

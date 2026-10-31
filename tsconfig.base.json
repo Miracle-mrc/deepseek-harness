@@ -42,6 +42,7 @@
       "@deepseek-ai/dsh-experimental-cloud-connectors/client": ["./packages/experimental/cloud-connectors/src/client/index.ts"],
       "@deepseek-ai/dsh-experimental-cloud-connectors/types": ["./packages/experimental/cloud-connectors/src/types.ts"],
       "@deepseek-ai/dsh-experimental-cloud-connectors-bundle": ["./packages/experimental/cloud-connectors-bundle/src/index.ts"],
+      "@deepseek-ai/dsh-experimental-cloud-connectors-cli": ["./packages/experimental/cloud-connectors-cli/src/index.ts"],
       "@deepseek-ai/dsh-client-product-analytics": ["./packages/client/product-analytics/src/index.ts"],
       "@deepseek-ai/dsh-client-product-analytics/types": ["./packages/client/product-analytics/src/events.ts"],
       "@deepseek-ai/dsh-client-product-analytics/client": ["./packages/client/product-analytics/src/client/index.ts"],

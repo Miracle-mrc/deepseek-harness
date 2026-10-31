@@ -3,29 +3,47 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/experimental/cloud-connectors/README.md
 /:
-  en: ad5af337b863f0ce
-  zh: 6313033257b4a7ae
+  en: a8a3d98d583c6382
+  zh: 595301882218c82d
 /deepseek-ai-dsh-experimental-cloud-connectors:
   en: 7c3035be7a94b5d8
   zh: bfbd1a3d95040f90
 /deepseek-ai-dsh-experimental-cloud-connectors/summary:
-  en: f48e238e1f4bdbe8
-  zh: cb7649ad4585506a
+  en: b33c2f7810cfcfcb
+  zh: 3096f6286f1e8f3e
 /deepseek-ai-dsh-experimental-cloud-connectors/table-of-contents:
-  en: 238907fe313112ce
-  zh: bd90050a1638ef90
+  en: 89d4dc3863437d10
+  zh: a1a1194796b08780
 /deepseek-ai-dsh-experimental-cloud-connectors/use-this-package:
-  en: 081ecb34729a9efc
-  zh: d4c78f4b0716138d
+  en: 261898b014f885a6
+  zh: 2ec66ab0a95d2d17
+/deepseek-ai-dsh-experimental-cloud-connectors/use-this-package/connect-and-select-tools:
+  en: 3335aa6d7dbe45b0
+  zh: 2f22486e4474e449
+/deepseek-ai-dsh-experimental-cloud-connectors/use-this-package/aws-prerequisites-and-sign-in:
+  en: 25cb4eb38eae248e
+  zh: 2d005d914339ff43
+/deepseek-ai-dsh-experimental-cloud-connectors/use-this-package/supabase-sign-in:
+  en: baba60dc96fb704d
+  zh: 9b5887945e30bdbd
+/deepseek-ai-dsh-experimental-cloud-connectors/use-this-package/remote-web-and-ssh-hosts:
+  en: 9e27cc08ade7860d
+  zh: d1bacdbf57d71c20
+/deepseek-ai-dsh-experimental-cloud-connectors/use-this-package/credentials-and-disconnect:
+  en: 76c19712aa9d68d9
+  zh: 98fdca5c3abdfb10
+/deepseek-ai-dsh-experimental-cloud-connectors/use-this-package/custom-composition:
+  en: a8924c8e1e612b65
+  zh: fc4f4cc5995769bc
 /deepseek-ai-dsh-experimental-cloud-connectors/security-boundary:
-  en: 0b4c162974e44cec
-  zh: f114d71990134b52
+  en: a6293bdd37efabe9
+  zh: 1a637aefd6b7e853
 /deepseek-ai-dsh-experimental-cloud-connectors/understand-the-implementation:
-  en: 9c979adf1cedb157
-  zh: 05c1caae2b26e0db
+  en: 7a99582d4277a9bd
+  zh: 6eb52f623371acef
 /deepseek-ai-dsh-experimental-cloud-connectors/further-exploration:
-  en: 22cdb25c66e39aca
-  zh: d043c7a3ca63675d
+  en: 054c579d0f88d0a7
+  zh: 4b95a515a542e6f4
 /deepseek-ai-dsh-experimental-cloud-connectors/model-experience:
   en: 215e7ba838619b7b
   zh: a311da3843709f90
@@ -33,17 +51,17 @@
   en: 6d8e7d624ae1f728
   zh: 608131f0f7cfb304
 /deepseek-ai-dsh-experimental-cloud-connectors/model-experience/approved-cloud-tools/what-the-model-sees:
-  en: cd1a37ec8f43902e
-  zh: c98485f2b3bbd7f7
+  en: 71d3f80672c5b171
+  zh: 443b6923fca89bea
 /deepseek-ai-dsh-experimental-cloud-connectors/model-experience/approved-cloud-tools/token-effect:
-  en: ecea2e840b3a3252
-  zh: 65c4cd65dec771a8
+  en: 99be4757dc211822
+  zh: b1c9e3d803059bb7
 /deepseek-ai-dsh-experimental-cloud-connectors/model-experience/approved-cloud-tools/kv-cache-effect:
-  en: 7837e89ef0a4a734
-  zh: 73b9d574a568d1f8
+  en: c5d7a0656e132cac
+  zh: b1b9341d74223aca
 /deepseek-ai-dsh-experimental-cloud-connectors/known-limitations-and-deferred-work:
-  en: d3222de72ea01b62
-  zh: a96b8d01466d9823
+  en: 9fef576b8289118c
+  zh: 0a439ee3ee031a95
 /deepseek-ai-dsh-experimental-cloud-connectors/known-limitations-and-deferred-work/dev-note:
   en: e67f633dc6fe7773
   zh: 6c5f9788c6536776

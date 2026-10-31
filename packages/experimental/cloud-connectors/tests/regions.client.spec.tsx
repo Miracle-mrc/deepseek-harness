@@ -2,12 +2,13 @@
 /** AWS region selection uses the same supported endpoints as the Host. */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, screen, within } from '@testing-library/react'
 import { SlotTestRuntime } from '@deepseek-ai/dsh-client-test-runtime'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '../src/client/index.ts'
 import { AWS_MCP_REGIONS, cloudMcpUrl } from '../src/catalog.ts'
 import { CloudConnectionCard, type CloudConnectionActions } from '../src/client/CloudConnectionCard.tsx'
+import type { CloudAttemptId } from '../src/types.ts'
 import { en, zh, NS } from '../src/client/locales.ts'
 
 const runtimes: SlotTestRuntime[] = []
@@ -23,8 +24,10 @@ afterEach(async () => {
 
 function makeActions(): CloudConnectionActions {
   return {
-    list: async () => [{ provider: 'aws', status: 'not-connected', tools: [], enabledTools: [] }],
-    start: vi.fn(async () => ({ url: 'https://provider.example.test/authorize' })),
+    list: async () => [{ provider: 'aws', status: 'not-connected', tools: [], enabledTools: [], awsProfile: 'dsh-cloud', awsMethod: 'login' }],
+    start: vi.fn(async () => ({ attemptId: 'fixture-attempt' as CloudAttemptId, url: 'https://provider.example.test/authorize' })),
+    complete: async () => [],
+    cancel: async () => [],
     confirm: vi.fn(async () => []),
     disconnect: async () => [],
   }
@@ -56,7 +59,7 @@ describe('AWS managed MCP region selection', () => {
     const actions = makeActions()
     await renderRegions(actions, language)
 
-    const options = screen.getAllByRole('option')
+    const options = within(screen.getByRole('combobox', { name: dictionary.awsRegion })).getAllByRole('option')
     expect(options).toHaveLength(8)
     expect(options.map(option => option.getAttribute('value'))).toEqual(AWS_MCP_REGIONS)
     expect(screen.getByRole('combobox', { name: dictionary.awsRegion })).toHaveProperty('value', 'us-east-1')
@@ -79,7 +82,7 @@ describe('AWS managed MCP region selection', () => {
     expect(actions.start).not.toHaveBeenCalled()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: en.connect })) })
 
-    expect(actions.start).toHaveBeenCalledExactlyOnceWith('aws', 'eu-west-2')
+    expect(actions.start).toHaveBeenCalledExactlyOnceWith('aws', 'eu-west-2', { awsProfile: 'dsh-cloud', awsMethod: 'login' })
     expect(actions.confirm).not.toHaveBeenCalled()
   })
 })

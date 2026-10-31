@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-experimental-cloud-connectors",
-  "description": "Optional AWS and Supabase MCP OAuth connections with per-tool approval",
+  "description": "Optional AWS CLI and Supabase OAuth MCP connections with per-tool approval",
   "version": "0.2.2-alpha.2",
   "publishConfig": { "access": "public" },
   "repository": {
@@ -18,8 +18,7 @@
     "./typert": { "types": "./lib/typert.host.d.ts", "default": "./lib/typert.host.js" },
     "./types": { "types": "./lib/types/types.d.ts" },
     "./src/*": "./src/*",
-    "./package.json": "./package.json",
-    "./locale/*.json": "./locale/*.json"
+    "./package.json": "./package.json"
   },
   "dsh": {
     "client": {
@@ -35,9 +34,12 @@
   "license": "MIT",
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:~",
+    "@deepseek-ai/dsh-authorization": "workspace:*",
     "@deepseek-ai/dsh-mcp-client": "workspace:*"
   },
   "dependencies": {
+    "@deepseek-ai/schemastery": "workspace:~",
+    "@deepseek-ai/dsh-brand": "workspace:*",
     "@modelcontextprotocol/client": "2.2.0",
     "@deepseek-ai/dsh-credentials": "workspace:*",
     "@deepseek-ai/dsh-typert-protocol": "workspace:*",
@@ -66,7 +68,7 @@
     "@testing-library/react": "^16.3.3"
   },
   "files": [
-    "locale/*.json", "lib/index.js", "lib/client.js", "lib/types/**/*.d.ts",
+    "lib/index.js", "lib/client.js", "lib/types/**/*.d.ts",
     "lib/typert.host.js", "lib/typert.host.d.ts",
     "lib/typert.remote-client.js", "lib/typert.remote-client.d.ts"
   ]

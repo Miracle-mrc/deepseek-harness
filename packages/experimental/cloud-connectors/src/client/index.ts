@@ -1,4 +1,4 @@
-/** Browser contribution to the Plugins page, with no secrets crossing its Remote. */
+/** Plugins-page controls with private authorization responses sent only to the Host. */
 
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -19,7 +19,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /** Only local UI and Remote contributions are injected; neither provider connects on mount. */
 export const inject = ['remote', 'slots', 'locale']
 
-/** Preserve sanitized Host errors while unwrapping one Cloud Remote reply. */
+/** Unwrap a Remote reply; the card supplies localized, operation-specific errors. */
 function unwrapCloudReply<T>(reply: { ok: true; value: T } | { ok: false; error: { message: string } }): T {
   if (reply.ok) return reply.value
   throw new Error(reply.error.message)
@@ -31,7 +31,10 @@ function registerUi(ctx: Context): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en, ja, es, fr, de, ru, pt }), 'cloud-connectors: locale')
   const actions: CloudConnectionActions = {
     list: async () => unwrapCloudReply(await ctx.remote.cloudConnections.list()),
-    start: async (provider, region) => unwrapCloudReply(await ctx.remote.cloudConnections.start(provider, region)),
+    start: async (provider, region, options) => unwrapCloudReply(await ctx.remote.cloudConnections.start(provider, region, options)),
+    complete: async (provider, prompt, response) =>
+      unwrapCloudReply(await ctx.remote.cloudConnections.complete(provider, prompt, response)),
+    cancel: async (provider, attempt) => unwrapCloudReply(await ctx.remote.cloudConnections.cancel(provider, attempt)),
     confirm: async (provider, tools) => unwrapCloudReply(await ctx.remote.cloudConnections.confirm(provider, tools)),
     disconnect: async provider => unwrapCloudReply(await ctx.remote.cloudConnections.disconnect(provider)),
   }

@@ -1,5 +1,5 @@
 ---
-description: "Optional AWS and Supabase MCP OAuth Host/client integration with explicit tool-level consent."
+description: "AWS CLI and Supabase browser sign-in for Web, Desktop, and terminal consumers, with shared local grants and explicit MCP tool consent."
 kind: "package-reference"
 ---
 
@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Provides two independently configured connections in the Plugins page: **AWS** and **Supabase**. Installing or enabling the package does **not** sign in to either service. Each connection begins in **Not connected** until the user presses **Connect** on the current device, completes browser sign-in, then confirms which offered MCP tools the agent may use.
+Connect AWS and Supabase from Web, Desktop, or the terminal, then choose which offered MCP tools an agent may use. AWS uses a named AWS CLI profile on the Harness Host; Supabase uses browser OAuth. Sign-in never enables tools by itself. Connections and tool selections are shared by profiles using the same Harness home.
 
 ## Table of Contents
 
@@ -19,30 +19,74 @@ Provides two independently configured connections in the Plugins page: **AWS** a
 - [Further Exploration](#further-exploration)
 - [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
 
 -----
 
 <a id="use-this-package"></a>
 ## Use this package
 
-The Desktop first-run profile includes the [cloud connectors bundle](../cloud-connectors-bundle/README.md). Open **Plugins → AWS** or **Plugins → Supabase**, select **Connect**, and complete provider sign-in in your browser. After the connection returns a list of MCP tools, all offered tools are **checked by default** on the confirmation page. Uncheck any tool you want to withhold, then press **Enable selected tools**. The agent only receives selected tools **after** this explicit confirmation.
+Use the [cloud connectors bundle](../cloud-connectors-bundle/README.md) for the Web or Desktop Plugins page, or run the dedicated [`dsh cloud` commands](../cloud-connectors-cli/README.md). Fresh Desktop profiles include the bundle; Web and existing Desktop profiles can opt in. The package does not sign in to either provider when no grant is saved.
 
-Credentials, OAuth codes, refresh tokens and client registration details remain on the local Host, stored by the existing Harness credentials service. They are not included in the bundle, source code, UI payload, or Git repository. Each device must connect separately; profiles using the same Harness home share saved grants and consent. **Disconnect this device** removes the saved local grant and this Host's model-visible tools; it does not revoke the remote provider token. Revoke that token separately at the provider when needed.
+### Connect and select tools
 
-Every tool call checks the latest stored login and consent before admission. A disconnect, replacement login or removed permission in another profile prevents later calls; it cannot undo an operation already sent to the provider. Token refresh is serialized through the shared credential store so concurrent Hosts do not independently rotate the same refresh token. A revoked or invalid login withdraws this Host's tools and asks you to reconnect; transient request failures do not revoke consent.
+Open Plugins, find AWS or Supabase, and select **Connect**. Complete the provider-specific steps below. When discovery finishes, review the offered tools: the page checks all tools initially, but registers none until you select **Enable selected tools**. Deselect tools you want to withhold. **Change tool permissions** lets you replace the selection later, including disabling every tool while retaining sign-in.
 
-The provider list is fixed: AWS managed MCP server at `https://aws-mcp.<region>.api.aws/mcp` (select a supported region) or the official Supabase MCP server `https://mcp.supabase.com/mcp`. The Host validates both. Connections use MCP's OAuth 2.1 / browser flow with a one-time local loopback callback and state validation.
+### AWS prerequisites and sign-in
+
+Install the latest [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) on the computer running the Harness Host. The integration rejects versions older than 2.32.0 and also requires the `signin create-o-auth2-token-with-iam` command. An older v2 build can therefore still need an update. Select the AWS MCP region, CLI profile, and sign-in method. The default profile is `dsh-cloud`; using a dedicated profile keeps this login separate from other CLI work.
+
+| Method | Behavior |
+|---|---|
+| `login` | Runs `aws login --remote` for the named profile. Open the displayed AWS URL, then paste the browser's private authorization response into the dedicated input. Replacing a saved AWS login requires an explicit yes/no answer. |
+| `sso` | Runs `aws sso login --use-device-code --no-browser` against a profile already configured for IAM Identity Center. Enter the public verification code in the browser. |
+| `existing` | Reuses the named profile's current credentials without opening a sign-in page. |
+
+Browser `login` needs the permissions required by [AWS CLI browser sign-in](https://docs.aws.amazon.com/signin/latest/userguide/command-line-sign-in.html). All methods need `signin:CreateOAuth2Token` for MCP token creation and the AWS MCP and AWS API permissions for the requested operations. Tool selection does not grant them. If sign-in or token creation fails, update the CLI and ask the AWS administrator to check that identity and profile. AWS keeps the profile's underlying credentials in its own files; Harness stores the MCP grant and tool selection.
+
+### Supabase sign-in
+
+Supabase connects to the fixed hosted endpoint `https://mcp.supabase.com/mcp`. The [hosted MCP flow](https://supabase.com/docs/guides/ai-tools/mcp) uses dynamic client registration, PKCE with S256, and state validation. This client requests `client_secret_basic`; the authorization server returns the client registration and secret dynamically. You do not configure a shared application secret or paste a personal access token. Stored registration secrets, access tokens, and refresh tokens remain on the Host.
+
+### Remote Web and SSH hosts
+
+The browser may run on another computer. AWS `login` uses the private browser response described above; SSO uses its public device code. Supabase normally returns to a one-time `127.0.0.1` callback on the Host. If your browser cannot reach that callback, copy the complete failed callback URL from its address bar into **Browser callback URL (optional)**. The Host validates its origin, path, and state, accepts it once, and preserves the issuer for the OAuth exchange. Never put an authorization response or callback URL into agent chat or command arguments.
+
+The terminal uses hidden input for private responses; [`--secret-stdin`](../cloud-connectors-cli/README.md#use-this-package) enables explicit non-terminal input. Cancel sign-in to stop that attempt without disconnecting another caller's saved connection. These flows do not expose a public callback relay.
+
+### Credentials and disconnect
+
+Profiles and browser tabs using the same Host and Harness home share grants and consent. **Disconnect this device**, or `dsh cloud disconnect <provider>`, deletes that home's saved grant and selection. Later calls in another profile recheck the stored grant and fail after disconnection, account replacement, or permission removal. An operation already sent to the provider cannot be undone. Disconnect does not run `aws logout`, erase the AWS CLI profile/cache, or revoke a provider token; manage those separately with the provider.
+
+Supabase refresh holds the shared credential-store lock across token exchange so Hosts cannot independently consume the same refresh token. AWS obtains MCP tokens through its named CLI profile. An invalid or revoked login withdraws tools and requires sign-in again; transient failures do not discard consent.
+
+### Custom composition
+
+This package mounts as a plugin; the [bundle](../cloud-connectors-bundle/README.md) owns profile installation. A custom composition must provide `credentials`, `authorization`, and `tools` before mounting it:
+
+```yaml
+- id: cloud-connectors
+  name: '@deepseek-ai/dsh-experimental-cloud-connectors'
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `awsProfile` | `dsh-cloud` | Named AWS CLI profile when the caller does not choose one. |
+| `awsMethod` | `login` | AWS sign-in method when the caller does not choose one. |
+| `awsExecutable` | `aws` | Trusted AWS CLI executable on the Host. |
+| `restoreOnStart` | `true` | Rediscover saved connections at startup; the dedicated CLI profile disables this. |
+
+The [configuration catalog](../../../docs/config-catalog.md) owns the complete field and timeout reference. Headless disables credentials and authorization by default; a custom agent profile must explicitly enable those services as well as this plugin.
 
 <a id="security-boundary"></a>
 ## Security boundary
 
-- Checking all tools does not grant AWS IAM or Supabase account permissions. The provider's authorization still limits operations. Supabase management SQL may have privileged database access; application RLS is not a substitute for restricting that access.
-- Checkboxes allow or deny whole tools. Generic AWS API tools can perform IAM operations within the signed-in identity's permissions. Supabase `execute_sql` can read, write and change schemas; disabling `apply_migration` alone does not prohibit schema changes.
-- Enabling a tool makes it available to the agent. For write-capable tools, the agent may still need confirmation according to your Harness tool-approval policy. Review the available descriptions carefully.
-- A failed authorization or unapproved client registration must fail closed. No API keys or credential blobs are committed to Git.
-- Developer tools leave Host fetch capture off by default. Enabling `captureFetch` records unredacted OAuth tokens and requests; do not enable it while using cloud credentials. The debugger still permits local code execution, so disable Developer tools on shared or untrusted machines.
-- AWS documents localhost redirects but also limits dynamic client registration to approved agents. A localhost callback does not guarantee that a new client registration will be accepted; contact AWS support if registration is refused. Browser OAuth requires `signin:AuthorizeOAuth2Access` and `signin:CreateOAuth2Token` on the user's IAM identity; it does not add AWS permissions. This fork's live registration has not been verified.
-- AWS and Supabase OAuth callbacks use `127.0.0.1` and a temporary random port. Browser on a different machine than the Host cannot complete a loopback callback without a supported redirect bridge. This initial implementation targets local Desktop use.
+These controls select whole MCP tools; provider authorization still limits what each tool can do.
+
+- Generic AWS API tools can perform IAM operations permitted by the selected identity. The checkboxes do not restrict individual AWS API actions.
+- Supabase `execute_sql` can read and write data and change schemas. Disabling `apply_migration` does not prohibit those schema changes. Management SQL may have privileges beyond application RLS; this connection uses the account-wide hosted endpoint.
+- Harness approval policy remains separate from tool selection. Enabling a tool does not promise an additional provider-side confirmation for each operation.
+- The local credential store does not isolate credentials from another process running as the same OS user. Do not enable Developer tools `captureFetch` while authorizing: it records unredacted OAuth requests and tokens. The debugger permits local code execution.
 
 -----
 
@@ -52,9 +96,9 @@ The provider list is fixed: AWS managed MCP server at `https://aws-mcp.<region>.
 <details>
 <summary>Implementation internals — click to expand</summary>
 
-The [bundle patch](../cloud-connectors-bundle/cordis.patch.yml) mounts the Host service. Its browser contribution adds separate provider cards. The Host owns OAuth callbacks, credential storage and the selected-tool registry; the browser receives only status, the sign-in URL and tool descriptions. The [endpoint catalog](src/catalog.ts) supplies the same supported AWS regions to Host validation and the localized selector.
+The [Host service](src/index.ts) owns authorization attempts, credential reconciliation, MCP discovery, and reversible tool registrations. The [Web client](src/client/CloudConnectionCard.tsx) and [terminal application](../cloud-connectors-cli/README.md) consume the same operations. Public state carries status, offered tool descriptions, permitted names, safe failure categories, and attempt/prompt identities; it excludes stored tokens and client secrets. Private responses return only to their matching live prompt.
 
-The public Remote values are defined in [connection types](src/types.ts). `CloudConnectionView` contains the provider id, connection status, offered tool names/descriptions, selected tool names and an optional sanitized error. `CloudSignIn` contains the browser authorization URL. Neither value contains stored access tokens, refresh tokens or client-registration credentials. The [MCP subsystem reference](../../../docs/subsystems/mcp.md) owns the generated `ctx.cloudConnections` method catalog.
+The [AWS CLI adapter](src/aws-cli.ts) runs fixed argument lists without a shell and obtains MCP-scoped bearer tokens. The [Supabase OAuth provider](src/oauth-provider.ts) uses SDK discovery, dynamic registration, and refresh. The [endpoint catalog](src/catalog.ts) fixes the two provider URLs and supported AWS regions; callers cannot substitute another endpoint. The [MCP subsystem reference](../../../docs/subsystems/mcp.md#ctxcloudconnections--cloudconnections) owns the generated service-method reference.
 
 </details>
 
@@ -63,9 +107,10 @@ The public Remote values are defined in [connection types](src/types.ts). `Cloud
 <a id="further-exploration"></a>
 ## Further Exploration
 
-- [Credentials service](../../credentials/credentials/README.md): local credential ownership.
-- [AWS OAuth access](https://docs.aws.amazon.com/signin/latest/userguide/aws-mcp-server.html): sign-in prerequisites and provider authorization.
-- [Supabase MCP](https://supabase.com/docs/guides/ai-tools/mcp): offered capabilities and security guidance.
+- [Cloud connectors bundle](../cloud-connectors-bundle/README.md): Web and Desktop activation.
+- [Cloud terminal commands](../cloud-connectors-cli/README.md): login, status, tool selection, and disconnect.
+- [Local credentials](../../credentials/credentials-local/README.md): storage ownership and same-user access.
+- [AWS CLI login](https://docs.aws.amazon.com/cli/latest/reference/login/index.html) and [Supabase MCP](https://supabase.com/docs/guides/ai-tools/mcp): provider requirements.
 
 -----
 
@@ -76,27 +121,29 @@ The public Remote values are defined in [connection types](src/types.ts). `Cloud
 
 #### What the model sees
 
-Before confirmation, no cloud tools are registered. After confirmation, selected tools use the existing `mcp__<provider>__<tool>` namespace with provider-supplied descriptions and schemas. No additional system prompt is registered.
+An unconfirmed connection registers no cloud tools. After confirmation, selected tools use the `mcp__<provider>__<tool>` namespace with provider-supplied descriptions and schemas. The package adds no system prompt and sends no authorization responses, stored tokens, or registration secrets to the model.
 
 #### Token effect
 
-Enabled tool schemas and returned results contribute tokens through the existing MCP tool adapter; no fixed token overhead is promised.
+Enabled tool schemas and returned results contribute tokens through the existing MCP adapter. The package promises no fixed token overhead.
 
 #### KV Cache effect
 
-Changing the approved tool set can change the tool-schema prefix of subsequent model requests. The package does not rewrite prior messages.
+Changing the permitted tool set can change the tool-schema prefix of later requests. The package does not rewrite prior messages.
 
 ## Known Limitations and Deferred Work
 
 <a id="known-limitations-and-deferred-work"></a>
 
-- Live AWS/Supabase registration, login and refresh require an actual account and remain manual acceptance checks for the person connecting that account. Automated tests use mocked provider responses, not real credentials.
-- This contribution targets the Web Plugins page used by Desktop. The TypeScript and loopback HTTP implementation is platform-independent, but the existing Desktop packaging pipeline supports macOS and Windows only. A native Linux installer and three-platform browser sign-in acceptance remain unverified.
-- Tool discovery is read at connect time; newly added provider tools require reconnecting to review the updated consent list.
-- Credential records from an earlier preview without a sign-in identity and registered redirect URI are not restored; reconnect that account to create a validated grant.
-- Startup rediscovers the offered tools for saved logins, including pending consent, without registering unconfirmed tools. Restoration waits for MCP negotiation or its SDK timeout; an expired login requires reconnecting.
-- The MCP client does not advertise form or URL elicitation. Do not rely on provider-side destructive-SQL popups or Edge Function secret-entry dialogs; the local tool-approval policy remains separate.
+Provider and platform acceptance has these limits:
 
+- Live AWS and Supabase login, registration, refresh, and cloud operations remain unverified. The person connecting a real account owns that manual acceptance; automated coverage uses external provider stubs and a keyless recorded Session.
+- Desktop packaging supports macOS and Windows. A native Linux Desktop installer and live browser sign-in across operating systems are not verified by the mocked flows.
+- Newly offered tools require reconnecting to discover and review the updated list. Startup restoration can wait for MCP negotiation or its timeout, but never enables an unconfirmed selection.
+- Invalid preview credentials without the required sign-in identity or registered callback are not restored; reconnect to create a validated grant.
+- The MCP client does not advertise form or URL elicitation. Provider-side destructive-SQL confirmation or Edge Function secret dialogs cannot be assumed.
+
+<a id="dev-note"></a>
 ### Dev Note
 
 <details>

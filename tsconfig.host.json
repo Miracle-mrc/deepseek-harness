@@ -406,6 +406,7 @@
     { "path": "./packages/experimental/client-ui-forge/tsconfig.host.json" },
     { "path": "./packages/experimental/cloud-connectors/tsconfig.host.json" },
     { "path": "./packages/experimental/cloud-connectors-bundle" },
+    { "path": "./packages/experimental/cloud-connectors-cli" },
     { "path": "./packages/session/tool-working-directory" },
     { "path": "./packages/session/session-title-llm" },
     { "path": "./packages/session/session-title-first-prompt-llm" },

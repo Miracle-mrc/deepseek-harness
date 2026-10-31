@@ -1,0 +1,17 @@
+# Explicit opt-in on the shipped headless profile; runtime.cordis.yml uses the cloud bundle patch.
+- id: llm-deepseek
+  disabled: true
+
+- id: credentials
+  disabled: false
+  config:
+    watch: false
+
+- id: authorization
+  disabled: false
+
+- insert:
+    - id: cloud-connectors-consent
+      name: '../../../packages/test-support/session-snapshot/tests/fixtures/cloud-connectors-consent.ts'
+      config:
+        captureModel: true

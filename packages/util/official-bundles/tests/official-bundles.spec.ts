@@ -21,7 +21,7 @@ describe('Official on-demand catalog', () => {
 })
 
 describe('Shipped profile templates', () => {
-  it('stack each mode bundle on base except the standalone minimal SDK', () => {
+  it('keeps cloud commands and the minimal SDK independent of the model application base', () => {
     expect(PROFILE_TEMPLATES).toEqual({
       acp: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-acp-app'] },
       web: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] },
@@ -29,6 +29,19 @@ describe('Shipped profile templates', () => {
       sdk: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-sdk-app'] },
       'sdk-minimal': { bundles: ['@deepseek-ai/dsh-sdk-minimal'] },
     })
+  })
+})
+
+describe('Cloud command bundle', () => {
+  it('ships cloud commands for explicit activation without adding a default profile', () => {
+    const name = '@deepseek-ai/dsh-experimental-cloud-connectors-cli'
+    expect(PROFILE_TEMPLATES).not.toHaveProperty('cloud')
+    expect(HIDDEN_BUNDLES.has(name)).toBe(true)
+    expect(EXPERIMENTAL_BUNDLES.has(name)).toBe(true)
+    expect(OPTIONAL_BUNDLES).toContain(name)
+    for (const template of Object.values(PROFILE_TEMPLATES)) {
+      expect(template.bundles).not.toContain(name)
+    }
   })
 })
 

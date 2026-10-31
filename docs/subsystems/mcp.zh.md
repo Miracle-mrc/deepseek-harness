@@ -21,19 +21,19 @@
 <a id="configuration"></a>
 ## 配置
 
-MCP 服务器需要主动配置。在目标 Cordis 作用域中，为每台服务器配置一个 `@deepseek-ai/dsh-mcp-client` 条目。每个随附 profile 都提供[工具注册表](tools.zh.md)，并统一挂载共享资源服务一次；用户只需配置客户端条目。调用方没有可见的已配置服务器时，在 native 或 PTC 模式下都不会获得 MCP 提示词文本或工具。
+MCP 服务器需要主动配置。在目标 Cordis 作用域中，为每台服务器配置一个 `@deepseek-ai/dsh-mcp-client` 条目。基于 base 或 sdk-minimal 的 agent（智能体）profile 提供[工具注册表](tools.zh.md)，并统一挂载共享资源服务一次；用户只需配置客户端条目。调用方没有可见的已配置服务器时，在 native 或 PTC 模式下都不会获得 MCP 提示词文本或工具。
 
 | 选择 | 配置维护位置 |
 |---|---|
 | 服务器身份、本地进程或 HTTP 端点、凭据和进程环境 | [客户端配置](../../packages/mcp/mcp-client/README.zh.md#use-this-package) |
 | 工具与资源请求超时、启动失败策略和重连 | [客户端配置](../../packages/mcp/mcp-client/README.zh.md#use-this-package) |
-| 资源发现与读取 | 随附 profile 已包含 [MCP 资源服务](../../packages/mcp/mcp-resources/README.zh.md#use-this-package)；该服务没有配置字段 |
+| 资源发现与读取 | 随附 agent profile 已包含 [MCP 资源服务](../../packages/mcp/mcp-resources/README.zh.md#use-this-package)；该服务没有配置字段 |
 | 服务器指令大小限制 | 客户端 `maxInstructionBytes`；组合提供[系统提示词装配](system-prompt.zh.md) |
 | 权限决策和受支持的图像输出 | [工具执行](tools.zh.md)和[附件](attachment.zh.md) |
 
 协议协商遵循 SDK 支持的修订版；产品没有强制指定协议修订版的设置。[配置目录](../config-catalog.zh.md#deepseek-aidsh-mcp-client) 列出客户端接受的字段和默认值。
 
-可选的[云服务连接包](../../packages/experimental/cloud-connectors/README.zh.md)为固定的 AWS 和 Supabase 端点提供独立的 `ctx.cloudConnections` 服务。它负责浏览器 OAuth、设备本地授权和显式的逐工具确认，不配置通用 MCP 客户端，也不发布共享资源工具。其连接状态与浏览器跳转类型由包 README 维护。
+可选的[云服务连接包](../../packages/experimental/cloud-connectors/README.zh.md)为固定的 AWS 和 Supabase 端点提供 `ctx.cloudConnections`。Web、Desktop 与终端使用方共享其 AWS CLI（命令行界面）登录、Supabase 浏览器 OAuth、Harness 主目录授权及显式的逐工具确认。它不配置通用 MCP 客户端，也不发布共享资源工具；包 README 负责设置与授权行为。
 
 -----
 
@@ -125,27 +125,52 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 
 ### `ctx.cloudConnections` — `CloudConnections`
 
-Owns short-lived local OAuth callbacks and MCP tool registration. It starts without connecting to either cloud service when the Harness home has no saved grants.
+Owns browser authorization, AWS CLI sign-in, and MCP tool registration. It starts without connecting to either cloud service when the Harness home has no saved grants.
 
 ```ts cordis-catalog
 /**
- * Current connection facts, including tool-level selection after OAuth.
+ * Current connection facts, including tool-level selection after sign-in.
  * @returns Credential-free provider status and available tool selections.
  * @throws If the owning plugin is stopping.
  */
 @Remote async list(): Promise<CloudConnectionView[]>
 
 /**
- * Begin a browser OAuth grant. The browser URL is returned without waiting
- * for login; the loopback callback completes the attempt asynchronously.
+ * Admit one sign-in without waiting for provider I/O. Notices and private
+ * prompts are projected by list(); cancellation uses the returned identity.
  * @param providerId - AWS or Supabase.
  * @param awsRegion - Region of the AWS-managed MCP endpoint.
- * @returns Browser authorization page.
+ * @param options - Explicit AWS CLI selectors; omitted fields use plugin configuration.
+ * @returns Identity of this caller's admitted authorization operation.
  */
-@Remote async start(providerId: string, awsRegion: string): Promise<CloudSignIn>
+@Remote async start(providerId: string, awsRegion: string, options?: CloudStartOptions): Promise<CloudSignIn>
 
 /**
- * Confirm the selected subset of tools after OAuth. Tool names not offered
+ * Return a browser response to its exact pending prompt without logging it.
+ * @param providerId - Provider whose sign-in is waiting.
+ * @param promptId - Identity supplied by list(); stale prompts are rejected.
+ * @param response - Private authorization response or callback URL from the browser.
+ * @returns Connection state without echoing the supplied response.
+ */
+@Remote async complete(providerId: string, promptId: CloudPromptId, response: string): Promise<CloudConnectionView[]>
+
+/**
+ * Cancel only the caller's admitted operation; never disconnect another login.
+ * @param providerId - Provider of the sign-in operation.
+ * @param attemptId - Identity returned by start(); a stale identity is a no-op.
+ * @returns State after the owned authorization runner has stopped.
+ */
+@Remote async cancel(providerId: string, attemptId: CloudAttemptId): Promise<CloudConnectionView[]>
+
+/**
+ * Restore saved credentials only when a noninteractive consumer requests it.
+ * @param providerId - Provider to restore; missing credentials leave it disconnected.
+ * @returns Connection facts after MCP discovery, or a safe failed state.
+ */
+async restore(providerId: string): Promise<CloudConnectionView[]>
+
+/**
+ * Confirm the selected subset of tools after sign-in. Tool names not offered
  * by the connected MCP server are refused; no IAM/database privilege is
  * granted by toggling a tool here.
  * @param providerId - Provider to enable.
@@ -155,7 +180,7 @@ Owns short-lived local OAuth callbacks and MCP tool registration. It starts with
 @Remote async confirm(providerId: string, selected: string[]): Promise<CloudConnectionView[]>
 
 /**
- * Remove the local OAuth grant and every associated model tool. External
+ * Remove the local cloud grant and every associated model tool. External
  * token revocation is controlled by the identity provider, not this action.
  * @param providerId - Provider to disconnect.
  * @returns Updated connection facts.

@@ -177,7 +177,7 @@ export class CloudOAuthProvider implements OAuthClientProvider {
       redirect_uris: [this.redirectUrl],
       response_types: ['code'],
       grant_types: ['authorization_code', 'refresh_token'],
-      token_endpoint_auth_method: 'none',
+      token_endpoint_auth_method: this.provider === 'supabase' ? 'client_secret_basic' : 'none',
     }
   }
 

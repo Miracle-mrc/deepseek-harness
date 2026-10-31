@@ -8,6 +8,7 @@
   "include": ["src/client", "src/css-modules.d.ts", "src/types.ts", "src/catalog.ts", "src/consent.ts"],
   "references": [
     { "path": "../../../vendor/cordis" },
+    { "path": "../../util/brand" },
     { "path": "../../api/remotes/tsconfig.client.json" },
     { "path": "../../client/locale/tsconfig.client.json" },
     { "path": "../../client/ui-plugin-manager/tsconfig.client.json" },
