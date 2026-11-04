@@ -1,0 +1,4 @@
+- menu:
+  - menuitem "Install a third-party plugin Supports npm packages, Git repositories, and local directories"
+  - menuitem "Let the agent create a plugin Enter Creator mode and make your own DSH plugin"
+  - menuitem "Save to My Fork Review and download source files for your fork"

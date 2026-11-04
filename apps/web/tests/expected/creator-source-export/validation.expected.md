@@ -1,0 +1,16 @@
+- dialog "Save to My Fork":
+  - heading "Save to My Fork" [level=2]
+  - button "Close"
+  - paragraph: This action downloads a local source export. Apply the files to your fork and commit them yourself.
+  - text: Fork repository
+  - textbox "Fork repository":
+    - /placeholder: owner/repository
+    - text: alice/harness
+  - text: Branch
+  - textbox "Branch" [invalid]:
+    - /placeholder: my-customizations
+    - text: master
+  - alert: Enter a valid branch name other than main or master.
+  - paragraph: Repository and branch are recorded in the download. Repository access is not checked.
+  - button "Close"
+  - button "Retry inspection"

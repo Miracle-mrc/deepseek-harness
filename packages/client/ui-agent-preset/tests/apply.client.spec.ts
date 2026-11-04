@@ -23,6 +23,7 @@ import { AgentPresetSeat } from '../src/client/AgentPresetSeat.tsx'
 import type { AgentPresetSeatInjected } from '../src/client/AgentPresetSeat.tsx'
 import { AgentPresetSeatController } from '../src/client/seat-store.ts'
 import { CreatePluginMenuItem, type CreatePluginMenuItemInjected } from '../src/client/CreatePluginMenuItem.tsx'
+import { ForkExportMenuItem, ForkExportOverlay, type ForkExportMenuInjected, type ForkExportOverlayInjected } from '../src/client/ForkExport.tsx'
 import { AgentPresetSectionController } from '../src/client/section-store.ts'
 import { apply as hostApply } from '../src/index.ts'
 import type { AgentPresetRow } from '@deepseek-ai/dsh-agent-preset-registry/types'
@@ -413,6 +414,65 @@ describe('ui-agent-preset apply', () => {
 
       await feature.dispose()
       expect(slots.entries('plugins.add.actions')).toHaveLength(0)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('adds the source-export entry and surviving overlay when Plugin Manager arrives and disposes both', async () => {
+    const { ctx, slots, remote } = await bench({ presets: [
+      { id: 'standard', isDefault: true }, { id: 'cordis', isDefault: false },
+    ] })
+    try {
+      slots.register({
+        name: 'root',
+        children: {
+          'settings.section': { kind: 'list', scope: 'root' },
+          'plugins.add.actions': { kind: 'list', scope: 'root' },
+          'shell.overlay': { kind: 'list', scope: 'root' },
+        },
+      }, () => null)
+      ctx.provide('sessions', sessionsDouble(ctx, { byId: {} }) as never)
+      const feature = ctx.plugin({ inject: [...inject], apply })
+      await feature.await()
+      expect(slots.entries('plugins.add.actions')).toHaveLength(0)
+      type ExportResponse = Awaited<ReturnType<typeof ctx.remote.pluginManager.exportSource>>
+      const exportSource = vi.fn(async (): Promise<ExportResponse> => ({ ok: true, value: {
+        status: 'ready', formatVersion: 1, repository: 'alice/harness', branch: 'my-changes',
+        profile: 'web', files: [], reviewRequired: true,
+      } }))
+      remote.provideNamespaces({ pluginManager: { exportSource } })
+      await vi.waitFor(() => { expect(slots.entries('plugins.add.actions')).toHaveLength(1) })
+      const entry = slots.entries('plugins.add.actions')[0]!
+      expect(entry.component).toBe(ForkExportMenuItem)
+      const action: Partial<ForkExportMenuInjected> | undefined = entry.inject?.()
+      const overlayEntry = slots.entries('shell.overlay')[0]!
+      expect(overlayEntry.component).toBe(ForkExportOverlay)
+      const overlay: Partial<ForkExportOverlayInjected> | undefined = overlayEntry.inject?.()
+      if (action?.load === undefined || action.hooks === undefined || action.open === undefined
+        || overlay?.hooks === undefined || overlay.edit === undefined || overlay.inspect === undefined
+        || overlay.close === undefined || overlay.review === undefined || overlay.download === undefined
+        || overlay.dismissNotice === undefined) throw new Error('expected source-export actions')
+      await action.load()
+      expect(action.hooks.agentPresets.getSnapshot().options.map(option => option.id)).toEqual(['standard', 'cordis'])
+      action.open()
+      overlay.edit('repository', 'alice/harness')
+      overlay.edit('branch', 'my-changes')
+      await overlay.inspect()
+      expect(exportSource).toHaveBeenCalledExactlyOnceWith({ repository: 'alice/harness', branch: 'my-changes' })
+      expect(overlay.hooks.forkExport.getSnapshot().preview?.files).toEqual([])
+      overlay.review(true)
+      overlay.download()
+      expect(overlay.hooks.forkExport.getSnapshot().notice?.kind).toBe('download-failed')
+      overlay.dismissNotice()
+      overlay.close()
+      exportSource.mockResolvedValueOnce({ ok: false, error: new RemoteError('gateway/internal', 'disconnected', {}) })
+      action.open()
+      await overlay.inspect()
+      expect(overlay.hooks.forkExport.getSnapshot().phase).toBe('failed')
+      await feature.dispose()
+      expect(slots.entries('plugins.add.actions')).toHaveLength(0)
+      expect(slots.entries('shell.overlay')).toHaveLength(0)
     } finally {
       await ctx.fiber.dispose()
     }

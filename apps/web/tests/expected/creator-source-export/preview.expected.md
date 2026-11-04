@@ -1,0 +1,44 @@
+- dialog "Save to My Fork":
+  - heading "Save to My Fork" [level=2]
+  - button "Close"
+  - paragraph: This action downloads a local source export. Apply the files to your fork and commit them yourself.
+  - text: Fork repository
+  - textbox "Fork repository":
+    - /placeholder: owner/repository
+    - text: alice/harness
+  - text: Branch
+  - textbox "Branch":
+    - /placeholder: my-customizations
+    - text: creator-saved
+  - paragraph: Repository and branch are recorded in the download. Repository access is not checked.
+  - heading "Files to download (11)" [level=3]
+  - paragraph: The export includes this profile’s patch and supported local plugin sources. Review every file for private information before sharing.
+  - paragraph: Credentials, Sessions, home and command-line overlays, and transient dynamic plugins are excluded.
+  - group:
+    - code: bundles/0/cordis.patch.yml
+  - group:
+    - code: bundles/0/index.ts
+    - text: export const greeting = "Created for my fork"
+  - group:
+    - code: bundles/0/package.json
+  - group:
+    - code: bundles/0/pnpm-workspace.yaml
+  - group:
+    - code: bundles/1/cordis.patch.yml
+  - group:
+    - code: bundles/1/package.json
+  - group:
+    - code: bundles/1/pnpm-workspace.yaml
+  - group:
+    - code: profiles/saved/package.json
+  - group:
+    - code: profiles/saved/cordis.patch.yml
+  - group:
+    - code: profiles/saved/pnpm-workspace.yaml
+  - group:
+    - code: .gitignore
+  - checkbox "I reviewed every file for private information"
+  - text: I reviewed every file for private information
+  - button "Close"
+  - button "Inspect files"
+  - button "Download source export" [disabled]

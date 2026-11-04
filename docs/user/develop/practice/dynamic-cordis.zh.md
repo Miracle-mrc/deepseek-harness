@@ -28,7 +28,7 @@ node scripts/prepare-creator-export.ts /path/to/download.json /path/to/new-custo
 
 提取器验证每个路径，并拒绝已经存在的目标目录，包括之前提取的目录。它不执行 Git 命令。将生成的源文件保存在 fork 的专用目录中，检查 `git diff`，创建选定的分支，并且仅暂存这些文件。提交或推送前确认 Git remote 指向自己的 fork。身份验证失败需要在本地 Git/GitHub 配置中处理；导出本身不需要 GitHub token。
 
-在另一台机器上恢复时，克隆 fork 并安装锁定的依赖。执行导出的插件前先审查源码。在各个导出的本地组合包目录中安装依赖并执行必要的构建脚本，再从 `profiles/saved` 安装 profile 依赖。通过常规 CLI 启动，并将导出目录作为 Harness home：
+在另一台机器上恢复时，克隆 fork 并完成[源码检出环境准备](../../../development.zh.md#setup-tutorial)，包括构建。执行导出的插件前先审查源码。在各个导出的本地组合包目录中安装依赖并执行必要的构建脚本，再从 `profiles/saved` 安装 profile 依赖。通过常规 CLI 启动，并将导出目录作为 Harness home：
 
 启动前，将 `DSH_HOME` 环境变量设为导出目录。POSIX shell 使用 `export DSH_HOME=/path/to/new-customizations`；PowerShell 使用 `$env:DSH_HOME="C:\path\to\new-customizations"`。
 

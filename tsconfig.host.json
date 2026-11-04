@@ -85,6 +85,7 @@
     "apps/web/tests/plugin-config.e2e.ts",
     "apps/web/tests/input-plugin-extensions.e2e.ts",
     "apps/web/tests/plugin-manager.e2e.ts",
+    "apps/web/tests/creator-source-export.e2e.ts",
     "apps/web/tests/plugin-sticky-motion.e2e.ts",
     "apps/web/tests/entry-customization.e2e.ts",
     "apps/web/tests/cua-optin.e2e.ts",

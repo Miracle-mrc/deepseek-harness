@@ -35,6 +35,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { AgentPresetLabel } from './AgentPresetLabel.tsx'
 import { CreatePluginMenuItem } from './CreatePluginMenuItem.tsx'
+import { ForkExportMenuItem, ForkExportOverlay } from './ForkExport.tsx'
+import { ForkExportController } from './fork-export-store.ts'
 import type { AgentPresetLabelInjected } from './AgentPresetLabel.tsx'
 import { AgentPresetSeat } from './AgentPresetSeat.tsx'
 import type { AgentPresetSeatInjected } from './AgentPresetSeat.tsx'
@@ -129,6 +131,30 @@ export function apply(ctx: ClientContext): void {
   }
 
   ctx.effect(() => ctx.locale.register('settings.agentPreset', { zh, en, ja, es, fr, de, ru, pt }), 'ui-agent-preset: settings row dictionaries')
+
+  ctx.inject(['remote.pluginManager'], (scope: ClientContext) => {
+    const forkExport = new ForkExportController(async (request) => {
+      const result = await scope.remote.pluginManager.exportSource(request)
+      if (!result.ok) throw new Error(result.error.message)
+      return result.value
+    })
+    scope.effect(() => () => { forkExport.dispose() }, 'ui-agent-preset: source export')
+    scope.slots.inject('plugins.add.actions', () => scope.slots.register({
+      name: 'plugins.add.actions', id: 'save-to-my-fork', order: 10, locale: 'settings.agentPreset',
+      inject: () => ({
+        hooks: { agentPresets: controller.store }, load: () => controller.load(), open: () => { forkExport.open() },
+      }),
+    }, ForkExportMenuItem))
+    scope.slots.inject('shell.overlay', () => scope.slots.register({
+      name: 'shell.overlay', id: 'agent-preset.source-export', locale: 'settings.agentPreset',
+      inject: () => ({
+        hooks: { forkExport: forkExport.store }, close: () => { forkExport.close() },
+        edit: (field: 'repository' | 'branch', value: string) => { forkExport.edit(field, value) },
+        inspect: () => forkExport.inspect(), review: (reviewed: boolean) => { forkExport.review(reviewed) },
+        download: () => { forkExport.download() }, dismissNotice: () => { forkExport.dismissNotice() },
+      }),
+    }, ForkExportOverlay))
+  })
 
   ctx.effect(() => {
     let requested = 0
