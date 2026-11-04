@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { createRequire } from 'node:module'
@@ -18,7 +18,8 @@ afterEach(async () => {
 async function fixture(prefix: string) {
   const workspace = await mkdtemp(join(tmpdir(), prefix))
   temporaryDirectories.push(workspace)
-  return workspace
+  // File dependency identities use canonical paths even when the temp directory is an alias.
+  return realpath(workspace)
 }
 
 /** List every symbolic link below a directory. */
