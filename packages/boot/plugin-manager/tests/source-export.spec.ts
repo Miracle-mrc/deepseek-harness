@@ -121,14 +121,15 @@ async function fixture() {
 
 async function virtualDirectory(directory: string, names: string[], content: string, anchor: string) {
   const fs = await import('node:fs/promises')
+  const canonical = await fs.realpath(directory)
   await writeFile(anchor, content)
   const handle = await fs.open(anchor, 'r')
   const close = handle.close.bind(handle)
   onTestFinished(close)
   const virtual = {
-    directory, names, directories: new Set([directory, join(directory, '..')]),
-    files: new Set(names.map(name => join(directory, name))),
-    fileInfo: await handle.stat(), directoryInfo: await fs.lstat(directory), handle, cursor: 0,
+    directory: canonical, names, directories: new Set([canonical, join(canonical, '..')]),
+    files: new Set(names.map(name => join(canonical, name))),
+    fileInfo: await handle.stat(), directoryInfo: await fs.lstat(canonical), handle, cursor: 0,
   }
   const bytes = Buffer.from(content)
   Object.assign(handle, {
@@ -141,6 +142,7 @@ async function virtualDirectory(directory: string, names: string[], content: str
     close: () => Promise.resolve(),
   })
   filesystemHooks.virtual = virtual
+  return canonical
 }
 
 it('captures local source and raw configuration without changing the profile, then restores through the Loader', async () => {
@@ -514,6 +516,15 @@ it('refuses nonportable filenames and case-colliding source directories on a cas
   expect((await exportProfileSource(profile, request)).status).toBe('blocked')
 })
 
+it.each([
+  { names: ['A.ts', 'a.ts'], path: 'bundles/0/src/a.ts' },
+  { names: ['CON.txt'], path: 'bundles/0/src/CON.txt' },
+])('refuses nonportable virtual source names on every filesystem: $names', async ({ names, path }) => {
+  const { dir, local, profile } = await fixture()
+  await virtualDirectory(join(local, 'src'), names, '', join(dir, 'virtual-source'))
+  expect(await exportProfileSource(profile, request)).toEqual({ status: 'blocked', issues: [{ code: 'unsafe-path', path }] })
+})
+
 it('refuses absent or unreadable profile patch files', async () => {
   const { profile } = await fixture()
   await rm(profile.patchPath)
@@ -728,8 +739,8 @@ it('bounds the number of observed registry manifest reads', async () => {
   await writeFile(join(installed, 'package.json'), '{"version":"1.0.0"}')
   // Virtual registry names share one real manifest so the read budget does not depend on thousands of fixture directories.
   const appBoot = await import('@deepseek-ai/dsh-app-boot')
-  vi.spyOn(appBoot, 'resolveBundleDir').mockReturnValue(installed)
-  await virtualDirectory(installed, ['package.json'], '{"version":"1.0.0"}', join(dir, 'virtual-source'))
+  const canonical = await virtualDirectory(installed, ['package.json'], '{"version":"1.0.0"}', join(dir, 'virtual-source'))
+  vi.spyOn(appBoot, 'resolveBundleDir').mockReturnValue(canonical)
   const declared = Object.fromEntries(Array.from({ length: 4000 }, (_, index) => [`registry-${index}`, '*']))
   await writeFile(join(dir, 'package.json'), JSON.stringify({ dependencies: declared, dsh: { profile: { bundles: [] } } }))
   const result = await exportProfileSource(profile, request)
