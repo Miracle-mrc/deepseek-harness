@@ -1,7 +1,61 @@
 /** Prepare a symlink-free executable runtime payload with shared workspace module instances. */
-import { cp, lstat, readFile, readdir, realpath, rm, unlink } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { load } from 'js-yaml'
+import { cp, lstat, readFile, readdir, realpath, rm, unlink, writeFile } from 'node:fs/promises'
+import { isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { dump, load } from 'js-yaml'
+
+/**
+ * Retain exact workspace build approvals after shared-lock deploy canonicalizes file dependency identities.
+ * Only exact relative directory selectors change; absolute selectors remain as declared.
+ * Missing approvals remain absent; conflicting or qualified selectors reject before writing.
+ * @param staging - Shared-lock deployment whose scripts have not run.
+ * @param workspace - Source workspace against which relative file selectors were declared.
+ * @returns After the deployed approvals refer to the same source packages by canonical file URL.
+ */
+export async function relocateStagedBuildApprovals(staging: string, workspace: string): Promise<void> {
+  const file = join(staging, 'pnpm-workspace.yaml')
+  const manifest: unknown = load(await readFile(file, 'utf8'))
+  if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
+    throw new Error(`${file}: deployment workspace settings must be a mapping`)
+  }
+  if (!('allowBuilds' in manifest)) return
+  const approvals = manifest.allowBuilds
+  if (typeof approvals !== 'object' || approvals === null || Array.isArray(approvals)) {
+    throw new Error(`${file}: allowBuilds must be a mapping`)
+  }
+  const relocated: Record<string, boolean | string> = {}
+  for (const [selector, decision] of Object.entries(approvals)) {
+    if (typeof decision !== 'boolean' && typeof decision !== 'string') throw new Error(`${file}: invalid build approval decision`)
+    const marker = selector.indexOf('@file:')
+    const path = marker < 0 ? undefined : selector.slice(marker + 6)
+    if (path !== undefined && /[()#]/u.test(path)) throw new Error(`${file}: qualified file build selectors are unsupported`)
+    const key = path === undefined || isAbsolute(path) || win32.isAbsolute(path) ? selector
+      : `${selector.slice(0, marker + 1)}${pathToFileURL(await realpath(resolve(workspace, path))).href}`
+    if (Object.hasOwn(relocated, key) && relocated[key] !== decision) throw new Error(`${file}: conflicting build approvals for ${key}`)
+    relocated[key] = decision
+  }
+  await writeFile(file, dump({ ...manifest, allowBuilds: relocated }))
+}
+
+/**
+ * Reject scripts pnpm skipped for lack of an approval; explicitly denied scripts are not in this list.
+ * pnpm omits `ignoredBuilds` when none remain. Malformed metadata rejects instead of accepting an unknown build state.
+ * @param staging - Deployed payload after pnpm rebuild has settled.
+ * @returns After pnpm reports no unapproved dependency builds.
+ */
+export async function assertStagedBuildsApproved(staging: string): Promise<void> {
+  const file = join(staging, 'node_modules', '.modules.yaml')
+  const manifest: unknown = load(await readFile(file, 'utf8'))
+  if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
+    throw new Error(`${file}: dependency build metadata must be a mapping`)
+  }
+  if (!('ignoredBuilds' in manifest)) return
+  const ignored = manifest.ignoredBuilds
+  if (!Array.isArray(ignored) || ignored.some(value => typeof value !== 'string' || value === '')) {
+    throw new Error(`${file}: ignoredBuilds must list unapproved dependency identities`)
+  }
+  if (ignored.length > 0) throw new Error(`${file}: unapproved dependency build scripts: ${ignored.join(', ')}`)
+}
 
 function isHoistedLocations(value: unknown): value is Record<string, string[]> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -14,7 +68,7 @@ function isHoistedLocations(value: unknown): value is Record<string, string[]> {
  * Different peer resolutions and third-party packages keep their installed locations.
  * All metadata paths are checked before deletion; the caller first materializes links.
  * @param staging - Symlink-free deployed payload root.
- * @param workspace - Workspace root relative to which pnpm records hoisted locations.
+ * @param workspace - Directory relative to which pnpm records hoisted locations; shared-lock deployment uses the payload root.
  */
 export async function deduplicateStagedWorkspacePackages(staging: string, workspace: string): Promise<void> {
   const modules = resolve(staging, 'node_modules')
