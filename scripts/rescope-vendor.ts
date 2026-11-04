@@ -481,6 +481,18 @@ export function isRescopeExcluded(file: string): boolean {
   return !EXTENSIONS.some(extension => file.endsWith(extension))
 }
 
+/**
+ * Read the complete tracked-file inventory and retain files eligible for rescoping.
+ * Inventories beyond 16 MiB fail without scanning a partial file list.
+ * @param repositoryRoot - Git worktree directory to inspect.
+ * @returns Repository-relative paths with forward slash separators, preserving Git's order.
+ */
+export function trackedRescopeFiles(repositoryRoot: string): string[] {
+  return execFileSync('git', ['ls-files', '-z'], { cwd: repositoryRoot, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
+    .split('\0')
+    .filter(file => file !== '' && !isRescopeExcluded(file))
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -667,9 +679,7 @@ function main(): void {
   const mode = args.includes('--apply') ? 'apply' : args.includes('--check') ? 'check' : 'dry'
   const reverse = args.includes('--reverse')
   const all = patterns(reverse)
-  const files = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' })
-    .split('\0')
-    .filter(file => file !== '' && !isRescopeExcluded(file))
+  const files = trackedRescopeFiles(root)
 
   const counts = new Map<string, { files: number; lines: number }>()
   const failures: string[] = []

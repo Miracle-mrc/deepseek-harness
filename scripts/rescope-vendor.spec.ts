@@ -1,8 +1,11 @@
 /** Recorded npm evidence stays intact while authored files and exact edits remain checked. */
 
-import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
-import { exactEditState, isRescopeExcluded, rescopeText } from './rescope-vendor.ts'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
+import { exactEditState, isRescopeExcluded, rescopeText, trackedRescopeFiles } from './rescope-vendor.ts'
 
 const ANCHOR = '\n## Sync procedure'
 const INSERTED = `\n15. **rescope**: one log entry.\n${ANCHOR}`
@@ -14,6 +17,35 @@ function expectRoundTrip(file: string, text: string, scoped: string, lines: numb
 }
 
 describe('rescope file selection', () => {
+  it('keeps eligible files after an excluded Git inventory larger than 1 MiB', () => {
+    const root = mkdtempSync(join(tmpdir(), 'rescope-inventory-'))
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true, maxRetries: 3 }) })
+    onTestFinished(() => { vi.unstubAllEnvs() })
+    try {
+      const environmentNames = Object.keys(process.env)
+      const existingName = (wanted: string) => environmentNames.find(name => name.toUpperCase() === wanted) ?? wanted
+      for (const name of environmentNames) if (name.toUpperCase().startsWith('GIT_')) vi.stubEnv(name, undefined)
+      vi.stubEnv(existingName('GIT_CONFIG_NOSYSTEM'), '1')
+      vi.stubEnv(existingName('GIT_CONFIG_GLOBAL'), '')
+      const git = (args: string[], input?: string) => execFileSync('git', args, {
+        cwd: root, encoding: 'utf8', input, maxBuffer: 16 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'],
+      })
+      git(['init', '--initial-branch=master'])
+      const content = 'export const fixture = true\n'
+      const blob = git(['hash-object', '-w', '--stdin'], content).trim()
+      const eligible = ['!first.ts', 'zz-last.ts'] as const
+      for (const file of eligible) writeFileSync(join(root, file), content)
+      // Index-only archived paths exercise the full Git output without creating thousands of files.
+      const excluded = Array.from({ length: 8_000 }, (_, index) => `.agents/notes/archived/${String(index).padStart(5, '0')}-${'x'.repeat(112)}.md`)
+      const paths = [eligible[0], ...excluded, eligible[1]]
+      git(['update-index', '-z', '--index-info'], paths.map(path => `100644 ${blob}\t${path}\0`).join(''))
+      const inventory = git(['ls-files', '-z'])
+      expect(Buffer.byteLength(inventory)).toBeGreaterThan(1024 * 1024)
+      expect(inventory.split('\0')).toHaveLength(paths.length + 1)
+      expect(trackedRescopeFiles(root)).toEqual(eligible)
+    } finally { vi.unstubAllEnvs() }
+  })
+
   it('preserves the recorded npm resolution', () => {
     expect(isRescopeExcluded('scripts/dependency-catalog/package-lock.json')).toBe(true)
   })
