@@ -39,12 +39,14 @@ import { approveBuilds, recordPendingBuilds } from './build-approval.ts'
 import { checkGithubConnection } from './github-connection.ts'
 import { chooseGitTransport, sshGitSpec } from './git-transport.ts'
 import { newerVersions, VERSION_FIELDS, VERSION_LIST_FIELDS, versionFacts } from './versions.ts'
+import { exportProfileSource } from './source-export.ts'
 import type {
   BundleDetail, BundleInfo, BundleRowInfo, ChangeResult, InspectOptions, InstallBundleOptions, ListVersionsOptions, ManagementError,
   PackageResult, PluginChange, PluginEntryId, PluginInfo, PluginInstallCancellation, PluginInstallProgress, PluginInstallRequestId,
   PluginRegistries, PluginSpecInspection, PluginUpdateResult, PluginUpdateStep, PluginVersion, PluginVersionList, Registry,
   RegistryAttempt, UpdateBundleOptions,
   PluginOperation, PluginOperationId,
+  SourceExportRequest, SourceExportResult,
 } from './types.ts'
 export type * from './types.ts'
 export { classifyInstallFailure, type InstallFailureFacts } from './install-failure.ts'
@@ -405,6 +407,18 @@ export class PluginManager extends TypertRemoteService {
   @Remote
   async readBundleDetail(name: string, language: string, options?: { npmFileSources?: NpmFileSource[] }): Promise<BundleDetail> {
     return await readBundleDocument(await this.listedBundle(name), language, options?.npmFileSources ?? [], this.detail)
+  }
+
+  /**
+   * Capture this profile and local plugin source for a reviewed browser download without changing files or Git.
+   * Home patches, invocation overlays, credentials, and environment files are excluded; arbitrary source still needs review.
+   * @param request Repository slug and a branch other than main or master, recorded as metadata only.
+   * @returns A captured UTF-8 file map requiring manual review, or a refusal with no configuration or source content.
+   */
+  @Remote
+  async exportSource(request: SourceExportRequest): Promise<SourceExportResult> {
+    this.abort.signal.throwIfAborted()
+    return exportProfileSource(this.profile, request)
   }
 
   private async listedBundle(name: string): Promise<BundleInfo> {

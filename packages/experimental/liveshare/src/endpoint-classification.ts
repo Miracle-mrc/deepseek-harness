@@ -139,6 +139,7 @@ export const VIEWER_ENDPOINT_CLASSES = {
   'workspaceFiles/readBytes': 'owner-only', // owner Workspace file access
   'workspaceFiles/stat': 'owner-only', // owner Workspace file access
   'pluginManager/cancelInstall': 'owner-only', // owner plugin management
+  'pluginManager/exportSource': 'owner-only', // owner profile configuration and plugin source
   'pluginManager/inspect': 'owner-only', // owner plugin management
   'pluginManager/installBundle': 'owner-only', // owner plugin management
   'pluginManager/listBundles': 'owner-only', // owner plugin management

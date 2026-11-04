@@ -2241,6 +2241,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         throws: ['{RemoteError} `plugin-manager/unknown-bundle`, `plugin-manager/invalid-language`, or `plugin-manager/detail-unavailable`.'],
       },
       {
+        signature: '@Remote async exportSource(request: SourceExportRequest): Promise<SourceExportResult>',
+        description: 'Capture this profile and local plugin source for a reviewed browser download without changing files or Git. Home patches, invocation overlays, credentials, and environment files are excluded; arbitrary source still needs review.',
+        parameters: [{ name: 'request', description: 'Repository slug and a branch other than main or master, recorded as metadata only.' }],
+        returns: 'A captured UTF-8 file map requiring manual review, or a refusal with no configuration or source content.',
+      },
+      {
         signature: '@Remote listVersionExemptions(): { exemptions: Record<string, string[]>; warnings: string[] }',
         description: 'Read exact plugin-version exemptions saved in this profile.',
         parameters: [],
@@ -8920,6 +8926,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SkillViewOptions',
     declaration: 'export interface SkillViewOptions extends SkillLookupOptions {\n    readonly scope?: ScopeKey | undefined;\n}',
+  },
+  {
+    name: 'SourceExportFile',
+    declaration: 'export interface SourceExportFile {\n    readonly path: string;\n    readonly content: string;\n}',
+  },
+  {
+    name: 'SourceExportRequest',
+    declaration: 'export interface SourceExportRequest {\n    readonly repository: string;\n    readonly branch: string;\n}',
+  },
+  {
+    name: 'SourceExportResult',
+    declaration: 'export type SourceExportResult = {\n    readonly status: \'ready\';\n    readonly formatVersion: 1;\n    readonly repository: string;\n    readonly branch: string;\n    readonly profile: string;\n    readonly files: readonly SourceExportFile[];\n    readonly reviewRequired: true;\n} | {\n    readonly status: \'blocked\';\n    readonly issues: readonly SourceExportIssue[];\n};',
   },
   {
     name: 'SpawnTeammateRequest',

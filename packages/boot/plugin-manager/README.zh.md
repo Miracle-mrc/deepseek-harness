@@ -74,6 +74,13 @@ HTTP(S) Git URL 指向 pnpm 没有 HTTPS 到 SSH 回退的主机（即 `hosted-g
 pnpm 11 拦下依赖脚本时，失败的安装在 `pendingBuilds` 里报告 profile 中所有待决定的 `allowBuilds` 键，包括先前尝试留下的键、本次运行报告为已忽略的包名，以及 pnpm 为其拒绝准备的 git 托管包建议的键。git URL 携带凭据（密码，或 HTTP(S) 上的用户名）的键不会被记录，因此该安装只提供手动批准。pnpm 只在能够交互提示时才把这些条目写入 `pnpm-workspace.yaml`，因此由管理器自行记录本次运行报告的包名；失败的运行会恢复 `package.json` 与 `pnpm-lock.yaml`，但有意不恢复 `pnpm-workspace.yaml`。Web 插件页提供**允许这些脚本并重试**；工具可以在用户于对话中批准这些脚本后，通过 `install_bundle` 的 `approvedBuilds` 代为授权。服务只校验待决定的名字，不核实对话中的批准。授权按记录的键保存在当前 profile，该键会把 git 托管包固定到其提交，允许以宿主用户的权限执行命令，并在再次安装失败后保留。只能批准当前未决定的名字；已有的拒绝与通配规则不能通过此操作覆盖。`allowBuilds` 里出现 YAML 锚点或别名时拒绝授权。重试保留原来的启用选择。
 
 <a id="version-compatibility-and-exemptions"></a>
+<a id="source-export"></a>
+### 源码导出
+
+`exportSource` 为 **Save to My Fork** 捕获有界且需要审查的文件映射，不修改文件系统，不发起网络请求，也不执行包或 Git 操作。它仅捕获当前 profile 的清单选择和 patch，以及支持的本地包源码。注册表依赖固定为已安装的版本。生成的 profile 和本地组合包 pnpm 设置将安装与上层工作区隔离，使用常规 hoisted 链接器，并停用自动安装 peer；不包含机器本地的构建批准。home 和调用覆盖层、凭据存储、环境文件及会话状态均不包含。不支持的源、不安全的路径、疑似秘密、不可读的文件或检测到的源码变化会返回带类型的拒绝结果，不包含已捕获的内容。秘密检测无法确认任意代码可安全发布；仍需人工审查。
+
+浏览器下载的内容与显示的预览完全一致。仓库和分支值仅为目标标签；操作不检查访问权限，也不发布文件。Liveshare 查看者无法访问源码导出。[Creator 指南](../../../docs/user/develop/practice/dynamic-cordis.zh.md#save-to-my-fork) 介绍如何提取到新目录、人工进行 Git 审查，以及通过常规 profile 启动器恢复。每台机器都必须单独配置凭据。
+
 ### 版本兼容性与豁免
 
 点名软件包的安装命令（`add`，或带 spec 的 `install`）会在 pnpm 运行前完成检查：本地路径直接读取其 `package.json`，registry spec 通过 pnpm 的 registry 查询得到该范围选中的版本及其声明的 `engines` 和 `peerDependencies`。未满足的 DSH 版本要求会在 pnpm 运行前使操作失败，因此不会下载任何内容、不会运行构建脚本；调用方随请求提交的构建批准在此检查之前记录，会保留下来。git 或 tarball spec 必须先抓取，因此在安装后才判定：此时操作会恢复 profile 清单与锁文件，并按恢复后的锁文件重新安装（profile 原本没有锁文件时，按恢复后的清单重新安装且不创建锁文件），同时报告该恢复是否成功；已获准构建脚本的副作用可能保留。本次运行未改动的依赖不会阻塞无关操作：它保持已安装状态，运行会输出点名它的警告，由 profile 启动拒绝加载。请求 `enabled: false` 的安装同样受检。启动检查独立执行；版本范围语义见 [App boot](../app-boot/README.zh.md#profiles)。版本豁免不授权依赖脚本。
@@ -181,6 +188,7 @@ service 运行若在 `idleTimeoutMs` 内没有任何捕获输出即被终止，�
 - 失败的删除可能留下部分依赖改动，失败或被取消的安装可能在 `node_modules` 或 pnpm 缓存中留下已下载文件。文件缺失的未启用依赖仍可删除。诊断日志保留在 profile 的 `.plugin-manager/logs` 目录中。
 - 管理结果描述 Host 激活状态。浏览器同步失败会在设置的插件列表中单独显示。
 - Desktop 包管理操作仍由 Desktop shell 负责。
+- 源码导出支持 UTF-8 本地包文件和 semver 注册表依赖。Git、tarball、workspace 依赖声明、二进制资源、隐藏的源文件、`cordis:include` 条目及捕获文件中缺少的包入口会被拒绝或排除。导出不保留依赖锁文件，也不保证传递依赖版本完全相同；本地包构建仍是显式恢复步骤。运行时 GitHub 发布留待后续阶段。
 
 <a id="failure-behavior"></a>
 ### 失败行为

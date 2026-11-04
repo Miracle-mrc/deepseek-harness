@@ -8,6 +8,8 @@
 
 ## 管理记录
 
+`SourceExportRequest` 指定仓库标识和 `main` 或 `master` 以外的分支；这些值只是标签，不产生 Git 或网络操作。`SourceExportResult` 为带版本的 `ready` UTF-8 文件映射且 `reviewRequired: true`，或不含捕获源码的 `blocked` 问题列表。每个文件包含可移植的相对 `path` 和 `content`。[源码导出参考](../../packages/boot/plugin-manager/README.zh.md#source-export)说明捕获限制与恢复方式。
+
 `PluginEntryId` 标识一个 Loader 条目；调用方从 `listPlugins` 获取，不自行拼接 patch id。
 
 `PluginInfo` 包含模块标识、实际启停状态、fiber 阶段和可选的展示 `meta`，以及唯一的 `patchId` 或 `readOnlyReason`。
@@ -217,6 +219,14 @@ Manage profile files and apply their declared reload lifecycle.
  *   `plugin-manager/detail-unavailable`.
  */
 @Remote async readBundleDetail(name: string, language: string, options?: { npmFileSources?: NpmFileSource[] }): Promise<BundleDetail>
+
+/**
+ * Capture this profile and local plugin source for a reviewed browser download without changing files or Git.
+ * Home patches, invocation overlays, credentials, and environment files are excluded; arbitrary source still needs review.
+ * @param request Repository slug and a branch other than main or master, recorded as metadata only.
+ * @returns A captured UTF-8 file map requiring manual review, or a refusal with no configuration or source content.
+ */
+@Remote async exportSource(request: SourceExportRequest): Promise<SourceExportResult>
 
 /** Read exact plugin-version exemptions saved in this profile.
  * @returns Accepted package-name@version keys with the runtime versions they may run on, and any
