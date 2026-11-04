@@ -1,5 +1,5 @@
 /** Read-only source capture, secret refusal, and restoration through the real profile Loader. */
-import { cp, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { Dirent, type Stats } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -90,8 +90,9 @@ afterEach(() => {
 })
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'source-export-'))
-  onTestFinished(() => rm(root, { recursive: true, force: true }))
+  const temporaryRoot = await mkdtemp(join(tmpdir(), 'source-export-'))
+  onTestFinished(() => rm(temporaryRoot, { recursive: true, force: true }))
+  const root = await realpath(temporaryRoot)
   const dir = join(root, 'profiles', 'original')
   const local = join(root, 'custom')
   await mkdir(join(local, 'src'), { recursive: true })
