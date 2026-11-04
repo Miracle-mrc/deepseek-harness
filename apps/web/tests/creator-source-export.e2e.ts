@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium, type Browser } from 'playwright'
 import { expect, it, onTestFailed } from 'vitest'
-import type { SourceExportResult } from '@deepseek-ai/dsh-api-remotes/client'
+import type { SourceExportResult } from '@deepseek-ai/dsh-plugin-manager'
 import {
   captureStableAria, compareOrRefreshGolden, launchWebScaffold, watchConsole, webSnapshotMode, type WebScaffold,
 } from './scaffold.ts'

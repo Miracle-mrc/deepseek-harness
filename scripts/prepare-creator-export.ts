@@ -10,6 +10,7 @@ const PROFILE_FILES = ['profiles/saved/package.json', 'profiles/saved/cordis.pat
 const PROFILE_WORKSPACE = 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n'
 const SOURCE_IGNORE = '/*\n!/.gitignore\n!/bundles/\n!/profiles/\n/profiles/*\n!/profiles/saved/\n/profiles/saved/*\n!/profiles/saved/package.json\n!/profiles/saved/cordis.patch.yml\n!/profiles/saved/pnpm-workspace.yaml\n**/node_modules/\n**/.env*\n**/.credentials*\n'
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/u
+const EXCLUDED_BUNDLE_SEGMENT = /^(?:\..*|node_modules|credentials?(?:\..*)?)$/i
 const RESERVED_WINDOWS_NAME = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³]|conin\$|conout\$)(?:\.|$)/i
 
 /** A text file carried by the reviewed download. */
@@ -42,8 +43,9 @@ function invalid(message: string): never {
   throw new CreatorExportPreparationError('invalid-export', `${message}. Download a fresh reviewed source export.`)
 }
 
-function unsafe(path: string): never {
-  throw new CreatorExportPreparationError('unsafe-path', `Unsafe export path ${JSON.stringify(path)}. Download a fresh reviewed source export.`)
+function unsafe(): never {
+  // A rejected input path can itself contain credentials.
+  throw new CreatorExportPreparationError('unsafe-path', 'The export contains an unsafe path. Download a fresh reviewed source export.')
 }
 
 function validRepository(value: string): boolean {
@@ -77,16 +79,18 @@ function validateFiles(archive: unknown): CreatorExportFile[] {
     const parts = path.split('/')
     if (/[\\:<>"|?*]/u.test(path) || CONTROL_CHARACTERS.test(path)
       || parts.some(part => part === '' || part === '.' || part === '..' || /[. ]$/u.test(part) || RESERVED_WINDOWS_NAME.test(part))
-      || (path !== '.gitignore' && !PROFILE_FILES.includes(path) && !/^bundles\/(?:0|[1-9][0-9]*)\/.+$/u.test(path))) unsafe(path)
+      || (path !== '.gitignore' && !PROFILE_FILES.includes(path) && !/^bundles\/(?:0|[1-9][0-9]*)\/.+$/u.test(path))) unsafe()
+    if (parts[0] === 'bundles' && parts.slice(2).some(part => EXCLUDED_BUNDLE_SEGMENT.test(part))) unsafe()
+    if (file.content.includes('\0')) invalid('An export file contains binary content')
     const folded = path.normalize('NFC').toLowerCase()
-    if (paths.has(folded)) unsafe(path)
+    if (paths.has(folded)) unsafe()
     paths.add(folded)
     if (parts[0] === 'bundles') bundles.add(parts.slice(0, 2).join('/'))
     for (let index = 1; index < parts.length; index++) {
       const directory = parts.slice(0, index).join('/')
       const key = directory.normalize('NFC').toLowerCase()
       const previous = directories.get(key)
-      if (previous !== undefined && previous !== directory) unsafe(path)
+      if (previous !== undefined && previous !== directory) unsafe()
       directories.set(key, directory)
     }
     const bytes = Buffer.byteLength(file.content, 'utf8')
@@ -94,7 +98,7 @@ function validateFiles(archive: unknown): CreatorExportFile[] {
     if (bytes > MAX_FILE_BYTES || total > MAX_TOTAL_BYTES) invalid('The export exceeds the source size limits')
     files.push({ path, content: file.content })
   }
-  for (const path of directories.keys()) if (paths.has(path)) unsafe(path)
+  for (const path of directories.keys()) if (paths.has(path)) unsafe()
   for (const path of PROFILE_FILES) if (!paths.has(path)) invalid(`The export is missing ${path}`)
   if (!files.some(file => file.path === 'profiles/saved/pnpm-workspace.yaml' && file.content === PROFILE_WORKSPACE)) {
     invalid('The export does not contain the isolated profile workspace settings')

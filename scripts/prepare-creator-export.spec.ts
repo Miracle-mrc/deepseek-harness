@@ -98,8 +98,24 @@ it.each([
   'bundles/0/CON', 'bundles/0/aux.txt', 'bundles/0/com1.js', 'bundles/0/LPT9.txt', 'bundles/0/COM¹', 'bundles/0/CONOUT$',
   'profiles/other/package.json', 'profiles/saved/settings.json', 'Profiles/saved/package.json', '.git/config', 'credentials/token',
   'bundles/00/index.ts', 'bundles/-1/index.ts', 'bundles/source/index.ts', 'bundles/0/',
+  'bundles/0/.git/config', 'bundles/0/.env', 'bundles/0/src/.npmrc', 'bundles/0/node_modules/plugin/index.js',
+  'bundles/0/credentials.json',
 ])('rejects unsafe paths before any safe file is written: %s', (path) => {
   rejected(archive([...PROFILE_FILES, { path, content: 'unsafe' }]), 'unsafe-path')
+})
+
+it('rejects binary contents in a tampered download before creating a destination', () => {
+  rejected(archive([...PROFILE_FILES, { path: 'bundles/0/index.js', content: 'source\0binary' }]))
+})
+
+it('does not echo credentials embedded in rejected input paths', () => {
+  const token = `ghp_${'a'.repeat(16)}`
+  const { destination } = fixture()
+  expect(() => prepareCreatorExport(archive([...PROFILE_FILES, { path: `../${token}`, content: '' }]), destination))
+    .toThrow(expect.objectContaining<{ code: string; message: unknown }>({
+      code: 'unsafe-path', message: expect.not.stringContaining(token),
+    }))
+  expect(existsSync(destination)).toBe(false)
 })
 
 it.each([

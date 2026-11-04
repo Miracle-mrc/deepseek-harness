@@ -168,6 +168,7 @@ class Capture {
   constructor(private readonly outputBytes: number) {}
 
   add(path: string, content: string): void {
+    if (SECRET_TEXT.test(path)) refuse('secret-suspected')
     const parts = path.split('/')
     for (let length = 1; length <= parts.length; length += 1) {
       const prefix = parts.slice(0, length).join('/')
@@ -349,6 +350,7 @@ export async function exportProfileSource(profile: ProfileContext, request: Sour
   const targetBranch = branch(request.branch)
   if (targetBranch === undefined) return { status: 'blocked', issues: [{ code: 'invalid-branch' }] }
   try {
+    if ([targetRepository, targetBranch, profile.name].some(value => SECRET_TEXT.test(value))) refuse('secret-suspected')
     const envelope = { status: 'ready' as const, formatVersion: 1 as const, repository: targetRepository,
       branch: targetBranch, profile: profile.name, files: [], reviewRequired: true as const }
     const envelopeBytes = Buffer.byteLength(JSON.stringify(envelope))
@@ -393,7 +395,11 @@ export async function exportProfileSource(profile: ProfileContext, request: Sour
     await capture.verify()
     return { ...envelope, files: capture.files }
   } catch (error) {
-    if (error instanceof ExportRefusal) return { status: 'blocked', issues: [{ code: error.code, ...error.path === undefined ? {} : { path: error.path } }] }
+    if (error instanceof ExportRefusal) {
+      const path = error.path
+      const issue = path === undefined || SECRET_TEXT.test(path) ? { code: error.code } : { code: error.code, path }
+      return { status: 'blocked', issues: [issue] }
+    }
     return { status: 'blocked', issues: [{ code: 'profile-unavailable' }] }
   }
 }

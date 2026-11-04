@@ -1,5 +1,6 @@
 /** Read-only source capture, secret refusal, and restoration through the real profile Loader. */
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { Dirent, type Stats } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest'
@@ -17,6 +18,16 @@ const filesystemHooks = vi.hoisted(() => ({
   beforeRealpath: undefined as ((filename: string) => Promise<void>) | undefined,
   reverseDirectory: false,
   specialEntry: undefined as string | undefined,
+  virtual: undefined as {
+    directory: string
+    names: string[]
+    directories: Set<string>
+    files: Set<string>
+    fileInfo: Stats
+    directoryInfo: Stats
+    handle: import('node:fs/promises').FileHandle
+    cursor: number
+  } | undefined,
 }))
 
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -25,16 +36,30 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     ...actual,
     open: async (...args: Parameters<typeof actual.open>) => {
       await filesystemHooks.beforeOpen?.(String(args[0]))
+      const virtual = filesystemHooks.virtual
+      if (virtual?.files.has(String(args[0]))) {
+        virtual.cursor = 0
+        return virtual.handle
+      }
       const handle = await actual.open(...args)
       await filesystemHooks.afterOpen?.(String(args[0]), handle)
       return handle
     },
     lstat: async (...args: Parameters<typeof actual.lstat>) => {
       await filesystemHooks.beforeStat?.(String(args[0]))
+      const virtual = filesystemHooks.virtual
+      if (virtual?.files.has(String(args[0]))) return virtual.fileInfo
+      if (virtual?.directories.has(String(args[0]))) return virtual.directoryInfo
       return actual.lstat(...args)
     },
     readdir: async (...args: Parameters<typeof actual.readdir>) => {
       await filesystemHooks.beforeDirectory?.(String(args[0]))
+      const virtual = filesystemHooks.virtual
+      if (virtual?.directory === String(args[0])) {
+        return virtual.names.map(name => Object.assign(new Dirent(), {
+          name, parentPath: virtual.directory, isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false,
+        }))
+      }
       const entries = await actual.readdir(...args)
       for (const entry of entries) {
         if (typeof entry !== 'string' && !Buffer.isBuffer(entry) && String(entry.name) === filesystemHooks.specialEntry) {
@@ -45,6 +70,8 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     },
     realpath: async (...args: Parameters<typeof actual.realpath>) => {
       await filesystemHooks.beforeRealpath?.(String(args[0]))
+      const virtual = filesystemHooks.virtual
+      if (virtual?.files.has(String(args[0])) || virtual?.directories.has(String(args[0]))) return String(args[0])
       return actual.realpath(...args)
     },
   }
@@ -58,6 +85,7 @@ afterEach(() => {
   filesystemHooks.beforeRealpath = undefined
   filesystemHooks.reverseDirectory = false
   filesystemHooks.specialEntry = undefined
+  filesystemHooks.virtual = undefined
   vi.restoreAllMocks()
 })
 
@@ -91,6 +119,30 @@ async function fixture() {
   return { root, dir, local, profile }
 }
 
+async function virtualDirectory(directory: string, names: string[], content: string, anchor: string) {
+  const fs = await import('node:fs/promises')
+  await writeFile(anchor, content)
+  const handle = await fs.open(anchor, 'r')
+  const close = handle.close.bind(handle)
+  onTestFinished(close)
+  const virtual = {
+    directory, names, directories: new Set([directory, join(directory, '..')]),
+    files: new Set(names.map(name => join(directory, name))),
+    fileInfo: await handle.stat(), directoryInfo: await fs.lstat(directory), handle, cursor: 0,
+  }
+  const bytes = Buffer.from(content)
+  Object.assign(handle, {
+    stat: () => Promise.resolve(virtual.fileInfo),
+    read: (buffer: Buffer, offset: number, length: number) => {
+      const bytesRead = bytes.copy(buffer, offset, virtual.cursor, virtual.cursor + length)
+      virtual.cursor += bytesRead
+      return Promise.resolve({ buffer, bytesRead })
+    },
+    close: () => Promise.resolve(),
+  })
+  filesystemHooks.virtual = virtual
+}
+
 it('captures local source and raw configuration without changing the profile, then restores through the Loader', async () => {
   const { root, dir, local, profile } = await fixture()
   filesystemHooks.reverseDirectory = true
@@ -122,9 +174,45 @@ it('captures local source and raw configuration without changing the profile, th
   const restored: ProfileContext = { ...profile, name: 'saved', dir: restoredDir, home: restoredHome, patchPath: join(restoredDir, 'cordis.patch.yml') }
   const loaded = loadProfileDirectory('test', restoredDir, profile.installAnchor)
   expect(loaded.skippedBundles).toEqual([])
-  const ctx = await boot('test', join(restoredDir, 'cordis.yml'), readProfilePatches('test', restored), owner => owner.provide('profileContext', restored))
+  const ctx = await boot('test', join(restoredDir, 'cordis.yml'), readProfilePatches('test', restored), (owner) => { owner.provide('profileContext', restored) })
   onTestFinished(() => ctx.fiber.dispose())
   expect(ctx.get('restoredSourceProbe')).toBe('green')
+})
+
+it('exports the shipped Creator decoration and MCP templates together without changing their source', async () => {
+  const { root, dir, profile } = await fixture()
+  const templates = new URL('../../../preset/agent-preset/skills/cordis-plugin-development/templates/', import.meta.url)
+  await Promise.all([
+    cp(new URL('decoration/', templates), join(root, 'decoration'), { recursive: true }),
+    cp(new URL('mcp/', templates), join(root, 'mcp'), { recursive: true }),
+  ])
+  await writeFile(join(dir, 'package.json'), JSON.stringify({
+    dependencies: { '@local/my-decoration': 'link:../../decoration', '@local/demo-mcp': 'link:../../mcp' },
+    dsh: { profile: { bundles: ['@local/my-decoration', '@local/demo-mcp'] } },
+  }))
+  await writeFile(profile.patchPath, '[]\n')
+  const result = await exportProfileSource(profile, request)
+  expect(result.status).toBe('ready')
+  if (result.status !== 'ready') throw new Error('shipped Creator templates were refused')
+  const files = new Map(result.files.map(file => [file.path, file.content]))
+  for (const path of ['index.js', 'client.js', 'package.json', 'cordis.patch.yml', 'icon.svg', 'locale/en.json']) {
+    expect(files.get(`bundles/0/${path}`)).toBe(await readFile(new URL(`decoration/${path}`, templates), 'utf8'))
+  }
+  for (const path of ['package.json', 'cordis.patch.yml', 'icon.svg', 'locale/en.json']) {
+    expect(files.get(`bundles/1/${path}`)).toBe(await readFile(new URL(`mcp/${path}`, templates), 'utf8'))
+  }
+  const decorationManifest: unknown = JSON.parse(files.get('bundles/0/package.json') ?? '')
+  expect(decorationManifest).toMatchObject({
+    exports: { '.': './index.js', './client': './client.js', './icon': './icon.svg', './locale/*.json': './locale/*.json' },
+    dsh: { client: { platform: 'web', immediately: true, inject: ['@deepseek-ai/dsh-client-ui-conversation'] } },
+  })
+  expect(files.get('bundles/1/cordis.patch.yml')).toContain('@deepseek-ai/dsh-mcp-client')
+  const savedManifest: unknown = JSON.parse(files.get('profiles/saved/package.json') ?? '')
+  expect(savedManifest).toMatchObject({
+    dependencies: { '@local/my-decoration': 'link:../../bundles/0', '@local/demo-mcp': 'link:../../bundles/1' },
+    dsh: { profile: { bundles: ['@local/my-decoration', '@local/demo-mcp'] } },
+  })
+  expect(await exportProfileSource(profile, request)).toEqual(result)
 })
 
 it('keeps !!js inert and preserves its exact source bytes', async () => {
@@ -440,6 +528,42 @@ it('screens secrets after JSON escape decoding', async () => {
   expect(await exportProfileSource(profile, request)).toEqual({ status: 'blocked', issues: [{ code: 'secret-suspected', path: 'bundles/0/encoded.json' }] })
 })
 
+it.each(['repository', 'branch', 'profile'] as const)('refuses a known secret marker in export metadata without echoing it: %s', async (field) => {
+  const { profile } = await fixture()
+  const marker = 'ghp_' + 'x'.repeat(24)
+  const destination = field === 'repository' ? { ...request, repository: `person/${marker}` }
+    : field === 'branch' ? { ...request, branch: marker } : request
+  const source = field === 'profile' ? { ...profile, name: marker } : profile
+  const result = await exportProfileSource(source, destination)
+  expect(result).toEqual({ status: 'blocked', issues: [{ code: 'secret-suspected' }] })
+  expect(JSON.stringify(result)).not.toContain(marker)
+})
+
+it('refuses a safe-content file whose name contains a known secret marker without echoing it', async () => {
+  const { local, profile } = await fixture()
+  const marker = 'ghp_' + 'x'.repeat(24)
+  await writeFile(join(local, 'src', `${marker}.ts`), 'export const ordinary = true\n')
+  const result = await exportProfileSource(profile, request)
+  expect(result).toEqual({ status: 'blocked', issues: [{ code: 'secret-suspected' }] })
+  expect(JSON.stringify(result)).not.toContain(marker)
+})
+
+it.each(['read-failure', 'secret-content'] as const)('omits secret-bearing paths from an export refusal after %s', async (failure) => {
+  const { local, profile } = await fixture()
+  const marker = 'ghp_' + 'x'.repeat(24)
+  const filename = join(local, 'src', `${marker}.ts`)
+  const secret = 'sk-' + 'x'.repeat(20)
+  await writeFile(filename, failure === 'secret-content' ? secret : 'ordinary source\n')
+  filesystemHooks.beforeOpen = async (path) => {
+    if (failure === 'read-failure' && path === filename) throw new Error('fixture read failed')
+  }
+  const result = await exportProfileSource(profile, request)
+  const code = failure === 'read-failure' ? 'source-unavailable' : 'secret-suspected'
+  expect(result).toEqual({ status: 'blocked', issues: [{ code }] })
+  expect(JSON.stringify(result)).not.toContain(marker)
+  expect(JSON.stringify(result)).not.toContain(secret)
+})
+
 it('refuses a profile patch replaced by a directory before capture or verification', async () => {
   const { profile } = await fixture()
   let stats = 0
@@ -484,8 +608,8 @@ it('bounds the total retained file bytes', async () => {
 })
 
 it('bounds the number of retained files', async () => {
-  const { local, profile } = await fixture()
-  await Promise.all(Array.from({ length: 2000 }, (_, index) => writeFile(join(local, 'src', `${index}.ts`), '')))
+  const { dir, local, profile } = await fixture()
+  await virtualDirectory(join(local, 'src'), Array.from({ length: 2000 }, (_, index) => `${index}.ts`), '', join(dir, 'virtual-source'))
   const result = await exportProfileSource(profile, request)
   expect(result.status).toBe('blocked')
   if (result.status === 'blocked') expect(result.issues[0]?.code).toBe('too-large')
@@ -599,16 +723,14 @@ it('bounds retained registry manifest bytes even when the output is small', asyn
 
 it('bounds the number of observed registry manifest reads', async () => {
   const { dir, profile } = await fixture()
-  const declared: Record<string, string> = {}
-  for (let start = 0; start < 4000; start += 100) {
-    await Promise.all(Array.from({ length: 100 }, async (_, offset) => {
-      const name = `registry-${start + offset}`
-      declared[name] = '*'
-      const root = join(dir, 'node_modules', name)
-      await mkdir(root, { recursive: true })
-      await writeFile(join(root, 'package.json'), '{"version":"1.0.0"}')
-    }))
-  }
+  const installed = join(dir, 'registry-manifest')
+  await mkdir(installed)
+  await writeFile(join(installed, 'package.json'), '{"version":"1.0.0"}')
+  // Virtual registry names share one real manifest so the read budget does not depend on thousands of fixture directories.
+  const appBoot = await import('@deepseek-ai/dsh-app-boot')
+  vi.spyOn(appBoot, 'resolveBundleDir').mockReturnValue(installed)
+  await virtualDirectory(installed, ['package.json'], '{"version":"1.0.0"}', join(dir, 'virtual-source'))
+  const declared = Object.fromEntries(Array.from({ length: 4000 }, (_, index) => [`registry-${index}`, '*']))
   await writeFile(join(dir, 'package.json'), JSON.stringify({ dependencies: declared, dsh: { profile: { bundles: [] } } }))
   const result = await exportProfileSource(profile, request)
   expect(result.status).toBe('blocked')

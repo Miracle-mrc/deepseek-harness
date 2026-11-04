@@ -7,7 +7,7 @@
 
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it, vi } from 'vitest'
-import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
+import { resolveSlotLabel, type PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { createSnapshotStore, type ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
@@ -205,6 +205,10 @@ function declareRoot(slots: SlotRegistry): () => void {
     },
   } as never, () => null)
 }
+
+function SourceExportSlotDeclaration(
+  _props: PropsRenderSlots<'settings.section' | 'plugins.add.actions' | 'shell.overlay'>,
+): null { return null }
 
 /** The conversation's own declarations, which the chip and label wait for. */
 function declareConversation(slots: SlotRegistry): () => void {
@@ -431,7 +435,7 @@ describe('ui-agent-preset apply', () => {
           'plugins.add.actions': { kind: 'list', scope: 'root' },
           'shell.overlay': { kind: 'list', scope: 'root' },
         },
-      }, () => null)
+      }, SourceExportSlotDeclaration)
       ctx.provide('sessions', sessionsDouble(ctx, { byId: {} }) as never)
       const feature = ctx.plugin({ inject: [...inject], apply })
       await feature.await()

@@ -119,6 +119,8 @@ const GENERIC_SKIPS: readonly GenericSkip[] = [
   { file: 'docs/user/guide/schedule.zh.md', upstream: ['cordis'] },
   { file: 'packages/bundle/web-app/cordis.patch.yml', upstream: ['cordis'] },
   { file: 'packages/client/ui-agent-preset/src/client/CreatePluginMenuItem.tsx', upstream: ['cordis'] },
+  { file: 'packages/client/ui-agent-preset/src/client/ForkExport.tsx', upstream: ['cordis'] },
+  { file: 'packages/client/ui-agent-preset/tests/fork-export.client.spec.tsx', upstream: ['cordis'] },
   { file: 'packages/client/ui-agent-preset/src/client/analytics.ts', upstream: ['cordis'] },
   { file: 'packages/client/ui-agent-preset/tests/analytics.client.spec.ts', upstream: ['cordis'] },
   { file: 'packages/client/ui-agent-preset/tests/components.client.spec.tsx', upstream: ['cordis'] },

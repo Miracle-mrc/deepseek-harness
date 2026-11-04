@@ -26,7 +26,7 @@ From your fork checkout, materialize the downloaded export into a new directory:
 node scripts/prepare-creator-export.ts /path/to/download.json /path/to/new-customizations
 ```
 
-The extractor validates every path and refuses an existing destination, including one from an earlier extraction. It runs no Git commands. Keep the generated source files in a dedicated directory in your fork, inspect `git diff`, create the branch you chose, and stage only those files. Check that the Git remote names your fork before committing or pushing. Authentication failures belong to your local Git/GitHub setup; the export itself needs no GitHub token.
+The extractor validates every path and refuses an existing destination, including one from an earlier extraction. It runs no Git commands. Keep the generated source files in a dedicated directory in your fork. Create the branch you chose, inspect the files, then stage only those files and review `git diff --cached`. Check that the Git remote names your fork before committing or pushing. Authentication failures belong to your local Git/GitHub setup; the export itself needs no GitHub token.
 
 To restore on another machine, clone your fork and complete the [source checkout setup](../../../development.md#setup-tutorial), including a build. Review the exported plugins before executing them. Install dependencies and run any required build scripts in the exported local bundle directories, then install the profile dependencies from `profiles/saved`. Launch through the normal CLI with the exported directory as the Harness home:
 

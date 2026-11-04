@@ -2392,7 +2392,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
       },
     ],
     ownerProps: [
-      '/** Add-plugin menu actions, independent of any selected bundle or Session. */\nexport interface PluginAddActionsProps {\n  /** Close the add-plugin menu before starting the contributed action. */\n  readonly onDismiss: () => void\n}',
+      '/** Add-plugin menu actions, independent of any selected bundle or Session. */\nexport interface PluginAddActionsProps {\n  /** Close the add-plugin menu and focus its arrow before starting the contributed action. */\n  readonly onDismiss: () => void\n}',
     ],
     ownerPropsReferences: [],
     standardProps: [
@@ -2411,6 +2411,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     slotInject: '',
     declaredBy: 'an entry in \'main\' (client-ui-plugin-manager), so it exists while that entry is mounted',
     occupants: [
+      'client-ui-agent-preset ForkExportMenuItem id \'save-to-my-fork\'',
       'client-ui-agent-preset CreatePluginMenuItem id \'create-plugin\'',
     ],
     replaceRisk: 'none',
@@ -3556,6 +3557,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     slotInject: '',
     declaredBy: 'an entry in \'root\' (client-ui-layout), so it exists while that entry is mounted',
     occupants: [
+      'client-ui-agent-preset ForkExportOverlay id \'agent-preset.source-export\'',
       'client-ui-chat QuotaNoticeHost id \'chat.quota-notice\'',
       'client-ui-file-drag FileDragFeedback id \'file-drag.feedback\'',
       'client-ui-open-in-app OpenInAppToast id \'open-in-app.toast\'',

@@ -106,6 +106,8 @@ describe('product identifiers', () => {
     'docs/user/guide/schedule.zh.md',
     'packages/bundle/web-app/cordis.patch.yml',
     'packages/client/ui-agent-preset/src/client/CreatePluginMenuItem.tsx',
+    'packages/client/ui-agent-preset/src/client/ForkExport.tsx',
+    'packages/client/ui-agent-preset/tests/fork-export.client.spec.tsx',
     'packages/client/ui-agent-preset/src/client/analytics.ts',
     'packages/client/ui-agent-preset/tests/analytics.client.spec.ts',
     'packages/client/ui-agent-preset/tests/components.client.spec.tsx',
@@ -133,6 +135,16 @@ describe('product identifiers', () => {
     expect(rescopeText(text, file)).toEqual({ text: scoped, lines: 2 })
     expect(rescopeText(scoped, file)).toEqual({ text: scoped, lines: 0 })
     expect(rescopeText(scoped, file, true)).toEqual({ text, lines: 2 })
+  })
+
+  it.each([
+    'packages/client/ui-agent-preset/src/client/ForkExport.tsx',
+    'packages/client/ui-agent-preset/tests/fork-export.client.spec.tsx',
+  ])('rewrites framework imports while retaining the Creator preset id in %s', (file) => {
+    const text = "import { Context } from 'cordis'\nconst preset = 'cordis'\n"
+    const scoped = "import { Context } from '@deepseek-ai/cordis'\nconst preset = 'cordis'\n"
+    expect(rescopeText(text, file)).toEqual({ text: scoped, lines: 1 })
+    expect(rescopeText(scoped, file, true)).toEqual({ text, lines: 1 })
   })
 
   it('keeps unlisted package references subject to residue detection', () => {

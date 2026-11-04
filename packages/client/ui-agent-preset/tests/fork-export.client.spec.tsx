@@ -3,7 +3,7 @@
 import type { ComponentProps } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { allowAllAccess, bindSnapshotSelector } from '@deepseek-ai/dsh-client-test-runtime'
+import { allowAllAccess, bindSnapshotSelector, makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SourceExportResult } from '@deepseek-ai/dsh-api-remotes/client'
 import { ForkExportMenuItem, ForkExportOverlay } from '../src/client/ForkExport.tsx'
@@ -18,12 +18,6 @@ const READY: ReadySourceExport = {
   files: [{ path: 'profiles/saved/cordis.patch.yml', content: 'entries: []\n' }],
 }
 
-function translate(copy: typeof en): (key: keyof typeof en, params?: Record<string, string>) => string {
-  return (key, params) => Object.entries(params ?? {}).reduce(
-    (text, [name, value]) => text.replaceAll(`{${name}}`, value), copy[key],
-  )
-}
-
 function unusedHook(): never { throw new Error('The export menu does not read this source') }
 
 function menu(state: Partial<AgentPresetSettingsState> = {}, allowed = true) {
@@ -33,7 +27,7 @@ function menu(state: Partial<AgentPresetSettingsState> = {}, allowed = true) {
   const calls: string[] = []
   const load = vi.fn(async () => {})
   const props: ComponentProps<typeof ForkExportMenuItem> = {
-    t: translate(en), useAgentPresets: bindSnapshotSelector(source),
+    t: makeTranslate(en), useAgentPresets: bindSnapshotSelector(source),
     usePanelInfo: unusedHook, useSessions: unusedHook, useSessionStatus: unusedHook,
     useSessionRetainInfo: unusedHook, useWorkspaces: unusedHook, useResource: unusedHook,
     ...allowAllAccess, useRemoteAccess: () => allowed,
@@ -50,7 +44,7 @@ function overlay(copy = en, prepare: (request: { repository: string; branch: str
   controller.edit('repository', READY.repository)
   controller.edit('branch', READY.branch)
   const props: ComponentProps<typeof ForkExportOverlay> = {
-    t: translate(copy), useForkExport: bindSnapshotSelector(controller.store),
+    t: makeTranslate(copy), useForkExport: bindSnapshotSelector(controller.store),
     close: () => { controller.close() }, edit: (field, value) => { controller.edit(field, value) },
     inspect: () => controller.inspect(), review: (value) => { controller.review(value) },
     download: () => { controller.download() }, dismissNotice: () => { controller.dismissNotice() },

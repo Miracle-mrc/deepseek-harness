@@ -130,7 +130,10 @@ describe('local source export download', () => {
     const create = vi.fn((blob: Blob) => { objects.push(blob); return 'blob:source-export' })
     const revoke = vi.fn()
     const NativeURL = URL
-    vi.stubGlobal('URL', class extends NativeURL { static createObjectURL = create; static revokeObjectURL = revoke })
+    vi.stubGlobal('URL', class extends NativeURL {
+      static override createObjectURL = create
+      static override revokeObjectURL = revoke
+    })
     const clicked: { href: string; filename: string }[] = []
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
       clicked.push({ href: this.href, filename: this.download })
@@ -150,8 +153,8 @@ describe('local source export download', () => {
     const revoke = vi.fn()
     const NativeURL = URL
     vi.stubGlobal('URL', class extends NativeURL {
-      static createObjectURL = () => 'blob:source-export'
-      static revokeObjectURL = revoke
+      static override createObjectURL = () => 'blob:source-export'
+      static override revokeObjectURL = revoke
     })
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => { throw new Error('download denied') })
     expect(() => { downloadForkExport(READY) }).toThrow('download denied')
