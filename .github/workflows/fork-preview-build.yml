@@ -62,7 +62,7 @@ jobs:
             shell: pwsh
           - target: mac-arm64
             command: package:desktop:mac:arm64:unsigned
-            runner: macos-latest
+            runner: macos-15
             shell: bash
           - target: mac-x64
             command: package:desktop:mac:x64:unsigned

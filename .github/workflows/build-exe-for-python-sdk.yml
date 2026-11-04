@@ -174,8 +174,10 @@ jobs:
     env:
       # Only the personal fork permits keyless CI; upstream preflights stay strict.
       DSH_PYTHON_REAL_API_ENABLED: ${{ github.repository != 'Miracle-mrc/deepseek-harness' || secrets.DEEPSEEK_API_KEY_EXTERNAL != '' }}
+    # The fork uses the supported macOS 15 image for native ARM64 builds.
     runs-on: >-
-      ${{ github.repository == 'Miracle-mrc/deepseek-harness' && matrix.runner
+      ${{ github.repository == 'Miracle-mrc/deepseek-harness'
+          && (matrix.target == 'node24-macos-arm64' && 'macos-15' || matrix.runner)
           || inputs.release && matrix.target == 'node24-macos-x64' && 'macos-15-large'
           || inputs.release && matrix.target == 'node24-macos-arm64' && 'macos-15-xlarge'
           || inputs.ci && !inputs.release && matrix.target == 'node24-linux-x64'
