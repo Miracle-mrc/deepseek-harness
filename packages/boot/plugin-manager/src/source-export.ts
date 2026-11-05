@@ -34,7 +34,7 @@ const LITERAL_ASSIGNMENT = new RegExp(
   'giu',
 )
 const URI_PREFIX = /(?<![a-z0-9+.-])(?:(?:https?|ftp|wss?):[\\/]*|(?:[a-z][a-z0-9+.-]*:)?\/\/)/.source
-const URI_TEXT = new RegExp(URI_PREFIX + /[^\s"'`<>\\]+/.source, 'giu')
+const URI_TEXT = new RegExp(URI_PREFIX + /[^\s"'`<>]+/.source, 'giu')
 const URI_USER_INFO = new RegExp(URI_PREFIX + /[^\s"'`<>\\/?#]+@/.source, 'iu')
 // Unnamed URL credentials may still be recognizable as long opaque tokens, including JWTs and hex keys.
 const OPAQUE_QUERY_VALUE = /^(?=.{40,}$)(?=.*[a-z])(?=.*[0-9])[a-z0-9._~+/-]+=*$/iu
@@ -77,10 +77,25 @@ function sensitiveName(name: string, query = false): boolean {
     || (query && /^(?:access|auth|key|sig|sas|session|sessionid)$/u.test(normalized))
 }
 
+function* parsedUrls(value: string): Generator<URL, void> {
+  for (const match of value.matchAll(URI_TEXT)) {
+    const uri = match[0]
+    const absolute = uri.startsWith('//') ? `https:${uri}` : uri
+    if (URL.canParse(absolute)) yield new URL(absolute)
+  }
+}
+
+function suspectedUserInfo(value: string): boolean {
+  for (const url of parsedUrls(value)) {
+    if (url.username !== '' || url.password !== '') return true
+  }
+  return URI_USER_INFO.test(value)
+}
+
 function suspectedParameters(parameters: URLSearchParams): boolean {
   for (const [name, item] of parameters) {
     if (item !== '' && (sensitiveName(name, true) || SECRET_TEXT.test(item)
-      || URI_USER_INFO.test(item) || OPAQUE_QUERY_VALUE.test(item))) return true
+      || suspectedUserInfo(item) || OPAQUE_QUERY_VALUE.test(item))) return true
   }
   return false
 }
@@ -90,11 +105,7 @@ function suspectedText(value: string): boolean {
   for (const match of value.matchAll(LITERAL_ASSIGNMENT)) {
     if (sensitiveName(match[1] as string)) return true
   }
-  for (const match of value.matchAll(URI_TEXT)) {
-    const uri = match[0]
-    const absolute = uri.startsWith('//') ? `https:${uri}` : uri
-    if (!URL.canParse(absolute)) continue
-    const url = new URL(absolute)
+  for (const url of parsedUrls(value)) {
     if (url.username !== '' || url.password !== '') return true
     const fragment = url.hash.slice(1)
     if (suspectedParameters(url.searchParams) || suspectedParameters(new URLSearchParams(fragment))) return true

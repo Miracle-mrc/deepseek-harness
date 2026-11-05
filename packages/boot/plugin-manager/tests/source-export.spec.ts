@@ -328,6 +328,54 @@ it.each(['accessToken', 'refresh_token', 'client-secret', 'apiKey', 'password'])
 })
 
 it.each([
+  ...['postgresql', 'mysql', 'mongodb', 'mongodb+srv', 'redis', 'rediss', 'amqp']
+    .map(scheme => `${scheme}://account:synthetic\\pass@example.invalid/db`),
+  `https://example.invalid/service?endpoint=${encodeURIComponent('postgresql://account:synthetic\\pass@example.invalid/db')}`,
+  `https://example.invalid/service#endpoint=${encodeURIComponent('postgresql://account:synthetic\\pass@example.invalid/db')}`,
+  `https://example.invalid/service?endpoint=${encodeURIComponent('redis://:synthetic\\pass@example.invalid/db')}`,
+  `https://example.invalid/service?endpoint=${encodeURIComponent('https://account:synthetic-private-value@example.invalid\\path\\name@example.invalid')}`,
+].flatMap(url => ['configuration', 'source', 'json'].map(location => ({ url, location }))))(
+  'refuses authority backslashes in direct and nested URI credentials in $location: $url', async ({ url, location }) => {
+    const { local, profile } = await fixture()
+    const path = location === 'configuration' ? 'profiles/saved/cordis.patch.yml'
+      : location === 'json' ? 'bundles/0/data.json' : 'bundles/0/src/index.ts'
+    const filename = location === 'configuration' ? profile.patchPath
+      : location === 'json' ? join(local, 'data.json') : join(local, 'src', 'index.ts')
+    const content = location === 'configuration' ? `- id: source-probe\n  config:\n    url: ${JSON.stringify(url)}\n`
+      : location === 'json' ? JSON.stringify({ nested: [url] }) : `export const endpoint = ${JSON.stringify(url)}\n`
+    await writeFile(filename, content)
+    const result = await exportProfileSource(profile, request)
+    expect(result).toEqual({ status: 'blocked', issues: [{ code: 'secret-suspected', path }] })
+    expect(JSON.stringify(result)).not.toContain('synthetic')
+  },
+)
+
+it.each([
+  'https://example.invalid\\people\\name@example.invalid',
+  '//example.invalid\\people\\name@example.invalid',
+  'file://example.invalid\\people\\name@example.invalid',
+  'postgresql://example.invalid/db\\people@name',
+  'https://example.invalid/service?lang=vi&path=public\\name',
+  'postgresql://example.invalid/db?path=public\\name',
+  `https://example.invalid/service?endpoint=${encodeURIComponent('https://example.invalid\\people\\name@example.invalid')}`,
+].flatMap(url => ['configuration', 'source', 'json'].map(location => ({ url, location }))))(
+  'retains credential-free backslash paths and parameters in $location: $url', async ({ url, location }) => {
+    const { local, profile } = await fixture()
+    const path = location === 'configuration' ? 'profiles/saved/cordis.patch.yml'
+      : location === 'json' ? 'bundles/0/data.json' : 'bundles/0/src/index.ts'
+    const filename = location === 'configuration' ? profile.patchPath
+      : location === 'json' ? join(local, 'data.json') : join(local, 'src', 'index.ts')
+    const content = location === 'configuration' ? `- id: source-probe\n  config:\n    url: ${JSON.stringify(url)}\n`
+      : location === 'json' ? JSON.stringify({ nested: [url] }) : `export const endpoint = ${JSON.stringify(url)}\n`
+    await writeFile(filename, content)
+    const result = await exportProfileSource(profile, request)
+    expect(result.status).toBe('ready')
+    if (result.status !== 'ready') throw new Error('public URI backslash path was refused')
+    expect(result.files.find(file => file.path === path)?.content).toBe(content)
+  },
+)
+
+it.each([
   'export const accessToken: string = "synthetic-private-value"\n',
   'export const accessToken: string | undefined = "x"\n',
   'export const accessToken: Record<string, string> = "x"\n',
