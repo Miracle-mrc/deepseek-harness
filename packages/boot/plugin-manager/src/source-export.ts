@@ -27,11 +27,17 @@ const SECRET_TEXT = new RegExp(
   + String.raw`github_pat_[a-z0-9_]{12,}|glpat-[a-z0-9_-]{8,}|(?:AKIA|ASIA)[A-Z0-9]{16})\b|\bBearer\s+[a-z0-9_.+\/-]{8,})`,
   'i',
 )
-const SECRET_ASSIGNMENT = new RegExp(
-  /\b(?:passw(?:or)?d|secret|token|(?:api|access|private)[_-]?key|authorization)\b/.source
-  + /["'`]?\s*[:=]\s*["'`]([^"'`\r\n]{3,})["'`]/.source,
-  'i',
+const LITERAL_ASSIGNMENT = new RegExp(
+  /(?<![a-z0-9_.$-])([a-z_$][a-z0-9_.$-]*)(?:["'`](?:\s*\])?)?\s*/.source
+  + /(?::\s*[a-z_$][a-z0-9_$.<>[\]|,?]*(?:[ \t]+[a-z_$|][a-z0-9_$.<>[\]|,?]*)*\s*)?/.source
+  + /[:=]\s*(?<quote>["'`])([^"'`\r\n]+)\k<quote>/.source,
+  'giu',
 )
+const URI_PREFIX = /(?<![a-z0-9+.-])(?:(?:https?|ftp|wss?):[\\/]*|(?:[a-z][a-z0-9+.-]*:)?\/\/)/.source
+const URI_TEXT = new RegExp(URI_PREFIX + /[^\s"'`<>\\]+/.source, 'giu')
+const URI_USER_INFO = new RegExp(URI_PREFIX + /[^\s"'`<>\\/?#]+@/.source, 'iu')
+// Unnamed URL credentials may still be recognizable as long opaque tokens, including JWTs and hex keys.
+const OPAQUE_QUERY_VALUE = /^(?=.{40,}$)(?=.*[a-z])(?=.*[0-9])[a-z0-9._~+/-]+=*$/iu
 const WINDOWS_DEVICE = /^(?:con|prn|aux|nul|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i
 
 class ExportRefusal extends Error {
@@ -65,32 +71,63 @@ function branch(value: string): string | undefined {
     && text.split('/').every(part => !part.startsWith('.') && !part.toLowerCase().endsWith('.lock')) ? text : undefined
 }
 
+function sensitiveName(name: string, query = false): boolean {
+  const normalized = name.replace(/[^a-z0-9]/giu, '').toLowerCase()
+  return /(?:password|passwd|pwd|secret|token|apikey|accesskey|privatekey|authorization|cookie|credentials?|signature)$/u.test(normalized)
+    || (query && /^(?:access|auth|key|sig|sas|session|sessionid)$/u.test(normalized))
+}
+
+function suspectedParameters(parameters: URLSearchParams): boolean {
+  for (const [name, item] of parameters) {
+    if (item !== '' && (sensitiveName(name, true) || SECRET_TEXT.test(item)
+      || URI_USER_INFO.test(item) || OPAQUE_QUERY_VALUE.test(item))) return true
+  }
+  return false
+}
+
+function suspectedText(value: string): boolean {
+  if (SECRET_TEXT.test(value)) return true
+  for (const match of value.matchAll(LITERAL_ASSIGNMENT)) {
+    if (sensitiveName(match[1] as string)) return true
+  }
+  for (const match of value.matchAll(URI_TEXT)) {
+    const uri = match[0]
+    const absolute = uri.startsWith('//') ? `https:${uri}` : uri
+    if (!URL.canParse(absolute)) continue
+    const url = new URL(absolute)
+    if (url.username !== '' || url.password !== '') return true
+    const fragment = url.hash.slice(1)
+    if (suspectedParameters(url.searchParams) || suspectedParameters(new URLSearchParams(fragment))) return true
+    const queryStart = fragment.indexOf('?')
+    if (queryStart !== -1 && suspectedParameters(new URLSearchParams(fragment.slice(queryStart + 1)))) return true
+  }
+  // Malformed hosts and surrounding source text must not conceal user information that parsing cannot expose.
+  return URI_USER_INFO.test(value)
+}
+
 function inspectSecrets(value: unknown, path: string): void {
   if (typeof value === 'string') {
-    if (SECRET_TEXT.test(value)) refuse('secret-suspected', path)
-    if (/^https?:\/\//i.test(value) && URL.canParse(value)) {
-      const url = new URL(value)
-      if (url.username !== '' || url.password !== '' || url.search !== '') refuse('secret-suspected', path)
-    }
+    if (suspectedText(value)) refuse('secret-suspected', path)
     return
   }
   if (Array.isArray(value)) { value.forEach((item) => { inspectSecrets(item, path) }); return }
   if (!record(value)) return
   for (const [key, item] of Object.entries(value)) {
-    const normalized = key.replace(/[^a-z0-9]/giu, '').toLowerCase()
-    const sensitive = /(?:password|passwd|secret|token|apikey|accesskey|privatekey|authorization|cookie)$/u.test(normalized)
-      && !/(?:env|ref)$/i.test(key)
+    if (suspectedText(key)) refuse('secret-suspected', path)
     const reference = record(item) && Object.keys(item).length === 1 && typeof item.__jsExpr === 'string'
       && /^process\.env\.[A-Za-z_][A-Za-z0-9_]*$/u.test(item.__jsExpr.trim())
-    if (sensitive && item !== undefined && item !== null && item !== '' && !reference) refuse('secret-suspected', path)
+    if (sensitiveName(key) && item !== undefined && item !== null && item !== '' && !reference) refuse('secret-suspected', path)
     inspectSecrets(item, path)
   }
 }
 
-function parseJson(content: string, path: string): Record<string, unknown> {
-  let value: unknown
-  try { value = JSON.parse(content) }
+function parseJson(content: string, path: string): unknown {
+  try { return JSON.parse(content) }
   catch (_error) { refuse('unsupported-source', path) }
+}
+
+function parseManifest(content: string, path: string): Record<string, unknown> {
+  const value = parseJson(content, path)
   if (!record(value)) refuse('unsupported-source', path)
   return value
 }
@@ -168,7 +205,7 @@ class Capture {
   constructor(private readonly outputBytes: number) {}
 
   add(path: string, content: string): void {
-    if (SECRET_TEXT.test(path)) refuse('secret-suspected')
+    if (suspectedText(path)) refuse('secret-suspected')
     const parts = path.split('/')
     for (let length = 1; length <= parts.length; length += 1) {
       const prefix = parts.slice(0, length).join('/')
@@ -200,8 +237,7 @@ class Capture {
       this.retainedBytes += Buffer.byteLength(content)
       if (this.retainedBytes > MAX_TOTAL_BYTES) refuse('too-large', path)
       if (content.includes('\0')) refuse('unsupported-source', path)
-      if (SECRET_TEXT.test(content) || SECRET_ASSIGNMENT.test(content)) refuse('secret-suspected', path)
-      for (const match of content.matchAll(/https?:\/\/[^\s"'`<>]+/giu)) inspectSecrets(match[0], path)
+      if (suspectedText(content)) refuse('secret-suspected', path)
       if (/\.json$/i.test(path)) inspectSecrets(parseJson(content, path), path)
       if (/\.ya?ml$/i.test(path)) inspectYaml(content, path, /(?:^|\/)cordis(?:\.patch)?\.ya?ml$/i.test(path))
       this.observed.push({ filename, content, path, ...root === undefined ? {} : { root } })
@@ -257,7 +293,7 @@ function validatePackageFiles(capture: Capture, prefix: string): void {
   const manifestPath = `${prefix}/package.json`
   const captured = capture.files.find(file => file.path === manifestPath)
   if (captured === undefined) refuse('source-unavailable', manifestPath)
-  const manifest = parseJson(captured.content, manifestPath)
+  const manifest = parseManifest(captured.content, manifestPath)
   const targetFiles = (value: unknown): SourceExportFile[] => {
     if (typeof value !== 'string') refuse('unsupported-source', manifestPath)
     const path = value.replace(/^\.\//u, '')
@@ -323,7 +359,7 @@ async function copyPackage(capture: Capture, root: string, prefix: string): Prom
         if (!TEXT_FILE.test(child.name)) refuse('unsupported-source', path)
         const content = await capture.read(file, path, canonical)
         if (child.name === 'package.json') {
-          const manifest = parseJson(content, path)
+          const manifest = parseManifest(content, path)
           for (const section of ['dependencies', 'optionalDependencies', 'peerDependencies', 'devDependencies']) {
             if (Object.values(dependencies(manifest[section], path)).some(spec => !portableSpec(spec))) refuse('unsupported-source', path)
           }
@@ -350,14 +386,14 @@ export async function exportProfileSource(profile: ProfileContext, request: Sour
   const targetBranch = branch(request.branch)
   if (targetBranch === undefined) return { status: 'blocked', issues: [{ code: 'invalid-branch' }] }
   try {
-    if ([targetRepository, targetBranch, profile.name].some(value => SECRET_TEXT.test(value))) refuse('secret-suspected')
+    if ([targetRepository, targetBranch, profile.name].some(suspectedText)) refuse('secret-suspected')
     const envelope = { status: 'ready' as const, formatVersion: 1 as const, repository: targetRepository,
       branch: targetBranch, profile: profile.name, files: [], reviewRequired: true as const }
     const envelopeBytes = Buffer.byteLength(JSON.stringify(envelope))
     if (envelopeBytes >= MAX_TOTAL_BYTES) refuse('too-large')
     const capture = new Capture(MAX_TOTAL_BYTES - envelopeBytes)
     const manifestPath = 'profiles/saved/package.json'
-    const manifest = parseJson(await capture.read(join(profile.dir, 'package.json'), manifestPath), manifestPath)
+    const manifest = parseManifest(await capture.read(join(profile.dir, 'package.json'), manifestPath), manifestPath)
     const dsh = manifest.dsh
     const declaration = record(dsh) ? dsh.profile : undefined
     const bundles = record(declaration) ? declaration.bundles : undefined
@@ -375,7 +411,8 @@ export async function exportProfileSource(profile: ProfileContext, request: Sour
       } else {
         if (!portableSpec(spec)) refuse('unsupported-source', manifestPath)
         const root = resolveBundleDir('dsh', name, profile.installAnchor, profile.dir)
-        const installed = parseJson(await capture.read(join(root, 'package.json'), `dependencies/${name}/package.json`), manifestPath)
+        const installedPath = `dependencies/${name}/package.json`
+        const installed = parseManifest(await capture.read(join(root, 'package.json'), installedPath), installedPath)
         if (typeof installed.version !== 'string' || semver.valid(installed.version) === null) refuse('unsupported-source', manifestPath)
         saved[name] = installed.version
       }
@@ -397,7 +434,7 @@ export async function exportProfileSource(profile: ProfileContext, request: Sour
   } catch (error) {
     if (error instanceof ExportRefusal) {
       const path = error.path
-      const issue = path === undefined || SECRET_TEXT.test(path) ? { code: error.code } : { code: error.code, path }
+      const issue = path === undefined || suspectedText(path) ? { code: error.code } : { code: error.code, path }
       return { status: 'blocked', issues: [issue] }
     }
     return { status: 'blocked', issues: [{ code: 'profile-unavailable' }] }

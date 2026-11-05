@@ -249,6 +249,141 @@ it('retains an environment credential reference without resolving it', async () 
   expect((await exportProfileSource(profile, request)).status).toBe('ready')
 })
 
+it.each(['postgresql', 'postgres', 'mysql', 'mongodb', 'mongodb+srv', 'redis', 'rediss', 'amqp', 'ftp'].flatMap(scheme =>
+  ['configuration', 'source', 'json'].map(location => ({ scheme, location })),
+))('refuses URI user information in $location for $scheme without returning credentials', async ({ scheme, location }) => {
+  const { local, profile } = await fixture()
+  const credential = 'synthetic-private-value'
+  const uri = `${scheme}://account:${credential}@example.invalid/service`
+  const path = location === 'configuration' ? 'profiles/saved/cordis.patch.yml'
+    : location === 'json' ? 'bundles/0/data.json' : 'bundles/0/src/index.ts'
+  const filename = location === 'configuration' ? profile.patchPath
+    : location === 'json' ? join(local, 'data.json') : join(local, 'src', 'index.ts')
+  const content = location === 'configuration' ? `- id: source-probe\n  config:\n    url: ${uri}\n`
+    : location === 'json' ? JSON.stringify({ nested: [uri] }) : `export const endpoint = "Connect to ${uri}"\n`
+  await writeFile(filename, content)
+  const result = await exportProfileSource(profile, request)
+  expect(result).toEqual({ status: 'blocked', issues: [{ code: 'secret-suspected', path }] })
+  expect(JSON.stringify(result)).not.toContain(credential)
+})
+
+it.each([
+  'https://account%40example.invalid:synthetic-private-value@example.invalid/service',
+  '//account:synthetic-private-value@example.invalid/service',
+  'https://account:synthetic-private-value@[invalid',
+  'https://example.invalid/service?access_token=x',
+  'https://example.invalid/service?access%5ftoken=synthetic-private-value',
+  'https://example.invalid/service?apiKey=synthetic-private-value',
+  'https://example.invalid/service?X-Amz-Signature=synthetic-private-value',
+  'https://example.invalid/service?sig=synthetic-private-value',
+  'https://example.invalid/service?access=synthetic-private-value',
+  'https://example.invalid/service?state=ghp%5f1234567890abcdefghijklmnop',
+  'https://example.invalid/service?state=aB2cD3eF4gH5iJ6kL7mN8oP9qR0sT1uV2wX3yZ4a',
+  'https://example.invalid/service?sha=0123456789abcdef0123456789abcdef01234567',
+  'https://example.invalid/service?endpoint=postgresql%3A%2F%2Faccount%3Asynthetic-private-value%40example.invalid%2Fdb',
+])('refuses embedded, encoded, or opaque URL credentials without returning content: %s', async (url) => {
+  const { local, profile } = await fixture()
+  await writeFile(join(local, 'data.json'), JSON.stringify({ nested: [`Endpoint: ${url}`] }))
+  expect(await exportProfileSource(profile, request)).toEqual({ status: 'blocked', issues: [{ code: 'secret-suspected', path: 'bundles/0/data.json' }] })
+})
+
+it.each([
+  'https://example.invalid/callback#access_token=synthetic-private-value&token_type=Bearer',
+  'https://example.invalid/#client_secret=synthetic-private-value',
+  'https://example.invalid/#access%5ftoken=x',
+  'https://example.invalid/#state=ghp%5f1234567890abcdefghijklmnop',
+  'https://example.invalid/#state=aB2cD3eF4gH5iJ6kL7mN8oP9qR0sT1uV2wX3yZ4a',
+  'https://example.invalid/#/callback?key=synthetic-private-value',
+  'https:/account:synthetic-private-value@example.invalid/path',
+  'https:account:synthetic-private-value@example.invalid/path',
+  'http:/account:synthetic-private-value@example.invalid/path',
+  'ftp:/account:synthetic-private-value@example.invalid/path',
+  'ws:/account:synthetic-private-value@example.invalid/path',
+  'wss:/account:synthetic-private-value@example.invalid/path',
+  'https:\\account:synthetic-private-value@example.invalid/path',
+  'https:/\\account:synthetic-private-value@example.invalid/path',
+  'https:/account:synthetic-private-value@[invalid',
+  'redis://:synthetic-private-value@example.invalid/service',
+].flatMap(url => ['configuration', 'source', 'json'].map(location => ({ url, location }))))(
+  'refuses URL fragment credentials and normalized user information in $location: $url', async ({ url, location }) => {
+    const { local, profile } = await fixture()
+    const path = location === 'configuration' ? 'profiles/saved/cordis.patch.yml'
+      : location === 'json' ? 'bundles/0/data.json' : 'bundles/0/src/index.ts'
+    const filename = location === 'configuration' ? profile.patchPath
+      : location === 'json' ? join(local, 'data.json') : join(local, 'src', 'index.ts')
+    const encoded = JSON.stringify(url).replace(':', '\\u003a')
+    const content = location === 'configuration' ? `- id: source-probe\n  config:\n    url: ${encoded}\n`
+      : location === 'json' ? `{"nested":[${encoded}]}` : `export const endpoint = ${JSON.stringify(url)}\n`
+    await writeFile(filename, content)
+    const result = await exportProfileSource(profile, request)
+    expect(result).toEqual({ status: 'blocked', issues: [{ code: 'secret-suspected', path }] })
+    expect(JSON.stringify(result)).not.toContain('synthetic-private-value')
+  },
+)
+
+it.each(['accessToken', 'refresh_token', 'client-secret', 'apiKey', 'password'])('refuses JavaScript literal credentials named %s', async (name) => {
+  const { local, profile } = await fixture()
+  await writeFile(join(local, 'src', 'index.ts'), `export const config = { '${name}': "x" }\n`)
+  expect(await exportProfileSource(profile, request)).toEqual({ status: 'blocked', issues: [{ code: 'secret-suspected', path: 'bundles/0/src/index.ts' }] })
+})
+
+it.each([
+  'export const accessToken: string = "synthetic-private-value"\n',
+  'export const accessToken: string | undefined = "x"\n',
+  'export const accessToken: Record<string, string> = "x"\n',
+  'config["accessToken"] = "x"\n',
+  'config.accessToken = "x"\n',
+  '//https://account:synthetic-private-value@example.invalid/service\n',
+])('refuses typed or property credential assignments in source: %s', async (content) => {
+  const { local, profile } = await fixture()
+  await writeFile(join(local, 'src', 'index.ts'), content)
+  expect(await exportProfileSource(profile, request)).toEqual({ status: 'blocked', issues: [{ code: 'secret-suspected', path: 'bundles/0/src/index.ts' }] })
+})
+
+it('preserves environment references and public URL parameters without reading credentials', async () => {
+  const { local, profile } = await fixture()
+  const patch = '- id: source-probe\n  config:\n    accessToken: !!js process.env.SYNTHETIC_TOKEN\n    authModes: [none]\n    key: color\n    url: https://example.invalid/service?lang=vi&locale=en\n'
+  const source = 'export const accessToken = process.env.SYNTHETIC_TOKEN; export const key = "color"\n'
+  await writeFile(profile.patchPath, patch)
+  await writeFile(join(local, 'src', 'index.ts'), source)
+  const result = await exportProfileSource(profile, request)
+  expect(result.status).toBe('ready')
+  if (result.status !== 'ready') throw new Error('public configuration was refused')
+  expect(result.files.find(file => file.path === 'profiles/saved/cordis.patch.yml')?.content).toBe(patch)
+  expect(result.files.find(file => file.path === 'bundles/0/src/index.ts')?.content).toBe(source)
+})
+
+it.each([
+  '//example.invalid/service?lang=vi',
+  'https://example.invalid/service?token=&lang=vi',
+  'https://example.invalid/service?q=looking+for+public+documents+from+2026+in+the+library',
+  'https://example.invalid/service#section',
+  'https://example.invalid/service#lang=vi',
+  'https://example.invalid/service#token=&lang=vi',
+  'https://example.invalid/service#/public?lang=en',
+  'https:/example.invalid/service?lang=vi#section',
+  'wss:example.invalid/service?lang=vi#section',
+  'https://[invalid',
+])('retains public parameters and text without URI credentials: %s', async (value) => {
+  const { local, profile } = await fixture()
+  const content = JSON.stringify([value])
+  await writeFile(join(local, 'data.json'), content)
+  const result = await exportProfileSource(profile, request)
+  expect(result.status).toBe('ready')
+  if (result.status !== 'ready') throw new Error('public data was refused')
+  expect(result.files.find(file => file.path === 'bundles/0/data.json')?.content).toBe(content)
+})
+
+it('captures long identifiers, non-URI tokens, and whitespace within the source byte limit', async () => {
+  const { local, profile } = await fixture()
+  const content = `${'a'.repeat(256 * 1024)}${' '.repeat(256 * 1024)}\n${'b-'.repeat(128 * 1024)}\n${'c.'.repeat(128 * 1024 - 2)}\n`
+  await writeFile(join(local, 'long.txt'), content)
+  const result = await exportProfileSource(profile, request)
+  expect(result.status).toBe('ready')
+  if (result.status !== 'ready') throw new Error('bounded public source was refused')
+  expect(result.files.find(file => file.path === 'bundles/0/long.txt')?.content).toBe(content)
+})
+
 it.each([
   ['../outside.yml', 'unsafe-path'],
   ['./missing.yml', 'source-unavailable'],
@@ -540,6 +675,41 @@ it('screens secrets after JSON escape decoding', async () => {
   expect(await exportProfileSource(profile, request)).toEqual({ status: 'blocked', issues: [{ code: 'secret-suspected', path: 'bundles/0/encoded.json' }] })
 })
 
+it.each(['[1, true, null, {"color": "blue"}]', '"public data"', 'null', '42', 'true', '{"color":"blue"}'])('preserves a credential-free JSON value and its whitespace: %s', async (json) => {
+  const { local, profile } = await fixture()
+  const content = `\r\n ${json} \r\n`
+  await writeFile(join(local, 'data.json'), content)
+  const result = await exportProfileSource(profile, request)
+  expect(result.status).toBe('ready')
+  if (result.status !== 'ready') throw new Error('public JSON was refused')
+  expect(result.files.find(file => file.path === 'bundles/0/data.json')?.content).toBe(content)
+})
+
+it.each([
+  '[{"access\\u0054oken":"x"}]',
+  '[null, ["\\u0073\\u006b-1234567890abcdef"]]',
+  '[{"\\u0067hp_1234567890abcdefghijklmnop":true}]',
+  '"\\u0073\\u006b-1234567890abcdef"',
+  '[{"url":"postgresql:\\u002f\\u002faccount:synthetic-private-value@example.invalid/db"}]',
+])('screens nested or scalar JSON secrets after escape decoding: %s', async (content) => {
+  const { local, profile } = await fixture()
+  await writeFile(join(local, 'data.json'), content)
+  expect(await exportProfileSource(profile, request)).toEqual({ status: 'blocked', issues: [{ code: 'secret-suspected', path: 'bundles/0/data.json' }] })
+})
+
+it.each(['profile', 'local', 'registry'].flatMap(location => ['[]', 'null', '"manifest"'].map(content => ({ location, content }))))('requires an object for the $location package manifest: $content', async ({ location, content }) => {
+  const { dir, local, profile } = await fixture()
+  let filename = join(location === 'profile' ? dir : local, 'package.json')
+  if (location === 'registry') {
+    const registry = join(dir, 'node_modules', 'registry-plugin')
+    await mkdir(registry, { recursive: true })
+    filename = join(registry, 'package.json')
+    await writeFile(join(dir, 'package.json'), '{"dependencies":{"registry-plugin":"*"},"dsh":{"profile":{"bundles":["registry-plugin"]}}}')
+  }
+  await writeFile(filename, content)
+  expect((await exportProfileSource(profile, request))).toEqual({ status: 'blocked', issues: [{ code: 'unsupported-source', path: location === 'local' ? 'bundles/0/package.json' : location === 'registry' ? 'dependencies/registry-plugin/package.json' : 'profiles/saved/package.json' }] })
+})
+
 it.each(['repository', 'branch', 'profile'] as const)('refuses a known secret marker in export metadata without echoing it: %s', async (field) => {
   const { profile } = await fixture()
   const marker = 'ghp_' + 'x'.repeat(24)
@@ -574,6 +744,19 @@ it.each(['read-failure', 'secret-content'] as const)('omits secret-bearing paths
   expect(result).toEqual({ status: 'blocked', issues: [{ code }] })
   expect(JSON.stringify(result)).not.toContain(marker)
   expect(JSON.stringify(result)).not.toContain(secret)
+})
+
+it.each(['read-failure', 'secret-content'] as const)('omits a credential assignment in a filename after %s', async (failure) => {
+  const { local, profile } = await fixture()
+  const credential = 'synthetic-private-value'
+  const filename = join(local, 'src', `accessToken='${credential}'.ts`)
+  await writeFile(filename, failure === 'secret-content' ? 'const password = "x"\n' : 'ordinary source\n')
+  filesystemHooks.beforeOpen = async (path) => {
+    if (failure === 'read-failure' && path === filename) throw new Error('synthetic filesystem diagnostic')
+  }
+  const result = await exportProfileSource(profile, request)
+  expect(result).toEqual({ status: 'blocked', issues: [{ code: failure === 'read-failure' ? 'source-unavailable' : 'secret-suspected' }] })
+  expect(JSON.stringify(result)).not.toContain(credential)
 })
 
 it('refuses a profile patch replaced by a directory before capture or verification', async () => {
