@@ -7,12 +7,12 @@ import type {
 import { ForkPublishController } from '../src/client/fork-publish-store.ts'
 
 const REPOSITORIES = {
-  status: 'ready', account: 'alice', upstream: 'deepseek-ai/deepseek-harness', base: 'master',
+  status: 'ready', account: 'alice', upstream: 'deepseek-ai/deepseek-harness',
   repositories: [{ repository: 'alice/harness', defaultBranch: 'trunk' }],
 } satisfies ForkRepositoriesResult
 const PREVIEW = {
   status: 'ready', id: 'preview-1' as ForkPreviewId, account: 'alice', repository: 'alice/harness',
-  branch: 'creator/saved', upstream: REPOSITORIES.upstream, base: 'master', head: 'old-head' as ForkCommitId,
+  branch: 'creator/saved', upstream: REPOSITORIES.upstream, base: 'trunk', head: 'old-head' as ForkCommitId,
   files: [{ path: 'customizations/bundles/0/index.ts', before: 'export const value = 1', after: 'export const value = 1\n' }],
 } satisfies ForkPreviewResult
 const SAVED = {

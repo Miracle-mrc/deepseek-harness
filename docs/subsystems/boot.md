@@ -10,7 +10,7 @@ The [boot package group](../../packages/boot/README.md) owns launcher-provided p
 
 `SourceExportRequest` names a repository slug and a branch other than `main` or `master`; these are labels without Git or network effects. `SourceExportResult` is either a `ready` versioned UTF-8 file map with `reviewRequired: true`, or `blocked` issues without captured source. Each file has a portable relative `path` and `content`. The [source export reference](../../packages/boot/plugin-manager/README.md#source-export) owns capture restrictions and restoration.
 
-`ForkRepositoriesResult` lists writable account-owned forks. `ForkPreviewResult` pairs an opaque `ForkPreviewId` with exact destination before/after text, account, branch head and the selected fork's `master`; `upstream` identifies the repository used to verify fork eligibility. `ForkPublishResult` identifies the committed branch and open PR within the selected fork. `ForkFailure` carries a sanitized code and branch/PR effect (`none`, `unknown`, or `committed`); a closed matching PR can include a safe `pullRequestUrl` for review. The [direct publication reference](../../packages/boot/plugin-manager/README.md#direct-github-publication) owns receipt lifetime, concurrency and recovery.
+`ForkRepositoriesResult` lists writable account-owned forks and their default branches. `ForkPreviewResult` pairs an opaque `ForkPreviewId` with exact destination before/after text, account, branch head and the selected fork's reviewed default branch; `upstream` identifies the repository used to verify fork eligibility. `ForkPublishResult` identifies the committed branch and open PR within the selected fork. `ForkFailure` carries a sanitized code and branch/PR effect (`none`, `unknown`, or `committed`); a closed matching PR can include a safe `pullRequestUrl` for review. The [direct publication reference](../../packages/boot/plugin-manager/README.md#direct-github-publication) owns receipt lifetime, concurrency and recovery.
 
 `PluginEntryId` identifies one Loader entry; callers obtain it from `listPlugins` rather than constructing a patch id.
 
@@ -165,13 +165,15 @@ Owns bounded source receipts, GitHub identity checks, atomic branch writes, and 
 /**
  * Capture safe local source and exact destination text, without uploading source or changing GitHub.
  * A new preview releases successful and known-closed receipts; their IDs then become stale.
- * @param request Authorized fork slug and a non-default branch; new branches start from that fork's master.
+ * Saved files absent from the current capture are refused; publication never deletes them automatically.
+ * @param request Authorized fork slug and a non-default branch; new branches start from the fork's reviewed default branch.
  * @returns An opaque, expiring receipt and complete UTF-8 before/after text, or a refusal with no source content.
  */
 @Remote async preview(request: SourceExportRequest): Promise<ForkPreviewResult>
 
 /**
- * Commit only the retained preview after explicit confirmation, then create or reuse its open PR to the same fork's master.
+ * Commit only the retained preview after explicit confirmation, then create or reuse its open PR to the fork's reviewed default branch.
+ * A changed default branch refuses the receipt without changing its approved destination or hiding earlier remote effects.
  * Repeated calls share an in-flight operation and reconcile lost responses. A closed PR is reported without recreating it.
  * An in-flight publication retains its receipt past the preview's expiry.
  * A failed PR retains the approved commit; unknown writes remain unknown until reconciliation,

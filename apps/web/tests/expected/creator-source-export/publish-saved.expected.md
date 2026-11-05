@@ -1,7 +1,7 @@
 - dialog "Save to my GitHub fork":
   - heading "Save to my GitHub fork" [level=2]
   - button "Close"
-  - paragraph: Load your authorized forks, choose a branch, and review every file. Confirmation creates a commit and opens a pull request to master in the selected fork.
+  - paragraph: Load your authorized forks, choose a branch, and review every file. Confirmation creates a commit and opens a pull request to the selected fork’s default branch.
   - text: Fork repository
   - combobox "Fork repository":
     - option "Choose an authorized fork"
@@ -20,7 +20,7 @@
   - term: Branch
   - definition: creator/saved
   - term: Pull request destination
-  - definition: alice/harness:master
+  - definition: alice/harness:main
   - term: Destination head
   - definition: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   - paragraph: This branch keeps earlier commits, which may also appear in the pull request. Choose a new branch to include only this save.

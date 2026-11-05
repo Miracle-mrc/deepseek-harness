@@ -146,7 +146,7 @@ export function ForkPublishOverlay({
             <dt>{t('forkRepository')}</dt><dd>{preview.repository}</dd>
             <dt>{t('forkBranch')}</dt><dd>{preview.branch}</dd>
             <dt>{t('forkPublishBase')}</dt><dd>{`${preview.repository}:${preview.base}`}</dd>
-            <dt>{t('forkPublishHead')}</dt><dd>{preview.head ?? t('forkPublishNewBranch')}</dd>
+            <dt>{t('forkPublishHead')}</dt><dd>{preview.head ?? t('forkPublishNewBranch', { base: preview.base })}</dd>
           </>}
         </dl>}
         {preview === undefined || preview.head === null ? null : <p className={css.hint}>{t('forkPublishBranchHistory')}</p>}

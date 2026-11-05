@@ -65,10 +65,10 @@ async function fixture(existing = false, options: { config?: CreatorForkConfig; 
     cwd: root, home: root, startedBundles: [], overlays: [], telemetryDisabledEnv: undefined }
   const state = {
     user: { id: 7, login: 'person' }, owner: 7, ownerLogin: 'person', repositoryId: 2, upstreamId: 1,
-    fork: true, sourceId: 1, writable: true, defaultBranch: 'main',
-    masterHead: BASE, masterExists: true,
+    fork: true, sourceId: 1, writable: true, defaultBranch: 'main' as string | undefined,
+    baseHeads: new Map([['main', BASE], ['master', OTHER], ['develop', 'e'.repeat(40)]]),
     head: existing ? BASE as string | null : null, pr: false, failPr: false, lostCommit: false, lostRef: false, lostPr: false,
-    pullState: 'open' as 'open' | 'closed', pullNumber: 1,
+    pullState: 'open' as 'open' | 'closed', pullNumber: 1, pullBase: 'main',
     failCommit: null as ForkGithubError['code'] | null, failRef: null as ForkGithubError['code'] | null,
     malformedCommit: false, truncated: false, commitResponseSha: undefined as string | undefined,
     tree: [] as GitEntry[], requests: [] as GithubRequest[], trees: new Map<string, GitEntry[]>(), commits: new Map<string, GitCommit>(),
@@ -100,7 +100,7 @@ async function fixture(existing = false, options: { config?: CreatorForkConfig; 
   function pull() {
     return { number: state.pullNumber, html_url: `https://github.com/${REPOSITORY}/pull/${String(state.pullNumber)}`, state: state.pullState,
       head: { ref: TARGET.branch, sha: state.head, repo: { id: state.repositoryId } },
-      base: { ref: 'master', repo: { id: state.repositoryId } } }
+      base: { ref: state.pullBase, repo: { id: state.repositoryId } } }
   }
   function finishMutation(body: Record<string, unknown> | undefined) {
     const variables = body?.variables as { input: {
@@ -123,7 +123,8 @@ async function fixture(existing = false, options: { config?: CreatorForkConfig; 
     const overridden = state.overrideResponse?.({ method, path, body })
     if (overridden !== undefined) return overridden.value
     const upstream = { id: state.upstreamId, full_name: UPSTREAM, default_branch: 'master', fork: false, owner: { id: 1, login: 'deepseek-ai' } }
-    const repo = { id: state.repositoryId, full_name: REPOSITORY, default_branch: state.defaultBranch, fork: state.fork,
+    const repo = { id: state.repositoryId, full_name: REPOSITORY, fork: state.fork,
+      ...state.defaultBranch === undefined ? {} : { default_branch: state.defaultBranch },
       owner: { id: state.owner, login: state.ownerLogin }, permissions: { push: state.writable },
       source: { id: state.sourceId, full_name: UPSTREAM }, parent: { id: 1, full_name: UPSTREAM } }
     if (path === 'user') return state.user
@@ -131,13 +132,17 @@ async function fixture(existing = false, options: { config?: CreatorForkConfig; 
     if (path === `repos/${UPSTREAM}`) return upstream
     if (path === `repos/${REPOSITORY}`) return repo
     if (path === `repos/${UPSTREAM}/branches/master`) return { commit: { sha: OTHER } }
-    if (path === `repos/${REPOSITORY}/branches/master`) {
-      if (!state.masterExists) throw new ForkGithubError('not-found')
-      return { commit: { sha: state.masterHead } }
+    if (path.startsWith(`repos/${REPOSITORY}/branches/`)) {
+      const branch = decodeURIComponent(path.slice(`repos/${REPOSITORY}/branches/`.length))
+      const sha = state.baseHeads.get(branch)
+      if (sha === undefined) throw new ForkGithubError('not-found')
+      return { commit: { sha } }
     }
     if (path.startsWith(`repos/${REPOSITORY}/git/ref/heads/`)) {
-      if (state.head === null) throw new ForkGithubError('not-found')
-      return { ref: `refs/heads/${TARGET.branch}`, object: { type: 'commit', sha: state.head } }
+      const branch = decodeURIComponent(path.slice(`repos/${REPOSITORY}/git/ref/heads/`.length))
+      const sha = branch === TARGET.branch ? state.head : state.baseHeads.get(branch)
+      if (sha === null || sha === undefined) throw new ForkGithubError('not-found')
+      return { ref: `refs/heads/${branch}`, object: { type: 'commit', sha } }
     }
     if (path.includes('/git/commits/') && method === 'GET') {
       const sha = path.split('/').at(-1) as string
@@ -154,8 +159,9 @@ async function fixture(existing = false, options: { config?: CreatorForkConfig; 
       return { encoding: 'base64', size: content.length, content: content.toString('base64') }
     }
     if (path.includes('/pulls?')) {
-      const requestedState = new URL(`https://api.github.com/${path}`).searchParams.get('state')
-      return state.pr && (requestedState === 'all' || requestedState === state.pullState) ? [pull()] : []
+      const query = new URL(`https://api.github.com/${path}`).searchParams
+      return state.pr && query.get('base') === state.pullBase && query.get('head') === `person:${TARGET.branch}`
+        && (query.get('state') === 'all' || query.get('state') === state.pullState) ? [pull()] : []
     }
     if (method === 'POST' && path === 'graphql') {
       if (state.failCommit !== null) { const code = state.failCommit; state.failCommit = null; throw new ForkGithubError(code) }
@@ -180,10 +186,15 @@ async function fixture(existing = false, options: { config?: CreatorForkConfig; 
     }
     if (method === 'POST' && path.endsWith('/pulls')) {
       if (state.failPr) throw new ForkGithubError('timeout')
-      if (state.head === state.masterHead || (state.pr && state.pullState === 'open')) throw new ForkGithubError('conflict')
+      const base = body?.base as string
+      if (!state.baseHeads.has(base)) throw new ForkGithubError('not-found')
+      if (state.head === state.baseHeads.get(base) || (state.pr && state.pullState === 'open' && state.pullBase === base)) {
+        throw new ForkGithubError('conflict')
+      }
       if (state.pr) state.pullNumber += 1
       state.pr = true
       state.pullState = 'open'
+      state.pullBase = base
       if (state.lostPr) { state.lostPr = false; throw new ForkGithubError('timeout') }
       return pull()
     }
@@ -210,7 +221,7 @@ async function fixture(existing = false, options: { config?: CreatorForkConfig; 
 it('does no GitHub work at construction and lists only an authenticated writable fork after an explicit action', async () => {
   const { service, state } = await fixture()
   expect(state.requests).toEqual([])
-  expect(await service.repositories()).toEqual({ status: 'ready', account: 'person', upstream: UPSTREAM, base: 'master',
+  expect(await service.repositories()).toEqual({ status: 'ready', account: 'person', upstream: UPSTREAM,
     repositories: [{ repository: REPOSITORY, defaultBranch: 'main' }] })
 })
 
@@ -226,7 +237,7 @@ it('previews dedicated destinations without writing, requires explicit confirmat
   expect(saved).toEqual({ status: 'saved', repository: REPOSITORY, branch: TARGET.branch, commit: COMMIT, pullRequestUrl: `https://github.com/${REPOSITORY}/pull/1` })
   const writes = state.requests.filter(call => call.method !== 'GET')
   expect(writes.map(call => call.path)).toEqual([`repos/${REPOSITORY}/git/trees`, `repos/${REPOSITORY}/git/commits`, `repos/${REPOSITORY}/git/refs`, `repos/${REPOSITORY}/pulls`])
-  expect(writes.at(-1)?.body).toMatchObject({ base: 'master', head: `person:${TARGET.branch}` })
+  expect(writes.at(-1)?.body).toMatchObject({ base: 'main', head: `person:${TARGET.branch}` })
   expect(JSON.stringify(writes)).not.toContain('"force":true')
   expect(await service.publish(preview.id, true)).toEqual(saved)
   expect(state.requests.filter(call => call.method !== 'GET')).toEqual(writes)
@@ -731,7 +742,7 @@ it.each(['closed', 'merged'] as const)('does not reopen publication after a lost
   state.lostPr = true
   expect(await service.publish(preview.id, true)).toEqual({ status: 'blocked', code: 'timeout', effect: 'committed' })
   state.pullState = 'closed'
-  if (outcome === 'merged') state.masterHead = COMMIT
+  if (outcome === 'merged') state.baseHeads.set('main', COMMIT)
   const result = await service.publish(preview.id, true)
   expect(state.requests.filter(request => request.method === 'POST' && request.path.endsWith('/pulls'))).toHaveLength(1)
   expect(result).toEqual({ status: 'blocked', code: 'pull-request-closed', effect: 'committed',
@@ -752,7 +763,7 @@ it('reports a PR closed before its creation response arrives and can reuse it af
     state.pr = true
     state.pullState = 'closed'
     return { value: { number: 1, state: 'closed', head: { ref: TARGET.branch, sha: COMMIT, repo: { id: 2 } },
-      base: { ref: 'master', repo: { id: 2 } } } }
+      base: { ref: 'main', repo: { id: 2 } } } }
   }
   const closed = { status: 'blocked', code: 'pull-request-closed', effect: 'committed',
     pullRequestUrl: `https://github.com/${REPOSITORY}/pull/1` }
@@ -768,7 +779,7 @@ it('prefers a matching open PR when a matching closed PR is also listed', async 
   const { service, state } = await fixture(true)
   const preview = await service.preview(TARGET)
   if (preview.status !== 'ready') throw new Error('preview refused')
-  const pull = { head: { ref: TARGET.branch, sha: COMMIT, repo: { id: 2 } }, base: { ref: 'master', repo: { id: 2 } } }
+  const pull = { head: { ref: TARGET.branch, sha: COMMIT, repo: { id: 2 } }, base: { ref: 'main', repo: { id: 2 } } }
   state.overrideResponse = request => request.path.includes('/pulls?') ? { value: [
     { ...pull, number: 1, state: 'closed' }, { ...pull, number: 2, state: 'open' },
   ] } : undefined
@@ -776,15 +787,16 @@ it('prefers a matching open PR when a matching closed PR is also listed', async 
   expect(state.requests.filter(request => request.method === 'POST' && request.path.endsWith('/pulls'))).toEqual([])
 })
 
-it.each(['commit', 'head-repository', 'base-repository'] as const)('ignores a closed PR for a different %s', async (difference) => {
+it.each(['commit', 'head-repository', 'base-repository', 'base-branch'] as const)('ignores a closed PR for a different %s', async (difference) => {
   const { service, state } = await fixture(true)
   const preview = await service.preview(TARGET)
   if (preview.status !== 'ready') throw new Error('preview refused')
   const pull = { number: 9, state: 'closed', head: { ref: TARGET.branch, sha: COMMIT, repo: { id: 2 } },
-    base: { ref: 'master', repo: { id: 2 } } }
+    base: { ref: 'main', repo: { id: 2 } } }
   if (difference === 'commit') pull.head.sha = OTHER
   if (difference === 'head-repository') pull.head.repo.id = 99
   if (difference === 'base-repository') pull.base.repo.id = 99
+  if (difference === 'base-branch') pull.base.ref = 'master'
   state.overrideResponse = request => request.path.includes('/pulls?') ? { value: [pull] } : undefined
   expect((await service.publish(preview.id, true)).status).toBe('saved')
   expect(state.requests.filter(request => request.method === 'POST' && request.path.endsWith('/pulls'))).toHaveLength(1)
@@ -796,7 +808,7 @@ it('refuses to create a PR when the bounded history page contains no approved ma
   if (preview.status !== 'ready') throw new Error('preview refused')
   state.overrideResponse = request => request.path.includes('/pulls?') ? { value: Array.from({ length: 100 }, (_, index) => ({
     number: index + 1, state: 'closed', head: { ref: TARGET.branch, sha: OTHER, repo: { id: 2 } },
-    base: { ref: 'master', repo: { id: 2 } },
+    base: { ref: 'main', repo: { id: 2 } },
   })) } : undefined
   expect(await service.publish(preview.id, true)).toEqual({ status: 'blocked', code: 'too-large', effect: 'committed' })
   expect(state.requests.filter(request => request.method === 'POST' && request.path.endsWith('/pulls'))).toEqual([])
@@ -889,7 +901,7 @@ it.each(['cached-owner', 'cached-permissions', 'cached-network'] as const)('filt
     if (kind === 'cached-permissions') return { value: repositoryRecord({ permissions: { push: false } }) }
     return { value: repositoryRecord({ source: { id: 88, full_name: 'other/project' } }) }
   }
-  expect(await service.repositories()).toEqual({ status: 'ready', account: 'person', upstream: UPSTREAM, base: 'master', repositories: [] })
+  expect(await service.repositories()).toEqual({ status: 'ready', account: 'person', upstream: UPSTREAM, repositories: [] })
 })
 
 it('continues a full discovery page while filtering non-forks, other owners, missing permissions, and the upstream', async () => {
@@ -900,7 +912,7 @@ it('continues a full discovery page while filtering non-forks, other owners, mis
     if (!request.path.startsWith('user/repos?')) return undefined
     return { value: request.path.endsWith('page=1') ? Array.from({ length: 100 }, (_, index) => hidden[index % hidden.length]) : [repositoryRecord()] }
   }
-  expect(await service.repositories()).toEqual({ status: 'ready', account: 'person', upstream: UPSTREAM, base: 'master',
+  expect(await service.repositories()).toEqual({ status: 'ready', account: 'person', upstream: UPSTREAM,
     repositories: [{ repository: REPOSITORY, defaultBranch: 'main' }] })
   expect(state.requests.filter(request => request.path.startsWith('user/repos?'))).toHaveLength(2)
 })
@@ -1018,7 +1030,7 @@ it('rejects a created-PR response that names a different repository', async () =
   const preview = await service.preview(TARGET)
   if (preview.status !== 'ready') throw new Error('preview refused')
   state.overrideResponse = request => request.method === 'POST' && request.path.endsWith('/pulls') ? { value: {
-    number: 9, state: 'open', head: { ref: TARGET.branch, sha: COMMIT, repo: { id: 99 } }, base: { ref: 'master', repo: { id: 1 } },
+    number: 9, state: 'open', head: { ref: TARGET.branch, sha: COMMIT, repo: { id: 99 } }, base: { ref: 'main', repo: { id: 1 } },
   } } : undefined
   expect(await service.publish(preview.id, true)).toEqual({ status: 'blocked', code: 'invalid-response', effect: 'committed' })
   expect(state.commits.size).toBe(1)
@@ -1092,56 +1104,355 @@ it('applies the preview byte bound to the complete JSON envelope at one byte ove
   expect(state.requests.every(request => request.method === 'GET')).toBe(true)
 })
 
-it.each([false, true])('keeps every mutation inside the selected fork and opens its PR against fork master (existing=%s)', async (existing) => {
-  const { service, state } = await fixture(existing)
-  const preview = await service.preview(TARGET)
-  if (preview.status !== 'ready') throw new Error('preview refused')
-  const result = await service.publish(preview.id, true)
+it.each([false, true])('refuses a repeated save that would retain a removed source file (inherited=%s)', async (inherited) => {
+  const { service, state, profile, dir } = await fixture(true)
+  const bundle = join(profile.home, 'source-probe')
+  await mkdir(bundle)
+  await writeFile(join(bundle, 'package.json'), '{"name":"source-probe","version":"1.0.0","type":"module"}\n')
+  await writeFile(join(bundle, 'old.ts'), 'export const previous = 1\n')
+  await writeFile(join(dir, 'package.json'), '{"dependencies":{"source-probe":"link:../../source-probe"},"dsh":{"profile":{"bundles":[]}}}\n')
+  const first = await service.preview(TARGET)
+  if (first.status !== 'ready') throw new Error('preview refused')
+  expect((await service.publish(first.id, true)).status).toBe('saved')
   const mutations = state.requests.filter(request => request.method !== 'GET')
-  expect(mutations.every(request => request.path === 'graphql' || request.path.startsWith(`repos/${REPOSITORY}/`))).toBe(true)
-  expect(state.requests.filter(request => request.path === `repos/${UPSTREAM}/branches/master`)).toEqual([])
-  expect(mutations.find(request => request.path.endsWith('/pulls'))?.body).toMatchObject({ base: 'master', head: `person:${TARGET.branch}` })
-  expect(state.commits.get(COMMIT)?.parents).toEqual([{ sha: BASE }])
-  expect(result).toMatchObject({ status: 'saved', pullRequestUrl: `https://github.com/${REPOSITORY}/pull/1` })
+  await rm(join(bundle, 'old.ts'))
+  if (inherited) {
+    state.baseHeads.set('main', COMMIT)
+    state.head = null
+  }
+  expect(await service.preview(TARGET)).toEqual({ status: 'blocked', code: 'unsafe-destination', effect: 'none' })
+  expect(state.requests.filter(request => request.method !== 'GET')).toEqual(mutations)
+  const commit = state.commits.get(COMMIT)
+  expect(state.trees.get(commit?.tree.sha ?? '')?.some(entry => entry.path === 'creator-exports/saved/bundles/0/old.ts')).toBe(true)
 })
 
-it.each([false, true])('refuses a fork without its own master branch before uploading source (existing=%s)', async (existing) => {
+it('preserves unrelated files outside the saved export during publication', async () => {
+  const { service, state } = await fixture(true)
+  state.tree = [{ path: 'notes/keep.txt', type: 'blob', mode: '100644', sha: OTHER }]
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  expect((await service.publish(preview.id, true)).status).toBe('saved')
+  const commit = state.commits.get(state.head ?? '')
+  expect(state.trees.get(commit?.tree.sha ?? '')?.find(entry => entry.path === 'notes/keep.txt'))
+    .toEqual({ path: 'notes/keep.txt', type: 'blob', mode: '100644', sha: OTHER })
+})
+
+it.each(['main', 'master', 'develop', 'release/stable'].flatMap(base => [false, true].map(existing => ({ base, existing }))))(
+  'uses fork $base as the reviewed base and confines writes to that fork (existing=$existing)', async ({ base, existing }) => {
+    const { service, state } = await fixture(existing)
+    state.defaultBranch = base
+    state.pullBase = base
+    state.baseHeads.set('release/stable', 'f'.repeat(40))
+    const baseHead = state.baseHeads.get(base)
+    if (baseHead === undefined) throw new Error('fixture base branch is missing')
+    expect(await service.repositories()).toEqual({ status: 'ready', account: 'person', upstream: UPSTREAM,
+      repositories: [{ repository: REPOSITORY, defaultBranch: base }] })
+    const preview = await service.preview(TARGET)
+    if (preview.status !== 'ready') throw new Error('preview refused')
+    expect(preview).toMatchObject({ base, head: existing ? BASE : null })
+    expect(state.requests.some(request => request.path === `repos/${REPOSITORY}/branches/${encodeURIComponent(base)}`)).toBe(true)
+    const result = await service.publish(preview.id, true)
+    const mutations = state.requests.filter(request => request.method !== 'GET')
+    expect(mutations.every(request => request.path === 'graphql' || request.path.startsWith(`repos/${REPOSITORY}/`))).toBe(true)
+    expect(state.requests.filter(request => request.path.startsWith(`repos/${UPSTREAM}/branches/`))).toEqual([])
+    expect(mutations.find(request => request.path.endsWith('/pulls'))?.body).toMatchObject({ base, head: `person:${TARGET.branch}` })
+    expect(state.commits.get(COMMIT)?.parents).toEqual([{ sha: existing ? BASE : baseHead }])
+    const queries = state.requests.filter(request => request.path.includes('/pulls?'))
+    expect(queries).toHaveLength(1)
+    const query = queries[0]
+    if (query === undefined) throw new Error('PR lookup was not issued')
+    expect(new URL(`https://api.github.com/${query.path}`).searchParams.get('base')).toBe(base)
+    expect(result).toMatchObject({ status: 'saved', pullRequestUrl: `https://github.com/${REPOSITORY}/pull/1` })
+    const requests = state.requests.length
+    expect(await service.publish(preview.id, true)).toEqual(result)
+    expect(state.requests).toHaveLength(requests)
+  },
+)
+
+it.each([false, true])('refuses a fork without its declared default branch before uploading source (existing=%s)', async (existing) => {
   const { service, state } = await fixture(existing)
-  state.masterExists = false
+  state.baseHeads.delete('main')
   expect(await service.preview(TARGET)).toEqual({ status: 'blocked', code: 'not-found', effect: 'none' })
   expect(state.requests.every(request => request.method === 'GET')).toBe(true)
 })
 
-it('requires a new branch to use the reviewed fork-master commit before uploading source', async () => {
+it.each(['main', 'develop'])('publishes from the declared %s default when the fork has no master branch', async (base) => {
+  const { service, state } = await fixture()
+  state.defaultBranch = base
+  state.baseHeads.delete('master')
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  expect(preview.base).toBe(base)
+  expect((await service.publish(preview.id, true)).status).toBe('saved')
+  expect(state.commits.get(COMMIT)?.parents).toEqual([{ sha: state.baseHeads.get(base) }])
+  expect(state.pullBase).toBe(base)
+})
+
+it('requires a new branch to use the reviewed default-branch commit before uploading source', async () => {
   const { service, state } = await fixture()
   const preview = await service.preview(TARGET)
   if (preview.status !== 'ready') throw new Error('preview refused')
-  state.masterHead = OTHER
+  state.baseHeads.set('main', OTHER)
   expect(await service.publish(preview.id, true)).toEqual({ status: 'blocked', code: 'conflict', effect: 'none' })
   expect(state.requests.every(request => request.method === 'GET')).toBe(true)
   expect(state.head).toBeNull()
 })
 
-it.each(['moved', 'removed'] as const)('rechecks fork master after preparing Git objects when it was %s', async (change) => {
+it.each(['moved', 'removed'] as const)('rechecks the default-branch head after preparing Git objects when it was %s', async (change) => {
   const { service, state } = await fixture()
   const preview = await service.preview(TARGET)
   if (preview.status !== 'ready') throw new Error('preview refused')
   state.beforeRequest = async (request) => {
     if (request.method !== 'POST' || !request.path.endsWith('/git/commits')) return
-    if (change === 'moved') state.masterHead = OTHER
-    else state.masterExists = false
+    if (change === 'moved') state.baseHeads.set('main', OTHER)
+    else state.baseHeads.delete('main')
   }
   expect(await service.publish(preview.id, true)).toEqual({ status: 'blocked', code: change === 'moved' ? 'conflict' : 'not-found', effect: 'none' })
   expect(state.requests.filter(request => request.path.endsWith('/git/refs') || request.path.endsWith('/pulls'))).toEqual([])
   expect(state.head).toBeNull()
 })
 
-it('rejects a PR response that targets upstream master rather than selected-fork master', async () => {
+it('rejects a PR response that targets the upstream rather than the selected fork', async () => {
   const { service, state } = await fixture(true)
   const preview = await service.preview(TARGET)
   if (preview.status !== 'ready') throw new Error('preview refused')
   state.overrideResponse = request => request.method === 'POST' && request.path.endsWith('/pulls') ? { value: {
-    number: 9, state: 'open', head: { ref: TARGET.branch, sha: COMMIT, repo: { id: 2 } }, base: { ref: 'master', repo: { id: 1 } },
+    number: 9, state: 'open', head: { ref: TARGET.branch, sha: COMMIT, repo: { id: 2 } }, base: { ref: 'main', repo: { id: 1 } },
   } } : undefined
   expect(await service.publish(preview.id, true)).toEqual({ status: 'blocked', code: 'invalid-response', effect: 'committed' })
+})
+
+it.each([undefined, ''])('refuses missing or empty default-branch metadata (%s) without a fallback lookup', async (defaultBranch) => {
+  const { service, state } = await fixture()
+  state.defaultBranch = defaultBranch
+  expect(await service.repositories()).toEqual({ status: 'blocked', code: 'invalid-response', effect: 'none' })
+  expect(await service.preview(TARGET)).toEqual({ status: 'blocked', code: 'invalid-response', effect: 'none' })
+  expect(state.requests.filter(request => request.path.includes('/branches/'))).toEqual([])
+  expect(state.requests.every(request => request.method === 'GET')).toBe(true)
+})
+
+it.each([undefined, ''])('refuses publication after default-branch metadata becomes missing or empty (%s)', async (defaultBranch) => {
+  const { service, state } = await fixture()
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  state.defaultBranch = defaultBranch
+  expect(await service.publish(preview.id, true)).toEqual({ status: 'blocked', code: 'invalid-response', effect: 'none' })
+  expect(state.requests.every(request => request.method === 'GET')).toBe(true)
+})
+
+it('refuses a custom default branch as a destination', async () => {
+  const { service, state } = await fixture()
+  state.defaultBranch = 'develop'
+  expect(await service.preview({ ...TARGET, branch: 'develop' })).toEqual({ status: 'blocked', code: 'default-branch', effect: 'none' })
+  expect(state.requests.every(request => request.method === 'GET')).toBe(true)
+})
+
+it.each([false, true])('refuses a default-branch name changed while preview reads its destination (existing=%s)', async (existing) => {
+  const { service, state } = await fixture(existing)
+  const entered = Promise.withResolvers<undefined>()
+  const release = Promise.withResolvers<undefined>()
+  onTestFinished(() => { release.resolve(undefined) })
+  state.beforeRequest = async (request) => {
+    if (!request.path.includes('/git/trees/')) return
+    entered.resolve(undefined)
+    await release.promise
+  }
+  const previewing = service.preview(TARGET)
+  await entered.promise
+  state.defaultBranch = 'develop'
+  release.resolve(undefined)
+  expect(await previewing).toEqual({ status: 'blocked', code: 'conflict', effect: 'none' })
+  expect(state.requests.every(request => request.method === 'GET')).toBe(true)
+})
+
+it.each([false, true])('refuses a different default-branch name before any publication writes (existing=%s)', async (existing) => {
+  const { service, state } = await fixture(existing)
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  state.defaultBranch = 'develop'
+  expect(await service.publish(preview.id, true)).toEqual({ status: 'blocked', code: 'conflict', effect: 'none' })
+  expect(state.requests.every(request => request.method === 'GET')).toBe(true)
+})
+
+it.each(['account', 'repository', 'upstream', 'network'] as const)(
+  'refuses a changed %s identity while preparing the preview', async (change) => {
+    const { service, state } = await fixture()
+    state.beforeRequest = async (request) => {
+      if (!request.path.includes('/git/trees/')) return
+      if (change === 'account') { state.user = { ...state.user, id: 8 }; state.owner = 8 }
+      if (change === 'repository') state.repositoryId = 3
+      if (change === 'upstream') { state.upstreamId = 9; state.sourceId = 9 }
+      if (change === 'network') {
+        state.sourceId = 9
+        state.overrideResponse = call => call.path === `repos/${UPSTREAM}` ? { value: {
+          id: 1, full_name: UPSTREAM, default_branch: 'master', fork: true, owner: { id: 1, login: 'deepseek-ai' },
+          source: { id: 9, full_name: 'another/network' },
+        } } : undefined
+      }
+    }
+    expect(await service.preview(TARGET)).toEqual({ status: 'blocked', code: change === 'account' ? 'mixed-account' : 'wrong-fork', effect: 'none' })
+    expect(state.requests.every(request => request.method === 'GET')).toBe(true)
+  },
+)
+
+it('refuses a different default-branch name discovered after preparing a new commit', async () => {
+  const { service, state } = await fixture()
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  state.beforeRequest = async (request) => {
+    if (request.method === 'POST' && request.path.endsWith('/git/commits')) state.defaultBranch = 'develop'
+  }
+  expect(await service.publish(preview.id, true)).toEqual({ status: 'blocked', code: 'conflict', effect: 'none' })
+  expect(state.requests.filter(request => request.path.endsWith('/git/refs') || request.path.endsWith('/pulls'))).toEqual([])
+  expect(state.head).toBeNull()
+})
+
+it('refuses a different default-branch name discovered during the final existing-head read', async () => {
+  const { service, state } = await fixture(true)
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  state.beforeRequest = async (request) => {
+    if (request.path.includes('/git/ref/heads/')) state.defaultBranch = 'develop'
+  }
+  expect(await service.publish(preview.id, true)).toEqual({ status: 'blocked', code: 'conflict', effect: 'none' })
+  expect(state.requests.every(request => request.method === 'GET')).toBe(true)
+})
+
+it.each([false, true])('refuses a default-branch name changed during PR lookup without another write (existing PR=%s)', async (existingPull) => {
+  const { service, state } = await fixture(true)
+  state.pr = existingPull
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  state.beforeRequest = async (request) => {
+    if (request.path.includes('/pulls?')) state.defaultBranch = 'develop'
+  }
+  const blocked = { status: 'blocked', code: 'conflict', effect: 'committed' }
+  expect(await service.publish(preview.id, true)).toEqual(blocked)
+  expect(state.requests.filter(request => request.method === 'POST' && request.path.endsWith('/pulls'))).toEqual([])
+  const mutations = state.requests.filter(request => request.method !== 'GET')
+  expect(await service.publish(preview.id, true)).toEqual(blocked)
+  expect(state.requests.filter(request => request.method !== 'GET')).toEqual(mutations)
+  state.beforeRequest = undefined
+  state.defaultBranch = 'main'
+  expect((await service.publish(preview.id, true)).status).toBe('saved')
+  expect(state.requests.filter(request => request.path === 'graphql')).toHaveLength(1)
+})
+
+it.each(['commit', 'ref', 'pull'] as const)('retains the effect of a lost %s response when the default name changes before retry', async (lost) => {
+  const { service, state } = await fixture(lost !== 'ref')
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  if (lost === 'commit') state.lostCommit = true
+  if (lost === 'ref') state.lostRef = true
+  if (lost === 'pull') state.lostPr = true
+  const effect = lost === 'pull' ? 'committed' : 'unknown'
+  expect(await service.publish(preview.id, true)).toEqual({ status: 'blocked', code: 'timeout', effect })
+  const mutations = state.requests.filter(request => request.method !== 'GET')
+  state.defaultBranch = 'develop'
+  expect(await service.publish(preview.id, true)).toEqual({ status: 'blocked', code: 'conflict', effect })
+  expect(state.requests.filter(request => request.method !== 'GET')).toEqual(mutations)
+  state.defaultBranch = 'main'
+  const saved = await service.publish(preview.id, true)
+  expect(saved.status).toBe('saved')
+  expect(await service.publish(preview.id, true)).toEqual(saved)
+  expect(state.commits.size).toBe(1)
+  expect(state.requests.filter(request => request.path === 'graphql')).toHaveLength(lost === 'ref' ? 0 : 1)
+  expect(state.requests.filter(request => request.method === 'POST' && request.path.endsWith('/pulls'))).toHaveLength(1)
+  if (lost === 'ref') {
+    for (const suffix of ['/git/trees', '/git/commits', '/git/refs']) {
+      expect(state.requests.filter(request => request.method === 'POST' && request.path.endsWith(suffix))).toHaveLength(1)
+    }
+  }
+})
+
+it('retains a committed outcome when the default changes during PR creation and reuses that PR after recovery', async () => {
+  const { service, state } = await fixture(true)
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  state.beforeRequest = async (request) => {
+    if (request.method === 'POST' && request.path.endsWith('/pulls')) state.defaultBranch = 'develop'
+  }
+  expect(await service.publish(preview.id, true)).toEqual({ status: 'blocked', code: 'conflict', effect: 'committed' })
+  expect(state.pr).toBe(true)
+  const mutations = state.requests.filter(request => request.method !== 'GET')
+  state.beforeRequest = undefined
+  state.defaultBranch = 'main'
+  expect((await service.publish(preview.id, true)).status).toBe('saved')
+  expect(state.requests.filter(request => request.method !== 'GET')).toEqual(mutations)
+})
+
+it('rejects a created-PR response for another base branch in the selected fork', async () => {
+  const { service, state } = await fixture(true)
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  state.overrideResponse = request => request.method === 'POST' && request.path.endsWith('/pulls') ? { value: {
+    number: 9, state: 'open', head: { ref: TARGET.branch, sha: COMMIT, repo: { id: 2 } }, base: { ref: 'master', repo: { id: 2 } },
+  } } : undefined
+  expect(await service.publish(preview.id, true)).toEqual({ status: 'blocked', code: 'invalid-response', effect: 'committed' })
+  expect(state.commits.size).toBe(1)
+})
+
+it('opens a PR to the reviewed default instead of reusing an open PR to another base', async () => {
+  const { service, state } = await fixture(true)
+  state.pr = true
+  state.pullBase = 'master'
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  expect(await service.publish(preview.id, true)).toMatchObject({ status: 'saved', pullRequestUrl: `https://github.com/${REPOSITORY}/pull/2` })
+  const pulls = state.requests.filter(request => request.method === 'POST' && request.path.endsWith('/pulls'))
+  expect(pulls).toHaveLength(1)
+  expect(pulls[0]?.body).toMatchObject({ base: 'main' })
+})
+
+it.each(['base', 'target', 'both'] as const)('refuses a new-branch preview after concurrent %s head changes', async (change) => {
+  const { service, state } = await fixture()
+  const entered = Promise.withResolvers<undefined>()
+  const release = Promise.withResolvers<undefined>()
+  onTestFinished(() => { release.resolve(undefined) })
+  state.beforeRequest = async (request) => {
+    if (!request.path.includes('/git/trees/')) return
+    entered.resolve(undefined)
+    await release.promise
+  }
+  const previewing = service.preview(TARGET)
+  await entered.promise
+  if (change !== 'target') state.baseHeads.set('main', OTHER)
+  if (change !== 'base') state.head = OTHER
+  release.resolve(undefined)
+  expect(await previewing).toEqual({ status: 'blocked', code: 'conflict', effect: 'none' })
+  expect(state.requests.every(request => request.method === 'GET')).toBe(true)
+})
+
+it('keeps an existing target commit as parent when the default-branch head advances', async () => {
+  const { service, state } = await fixture(true)
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  state.baseHeads.set('main', OTHER)
+  expect((await service.publish(preview.id, true)).status).toBe('saved')
+  expect(state.commits.get(COMMIT)?.parents).toEqual([{ sha: BASE }])
+  expect(state.pullBase).toBe('main')
+})
+
+it('preserves concurrent base and target head updates when exclusive ref creation loses the race', async () => {
+  const { service, state } = await fixture()
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  const entered = Promise.withResolvers<undefined>()
+  const release = Promise.withResolvers<undefined>()
+  onTestFinished(() => { release.resolve(undefined) })
+  state.beforeRequest = async (request) => {
+    if (request.method !== 'POST' || !request.path.endsWith('/git/refs')) return
+    entered.resolve(undefined)
+    await release.promise
+  }
+  const publishing = service.publish(preview.id, true)
+  await entered.promise
+  state.baseHeads.set('main', OTHER)
+  state.head = OTHER
+  release.resolve(undefined)
+  expect(await publishing).toEqual({ status: 'blocked', code: 'conflict', effect: 'none' })
+  expect(state.head).toBe(OTHER)
+  expect(state.baseHeads.get('main')).toBe(OTHER)
+  expect(state.pr).toBe(false)
+  expect(state.requests.filter(request => request.method === 'PATCH')).toEqual([])
 })

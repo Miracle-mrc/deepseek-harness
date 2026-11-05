@@ -150,8 +150,9 @@ export class CreatorFork extends TypertRemoteService {
     if (result.sha !== oid) refuse('invalid-response')
     return result
   }
-  private async master(repository: string, signal: AbortSignal): Promise<ForkCommitId> {
-    return decode(z.object({ commit: z.object({ sha: OID }) }), await this.get(`repos/${repository}/branches/master`, signal)).commit.sha
+  private async defaultHead(repository: string, branch: string, signal: AbortSignal): Promise<ForkCommitId> {
+    return decode(z.object({ commit: z.object({ sha: OID }) }),
+      await this.get(`repos/${repository}/branches/${encodeURIComponent(branch)}`, signal)).commit.sha
   }
   private async checked(repository: string, branch: string, signal: AbortSignal) {
     const user = decode(USER, await this.get('user', signal))
@@ -194,7 +195,7 @@ export class CreatorFork extends TypertRemoteService {
             repositories.push({ repository: detail.full_name, defaultBranch: detail.default_branch })
           }
         }
-        if (listed.length < 100) return { status: 'ready', account: user.login, upstream: upstream.full_name, base: 'master', repositories } as const
+        if (listed.length < 100) return { status: 'ready', account: user.login, upstream: upstream.full_name, repositories } as const
       }
       return failed(new Refusal('too-large'))
     })
@@ -203,7 +204,8 @@ export class CreatorFork extends TypertRemoteService {
   /**
    * Capture safe local source and exact destination text, without uploading source or changing GitHub.
    * A new preview releases successful and known-closed receipts; their IDs then become stale.
-   * @param request Authorized fork slug and a non-default branch; new branches start from that fork's master.
+   * Saved files absent from the current capture are refused; publication never deletes them automatically.
+   * @param request Authorized fork slug and a non-default branch; new branches start from the fork's reviewed default branch.
    * @returns An opaque, expiring receipt and complete UTF-8 before/after text, or a refusal with no source content.
    */
   @Remote
@@ -214,11 +216,15 @@ export class CreatorFork extends TypertRemoteService {
       const { user, repo, upstream } = await this.checked(source.repository, source.branch, signal)
       this.releaseReceipts()
       if (this.receipts.size >= this.config.maxPreviews) refuse('too-large')
-      const base = await this.master(repo.full_name, signal)
+      const base = await this.defaultHead(repo.full_name, repo.default_branch, signal)
       const head = await this.head(repo.full_name, source.branch, signal)
       const parent = head ?? base
       const commit = await this.commit(repo.full_name, parent, signal)
       const tree = decode(TREE, await this.get(`repos/${repo.full_name}/git/trees/${commit.tree.sha}?recursive=1`, signal))
+      const capturedPaths = new Set(source.files.map(file => `${PREFIX}${file.path}`))
+      if (tree.tree.some(entry => entry.type !== 'tree' && entry.path.startsWith(PREFIX) && !capturedPaths.has(entry.path))) {
+        refuse('unsafe-destination')
+      }
       const files: Preview['files'][number][] = []
       const expectedLeaves = new Map(tree.tree.filter(entry => entry.type !== 'tree')
         .map(entry => [entry.path, `${entry.mode}:${entry.type}:${entry.sha}`]))
@@ -257,8 +263,13 @@ export class CreatorFork extends TypertRemoteService {
       }
       if (files.length === 0) refuse('no-changes')
       if (await this.head(repo.full_name, source.branch, signal) !== head) refuse('conflict')
+      const current = await this.checked(repo.full_name, source.branch, signal)
+      if (current.user.id !== user.id) refuse('mixed-account')
+      if (current.repo.id !== repo.id || current.upstream.id !== upstream.id || networkId(current.upstream) !== networkId(upstream)) refuse('wrong-fork')
+      if (current.repo.default_branch !== repo.default_branch) refuse('conflict')
+      if (head === null && await this.defaultHead(repo.full_name, repo.default_branch, signal) !== base) refuse('conflict')
       const preview: Preview = { status: 'ready', id: randomUUID() as ForkPreviewId, account: user.login,
-        repository: repo.full_name, branch: source.branch, upstream: upstream.full_name, base: 'master', head, files }
+        repository: repo.full_name, branch: source.branch, upstream: upstream.full_name, base: repo.default_branch, head, files }
       if (Buffer.byteLength(JSON.stringify(preview)) > MAX_PREVIEW_BYTES) refuse('too-large')
       this.releaseReceipts()
       if (this.receipts.size >= this.config.maxPreviews) refuse('too-large')
@@ -270,7 +281,8 @@ export class CreatorFork extends TypertRemoteService {
   }
 
   /**
-   * Commit only the retained preview after explicit confirmation, then create or reuse its open PR to the same fork's master.
+   * Commit only the retained preview after explicit confirmation, then create or reuse its open PR to the fork's reviewed default branch.
+   * A changed default branch refuses the receipt without changing its approved destination or hiding earlier remote effects.
    * Repeated calls share an in-flight operation and reconcile lost responses. A closed PR is reported without recreating it.
    * An in-flight publication retains its receipt past the preview's expiry.
    * A failed PR retains the approved commit; unknown writes remain unknown until reconciliation,
@@ -303,6 +315,7 @@ export class CreatorFork extends TypertRemoteService {
       const { user, repo, upstream } = await this.checked(preview.repository, preview.branch, signal)
       if (user.id !== receipt.accountId) refuse('mixed-account')
       if (repo.id !== receipt.repositoryId || upstream.id !== receipt.upstreamId || networkId(upstream) !== receipt.sourceId) refuse('wrong-fork')
+      if (repo.default_branch !== preview.base) refuse('conflict')
       const head = await this.head(preview.repository, preview.branch, signal)
       if (receipt.attempted && receipt.commit === null) {
         if (head !== preview.head && head !== null) {
@@ -321,7 +334,7 @@ export class CreatorFork extends TypertRemoteService {
       } else {
         if (head !== preview.head) refuse('conflict')
         if (preview.head === null) {
-          if (await this.master(preview.repository, signal) !== receipt.parent) refuse('conflict')
+          if (await this.defaultHead(preview.repository, preview.base, signal) !== receipt.parent) refuse('conflict')
           if (receipt.preparedCommit === null) {
             const tree = decode(z.object({ sha: OID }), await this.github.request('POST', `repos/${preview.repository}/git/trees`, {
               base_tree: (await this.commit(preview.repository, receipt.parent, signal)).tree.sha,
@@ -363,19 +376,22 @@ export class CreatorFork extends TypertRemoteService {
         }
       }
       if (await this.head(preview.repository, preview.branch, signal) !== receipt.commit) refuse('conflict')
-      const query = `repos/${preview.repository}/pulls?state=all&base=master&head=${encodeURIComponent(`${preview.account}:${preview.branch}`)}&per_page=100`
+      await this.recheck(receipt, signal)
+      const query = `repos/${preview.repository}/pulls?state=all&base=${encodeURIComponent(preview.base)}&head=${encodeURIComponent(`${preview.account}:${preview.branch}`)}&per_page=100`
       const pulls = decode(z.array(PULL), await this.get(query, signal))
+      await this.recheck(receipt, signal)
       const matches = (pull: z.infer<typeof PULL>): boolean => pull.head.repo.id === receipt.repositoryId
         && pull.head.ref === preview.branch && pull.head.sha === receipt.commit
-        && pull.base.repo.id === receipt.repositoryId && pull.base.ref === 'master'
+        && pull.base.repo.id === receipt.repositoryId && pull.base.ref === preview.base
       let pull = pulls.find(candidate => candidate.state === 'open' && matches(candidate)) ?? pulls.find(matches)
       if (pull === undefined) {
         if (pulls.length >= 100) refuse('too-large')
         pull = decode(PULL, await this.github.request('POST', `repos/${preview.repository}/pulls`, {
-          title: 'Save Creator source', head: `${preview.account}:${preview.branch}`, head_repo: preview.repository.split('/')[1], base: 'master',
+          title: 'Save Creator source', head: `${preview.account}:${preview.branch}`, head_repo: preview.repository.split('/')[1], base: preview.base,
           body: 'Reviewed Creator source export. Credentials and machine-local state are excluded.', maintainer_can_modify: false,
         }, signal))
         if (!matches(pull)) refuse('invalid-response')
+        await this.recheck(receipt, signal)
       }
       const pullRequestUrl = `https://github.com/${preview.repository}/pull/${String(pull.number)}`
       if (pull.state === 'closed') {
@@ -397,7 +413,9 @@ export class CreatorFork extends TypertRemoteService {
     const { user, repo, upstream } = await this.checked(receipt.preview.repository, receipt.preview.branch, signal)
     if (user.id !== receipt.accountId) refuse('mixed-account')
     if (repo.id !== receipt.repositoryId || upstream.id !== receipt.upstreamId || networkId(upstream) !== receipt.sourceId) refuse('wrong-fork')
-    if (receipt.preview.head === null && await this.master(receipt.preview.repository, signal) !== receipt.parent) refuse('conflict')
+    if (repo.default_branch !== receipt.preview.base) refuse('conflict')
+    if (receipt.commit === null && receipt.preview.head === null
+      && await this.defaultHead(receipt.preview.repository, receipt.preview.base, signal) !== receipt.parent) refuse('conflict')
   }
   private message(receipt: Receipt): string { return `Save Creator source (${receipt.preview.id})` }
 }

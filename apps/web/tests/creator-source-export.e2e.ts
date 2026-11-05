@@ -222,7 +222,8 @@ it.each([
     expect(envelope.result.ok).toBe(true)
     const captured = envelope.result.value
     if (captured.status !== 'ready') throw new Error(`Publication preview was blocked: ${captured.code}`)
-    expect(await dialog.getByText('alice/harness:master', { exact: true }).count()).toBe(1)
+    expect(captured.base).toBe('main')
+    expect(await dialog.getByText('alice/harness:main', { exact: true }).count()).toBe(1)
     const sourcePath = 'creator-exports/saved/bundles/0/index.ts'
     expect(captured.files.find(file => file.path === sourcePath)).toEqual({
       path: sourcePath, before: ORIGINAL_SOURCE.slice(0, -1), after: ORIGINAL_SOURCE,
@@ -266,7 +267,7 @@ it.each([
     expect(await branch.isEnabled()).toBe(false)
     await compareAria('publish-pending.expected.md')
     await rm(join(transport, 'hold-commit'))
-    await dialog.getByText('The commit was saved, but the pull request could not be confirmed. Retry this same save to finish it.', { exact: true }).waitFor()
+    await dialog.getByText('The commit was saved, but the pull request could not be confirmed. Resolve the reported problem before retrying this same save.', { exact: true }).waitFor()
     await compareAria('publish-committed.expected.md')
     await dialog.getByRole('button', { name: 'Retry this save', exact: true }).click()
     const link = dialog.getByRole('link', { name: 'Open pull request', exact: true })

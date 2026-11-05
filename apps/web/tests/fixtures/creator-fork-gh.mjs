@@ -34,7 +34,7 @@ function reply(status, value) {
 }
 function pull() {
   return { number: 17, state: 'open', head: { ref: state.branch, sha: state.head, repo: { id: 2 } },
-    base: { ref: 'master', repo: { id: 2 } } }
+    base: { ref: 'main', repo: { id: 2 } } }
 }
 function repository() {
   return { id: 2, full_name: REPOSITORY, owner: { id: 7, login: 'alice' }, default_branch: 'main',
@@ -55,7 +55,7 @@ async function main() {
     id: 1, full_name: UPSTREAM, owner: { id: 1, login: 'deepseek-ai' }, default_branch: 'master', fork: false,
   })
   if (method === 'GET' && path === `repos/${REPOSITORY}`) return reply(200, repository())
-  if (method === 'GET' && path === `repos/${REPOSITORY}/branches/master`) return reply(200, { commit: { sha: BASE } })
+  if (method === 'GET' && path === `repos/${REPOSITORY}/branches/main`) return reply(200, { commit: { sha: BASE } })
   if (method === 'GET' && path === `repos/${REPOSITORY}/git/ref/heads/${encodeURIComponent(state.branch)}`) {
     return reply(200, { object: { type: 'commit', sha: state.head } })
   }
@@ -92,12 +92,12 @@ async function main() {
   }
   if (method === 'GET' && path.startsWith(`repos/${REPOSITORY}/pulls?`)) {
     const query = new URLSearchParams(path.slice(path.indexOf('?') + 1))
-    if (query.get('state') !== 'all' || query.get('base') !== 'master'
+    if (query.get('state') !== 'all' || query.get('base') !== 'main'
       || query.get('head') !== `alice:${state.branch}`) return reply(422, {})
     return reply(200, state.pr ? [pull()] : [])
   }
   if (method === 'POST' && path === `repos/${REPOSITORY}/pulls`) {
-    if (body.base !== 'master' || body.head !== `alice:${state.branch}` || body.head_repo !== 'harness'
+    if (body.base !== 'main' || body.head !== `alice:${state.branch}` || body.head_repo !== 'harness'
       || body.maintainer_can_modify !== false) return reply(422, {})
     if (state.failPr) {
       state.failPr = false

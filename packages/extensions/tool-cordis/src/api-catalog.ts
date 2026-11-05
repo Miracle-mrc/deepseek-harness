@@ -933,13 +933,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: '@Remote async preview(request: SourceExportRequest): Promise<ForkPreviewResult>',
-        description: 'Capture safe local source and exact destination text, without uploading source or changing GitHub. A new preview releases successful and known-closed receipts; their IDs then become stale.',
-        parameters: [{ name: 'request', description: 'Authorized fork slug and a non-default branch; new branches start from that fork\'s master.' }],
+        description: 'Capture safe local source and exact destination text, without uploading source or changing GitHub. A new preview releases successful and known-closed receipts; their IDs then become stale. Saved files absent from the current capture are refused; publication never deletes them automatically.',
+        parameters: [{ name: 'request', description: 'Authorized fork slug and a non-default branch; new branches start from the fork\'s reviewed default branch.' }],
         returns: 'An opaque, expiring receipt and complete UTF-8 before/after text, or a refusal with no source content.',
       },
       {
         signature: '@Remote async publish(id: ForkPreviewId, confirmed: boolean): Promise<ForkPublishResult>',
-        description: 'Commit only the retained preview after explicit confirmation, then create or reuse its open PR to the same fork\'s master. Repeated calls share an in-flight operation and reconcile lost responses. A closed PR is reported without recreating it. An in-flight publication retains its receipt past the preview\'s expiry. A failed PR retains the approved commit; unknown writes remain unknown until reconciliation, with no forced rollback or branch deletion.',
+        description: 'Commit only the retained preview after explicit confirmation, then create or reuse its open PR to the fork\'s reviewed default branch. A changed default branch refuses the receipt without changing its approved destination or hiding earlier remote effects. Repeated calls share an in-flight operation and reconcile lost responses. A closed PR is reported without recreating it. An in-flight publication retains its receipt past the preview\'s expiry. A failed PR retains the approved commit; unknown writes remain unknown until reconciliation, with no forced rollback or branch deletion.',
         parameters: [{ name: 'id', description: 'Receipt from preview; source text and destinations cannot be replaced by this call.' }, { name: 'confirmed', description: 'The person\'s explicit acknowledgement of the displayed diff and destinations.' }],
         returns: 'Confirmed commit and PR, or a sanitized refusal stating absent, unknown, or committed remote effects.',
       },
@@ -6530,7 +6530,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ForkPreviewResult',
-    declaration: 'export type ForkPreviewResult = ForkFailure | {\n    readonly status: \'ready\';\n    readonly id: ForkPreviewId;\n    readonly account: string;\n    readonly repository: string;\n    readonly branch: string;\n    readonly upstream: string;\n    readonly base: \'master\';\n    readonly head: ForkCommitId | null;\n    readonly files: readonly ForkFileDiff[];\n};',
+    declaration: 'export type ForkPreviewResult = ForkFailure | {\n    readonly status: \'ready\';\n    readonly id: ForkPreviewId;\n    readonly account: string;\n    readonly repository: string;\n    readonly branch: string;\n    readonly upstream: string;\n    readonly base: string;\n    readonly head: ForkCommitId | null;\n    readonly files: readonly ForkFileDiff[];\n};',
   },
   {
     name: 'ForkPublishResult',
@@ -6538,7 +6538,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ForkRepositoriesResult',
-    declaration: 'export type ForkRepositoriesResult = ForkFailure | {\n    readonly status: \'ready\';\n    readonly account: string;\n    readonly upstream: string;\n    readonly base: \'master\';\n    readonly repositories: readonly ForkRepository[];\n};',
+    declaration: 'export type ForkRepositoriesResult = ForkFailure | {\n    readonly status: \'ready\';\n    readonly account: string;\n    readonly upstream: string;\n    readonly repositories: readonly ForkRepository[];\n};',
   },
   {
     name: 'ForkRepository',

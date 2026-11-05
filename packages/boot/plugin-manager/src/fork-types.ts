@@ -35,7 +35,6 @@ export type ForkRepositoriesResult = ForkFailure | {
   readonly account: string
   /** Repository used only to verify fork eligibility. */
   readonly upstream: string
-  readonly base: 'master'
   readonly repositories: readonly ForkRepository[]
 }
 
@@ -46,7 +45,7 @@ export interface ForkFileDiff {
   readonly after: string
 }
 
-/** Immutable proposed writes in the selected fork; an absent head starts from that fork's master. */
+/** Immutable proposed writes in the selected fork; an absent head starts from its reviewed default branch. */
 export type ForkPreviewResult = ForkFailure | {
   readonly status: 'ready'
   readonly id: ForkPreviewId
@@ -55,7 +54,8 @@ export type ForkPreviewResult = ForkFailure | {
   readonly branch: string
   /** Repository used only to verify fork eligibility; the PR targets repository. */
   readonly upstream: string
-  readonly base: 'master'
+  /** Selected fork's default branch at preview time; publication refuses a later name change. */
+  readonly base: string
   readonly head: ForkCommitId | null
   readonly files: readonly ForkFileDiff[]
 }

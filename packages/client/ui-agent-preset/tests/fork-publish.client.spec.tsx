@@ -14,12 +14,12 @@ import { en, zh } from '../src/client/locales.ts'
 afterEach(cleanup)
 
 const REPOSITORIES = {
-  status: 'ready', account: 'alice', upstream: 'deepseek-ai/deepseek-harness', base: 'master',
+  status: 'ready', account: 'alice', upstream: 'deepseek-ai/deepseek-harness',
   repositories: [{ repository: 'alice/harness', defaultBranch: 'trunk' }],
 } satisfies ForkRepositoriesResult
 const PREVIEW = {
   status: 'ready', id: 'preview-1' as ForkPreviewId, account: 'alice', repository: 'alice/harness',
-  branch: 'creator/saved', upstream: REPOSITORIES.upstream, base: 'master', head: 'old-head' as ForkCommitId,
+  branch: 'creator/saved', upstream: REPOSITORIES.upstream, base: 'trunk', head: 'old-head' as ForkCommitId,
   files: [
     { path: 'customizations/bundles/0/index.ts', before: 'export const value = 1', after: 'export const value = 1\n' },
     { path: 'customizations/profiles/saved/cordis.patch.yml', before: null, after: '[]\n' },
@@ -57,6 +57,60 @@ async function inspect(copy = en) {
 }
 
 describe('direct fork publication dialog', () => {
+  it.each(['main', 'master', 'develop'].flatMap(base => [
+    { locale: 'en', copy: en, base, newBranch: `New branch from the selected fork’s ${base}`,
+      intro: 'Load your authorized forks, choose a branch, and review every file. Confirmation creates a commit and opens a pull request to the selected fork’s default branch.' },
+    { locale: 'zh', copy: zh, base, newBranch: `从所选 Fork 的 ${base} 创建新分支`,
+      intro: '加载已授权的 Fork，选择分支并检查每个文件。确认后将创建提交，并向所选 Fork 的默认分支打开拉取请求' },
+  ]))('shows the actual fork base $base in $locale before confirming a new branch', async ({ copy, base, newBranch, intro }) => {
+    const view = overlay(copy)
+    view.repositories.mockResolvedValueOnce({ ...REPOSITORIES,
+      repositories: [{ repository: PREVIEW.repository, defaultBranch: base }],
+    })
+    view.preview.mockResolvedValueOnce({ ...PREVIEW, base, head: null })
+    await inspect(copy)
+    const dialog = screen.getByRole('dialog', { name: copy.forkPublishTitle })
+    expect(within(dialog).getByText(`${PREVIEW.repository}:${base}`, { exact: true })).toBeTruthy()
+    expect(within(dialog).getByText(newBranch, { exact: true })).toBeTruthy()
+    expect(within(dialog).getByText(intro, { exact: true })).toBeTruthy()
+    expect(screen.queryByText(copy.forkPublishBranchHistory)).toBeNull()
+    expect(view.publish).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { locale: 'en', copy: en, effect: 'unknown', newBranch: 'New branch from the selected fork’s develop',
+      conflict: 'The destination changed. Review the branch and pull request on GitHub before continuing.' },
+    { locale: 'zh', copy: zh, effect: 'unknown', newBranch: '从所选 Fork 的 develop 创建新分支',
+      conflict: '目标已发生变化，请先在 GitHub 上检查分支和拉取请求，再继续操作' },
+    { locale: 'en', copy: en, effect: 'committed', newBranch: 'New branch from the selected fork’s develop',
+      conflict: 'The destination changed. Review the branch and pull request on GitHub before continuing.' },
+    { locale: 'zh', copy: zh, effect: 'committed', newBranch: '从所选 Fork 的 develop 创建新分支',
+      conflict: '目标已发生变化，请先在 GitHub 上检查分支和拉取请求，再继续操作' },
+  ] as const)('retains the reviewed base in $locale after $effect effects and reopening', async ({ copy, effect, newBranch, conflict }) => {
+    const view = overlay(copy)
+    view.preview.mockResolvedValueOnce({ ...PREVIEW, base: 'develop', head: null })
+    await inspect(copy)
+    view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'conflict', effect })
+    fireEvent.click(screen.getByRole('checkbox', { name: copy.forkPublishReviewed }))
+    fireEvent.click(screen.getByRole('button', { name: copy.forkPublishConfirm }))
+    await screen.findByText(effect === 'unknown' ? copy.forkPublishUnknown : copy.forkPublishCommitted)
+    await act(async () => {
+      view.controller.close()
+      view.controller.open()
+    })
+    const dialog = screen.getByRole('dialog', { name: copy.forkPublishTitle })
+    expect(within(dialog).getByText(`${PREVIEW.repository}:develop`, { exact: true })).toBeTruthy()
+    expect(within(dialog).getByText(newBranch, { exact: true })).toBeTruthy()
+    expect(within(dialog).getByRole<HTMLSelectElement>('combobox', { name: copy.forkRepository }).disabled).toBe(true)
+    expect(within(dialog).getByRole<HTMLInputElement>('textbox', { name: copy.forkBranch }).disabled).toBe(true)
+    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishConnect }).disabled).toBe(true)
+    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishInspect }).disabled).toBe(true)
+    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishRetry }).disabled).toBe(false)
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    expect(view.publish).toHaveBeenCalledExactlyOnceWith(PREVIEW.id, true)
+    expect(within(dialog).getByText(conflict, { exact: true })).toBeTruthy()
+  })
+
   it.each([['en', en], ['zh', zh]] as const)('requires explicit discovery, exact review, and confirmation in %s', async (_locale, copy) => {
     const view = overlay(copy)
     expect(view.repositories).not.toHaveBeenCalled()
@@ -68,8 +122,7 @@ describe('direct fork publication dialog', () => {
     expect([...destination.options].map(option => option.value)).toEqual(['', 'alice/harness'])
     expect(dialog.textContent).toContain('alice')
     expect(dialog.textContent).toContain(REPOSITORIES.upstream)
-    expect(within(dialog).getByText(`${PREVIEW.repository}:master`, { exact: true })).toBeTruthy()
-    expect(dialog.textContent).toContain('master')
+    expect(within(dialog).getByText(`${PREVIEW.repository}:${PREVIEW.base}`, { exact: true })).toBeTruthy()
     expect(dialog.textContent).toContain(PREVIEW.head)
     expect(dialog.textContent).toContain(copy.forkPublishBranchHistory)
     expect(dialog.textContent).toContain(PREVIEW.files[0]!.path)
@@ -185,7 +238,7 @@ describe('direct fork publication dialog', () => {
     const view = overlay()
     view.preview.mockResolvedValueOnce({ ...PREVIEW, head: null })
     await inspect()
-    expect(screen.getByText(en.forkPublishNewBranch)).toBeTruthy()
+    expect(screen.getByText(makeTranslate(en)('forkPublishNewBranch', { base: PREVIEW.base }))).toBeTruthy()
     expect(screen.queryByText(en.forkPublishBranchHistory)).toBeNull()
     view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'conflict', effect: 'none' })
     fireEvent.click(screen.getByRole('checkbox', { name: en.forkPublishReviewed }))

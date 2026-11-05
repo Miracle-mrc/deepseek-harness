@@ -176,7 +176,7 @@ const SERVICE_ROLES: ServiceRole[] = [
     title: 'Reviewed Creator source publication',
     mode: 'service',
     consumers: ['client-ui-agent-preset'],
-    note: 'Publishes a confirmed source receipt to a selected fork branch and opens a PR to master in that fork.',
+    note: 'Publishes a confirmed source receipt to a selected fork branch and opens a PR to its reviewed default branch.',
   },
   {
     key: 'pluginMarket',

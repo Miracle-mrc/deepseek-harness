@@ -488,13 +488,13 @@ describe('ui-agent-preset apply', () => {
       await publication.connect()
       expect(publication.hooks.forkPublish.getSnapshot().failure?.code).toBe('network')
       const repositories = vi.fn(async () => ({ ok: true as const, value: {
-        status: 'ready' as const, account: 'alice', upstream: 'deepseek-ai/deepseek-harness', base: 'master' as const,
+        status: 'ready' as const, account: 'alice', upstream: 'deepseek-ai/deepseek-harness',
         repositories: [{ repository: 'alice/harness', defaultBranch: 'main' }],
       } }))
       type PreviewResponse = Awaited<ReturnType<typeof ctx.remote.creatorFork.preview>>
       const preview = vi.fn(async (): Promise<PreviewResponse> => ({ ok: true, value: {
         status: 'ready' as const, id: 'preview-1' as ForkPreviewId, account: 'alice', repository: 'alice/harness',
-        branch: 'my-changes', upstream: 'deepseek-ai/deepseek-harness', base: 'master' as const, head: null, files: [],
+        branch: 'my-changes', upstream: 'deepseek-ai/deepseek-harness', base: 'main', head: null, files: [],
       } }))
       type PublishResponse = Awaited<ReturnType<typeof ctx.remote.creatorFork.publish>>
       const publish = vi.fn(async (): Promise<PublishResponse> => ({ ok: false, error: new RemoteError('gateway/internal', 'disconnected', {}) }))

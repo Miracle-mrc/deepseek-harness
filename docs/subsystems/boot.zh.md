@@ -10,7 +10,7 @@
 
 `SourceExportRequest` 指定仓库标识和 `main` 或 `master` 以外的分支；这些值只是标签，不产生 Git 或网络操作。`SourceExportResult` 为带版本的 `ready` UTF-8 文件映射且 `reviewRequired: true`，或不含捕获源码的 `blocked` 问题列表。每个文件包含可移植的相对 `path` 和 `content`。[源码导出参考](../../packages/boot/plugin-manager/README.zh.md#source-export)说明捕获限制与恢复方式。
 
-`ForkRepositoriesResult` 列出账号拥有且可写的 fork。`ForkPreviewResult` 将不透明的 `ForkPreviewId` 与精确目标修改前后文本、账号、分支头及所选 fork 的 `master` 配对；`upstream` 标识用于核实 fork 资格的仓库。`ForkPublishResult` 标识所选 fork 中已提交的分支和打开的 PR。`ForkFailure` 携带经过清理的错误码及分支或 PR 的影响（`none`、`unknown` 或 `committed`）；匹配的 PR 已关闭时，可携带安全的 `pullRequestUrl` 供查看。[直接发布参考](../../packages/boot/plugin-manager/README.zh.md#direct-github-publication)说明回执寿命、并发和恢复。
+`ForkRepositoriesResult` 列出账号拥有且可写的 fork 及其默认分支。`ForkPreviewResult` 将不透明的 `ForkPreviewId` 与精确目标修改前后文本、账号、分支头及所选 fork 中已审查的默认分支配对；`upstream` 标识用于核实 fork 资格的仓库。`ForkPublishResult` 标识所选 fork 中已提交的分支和打开的 PR。`ForkFailure` 携带经过清理的错误码及分支或 PR 的影响（`none`、`unknown` 或 `committed`）；匹配的 PR 已关闭时，可携带安全的 `pullRequestUrl` 供查看。[直接发布参考](../../packages/boot/plugin-manager/README.zh.md#direct-github-publication)说明回执寿命、并发和恢复。
 
 `PluginEntryId` 标识一个 Loader 条目；调用方从 `listPlugins` 获取，不自行拼接 patch id。
 
@@ -165,13 +165,15 @@ Owns bounded source receipts, GitHub identity checks, atomic branch writes, and 
 /**
  * Capture safe local source and exact destination text, without uploading source or changing GitHub.
  * A new preview releases successful and known-closed receipts; their IDs then become stale.
- * @param request Authorized fork slug and a non-default branch; new branches start from that fork's master.
+ * Saved files absent from the current capture are refused; publication never deletes them automatically.
+ * @param request Authorized fork slug and a non-default branch; new branches start from the fork's reviewed default branch.
  * @returns An opaque, expiring receipt and complete UTF-8 before/after text, or a refusal with no source content.
  */
 @Remote async preview(request: SourceExportRequest): Promise<ForkPreviewResult>
 
 /**
- * Commit only the retained preview after explicit confirmation, then create or reuse its open PR to the same fork's master.
+ * Commit only the retained preview after explicit confirmation, then create or reuse its open PR to the fork's reviewed default branch.
+ * A changed default branch refuses the receipt without changing its approved destination or hiding earlier remote effects.
  * Repeated calls share an in-flight operation and reconcile lost responses. A closed PR is reported without recreating it.
  * An in-flight publication retains its receipt past the preview's expiry.
  * A failed PR retains the approved commit; unknown writes remain unknown until reconciliation,
