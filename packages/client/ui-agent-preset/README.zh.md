@@ -39,6 +39,8 @@ kind: "package-reference"
 
 导出包含 profile 的补丁、所选 bundle 引用，以及 [Plugin Manager](../../boot/plugin-manager/README.zh.md) 所说明的受支持本地插件源码。不包含凭据、Session、主目录和命令行覆盖配置，以及临时动态插件。检查被拒绝时保留表单并说明需要修正的内容；下载失败时保留已检查的预览供重试。关闭对话框会丢弃尚未完成的检查结果。关闭对话框后，下载结果 Toast 仍可显示。
 
+每次下载会在点击后将 Blob URL 保留在有界的 40 秒宽限期内。启动下载失败时立即释放；功能卸载时取消待处理的计时器并释放对应 URL。关闭审查对话框不会取消已启动的下载。此延迟用于兼容浏览器的下载处理方式，并不证明所有 Safari 版本均兼容。
+
 进入创造模式会为接收该选择的空白 Session 选择 `cordis`，不改变新任务默认值或代码工作工具设置。尚未绑定工作区或空白 Session 时，选择等待绑定完成后应用。应用后，创造 Session 保留该预设；之后真正创建的新 Session 使用配置的默认值，例如标准模式。
 
 在桌面端，模式选择器中的直接选择切换到另一个内置 preset 时，可选的[产品埋点](../product-analytics/README.zh.md)服务会收到 `agent_preset_switch`：未绑定 Session 的选择在暂存给下一个 Session 时计入，已绑定空白 Session 的选择在 Host 应用后计入。事件携带按 preset id 映射的来源与目标类别（`cordis` 记为 `creator`；`ptc`、`minimal`、`standard` 保持原 id；其他 id 记为 `other`），以及选择时已知的代码工作工具设置。选择自定义目标、被拒绝的选择、Host 最终落在其他 preset 的选择、默认值修改及其空白 Session 同步均不报告；来源模式或代码工作工具设置未知时做出的选择同样不报告。不采集自定义 preset 的 id 和名称。

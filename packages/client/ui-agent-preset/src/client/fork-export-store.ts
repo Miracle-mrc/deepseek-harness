@@ -19,23 +19,43 @@ export interface ForkExportState {
   notice: { seq: number; kind: 'downloaded' | 'download-failed' } | null
 }
 
+// FileSaver.js retains Blob URLs for 40 seconds: https://github.com/eligrey/FileSaver.js/blob/master/src/FileSaver.js
+const DOWNLOAD_URL_GRACE_MS = 40_000
+
 /**
- * Hand captured export bytes to the browser download manager.
+ * Hand captured export bytes to the browser download manager; a successful click does not confirm completion.
+ * URLs expire after a grace period for the browser to start downloading or when the lifetime ends; setup failures release them immediately.
  * @param value Exact Host result displayed in the review dialog.
+ * @param signal Optional feature lifetime; abort releases URLs and refuses new downloads. Omission uses expiry alone.
+ * @throws The signal's abort reason when already aborted, or a browser setup error.
  */
-export function downloadForkExport(value: ReadySourceExport): void {
+export function downloadForkExport(value: ReadySourceExport, signal?: AbortSignal): void {
+  signal?.throwIfAborted()
   const blob = new Blob([`${JSON.stringify(value, null, 2)}\n`], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
+  let anchor: HTMLAnchorElement | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let released = false
+  const release = (): void => {
+    if (released) return
+    released = true
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', release)
+    URL.revokeObjectURL(url)
+  }
   try {
+    signal?.addEventListener('abort', release, { once: true })
+    anchor = document.createElement('a')
     anchor.href = url
     anchor.download = 'dsh-source-export.json'
     document.body.append(anchor)
     anchor.click()
+    if (!signal?.aborted) timer = setTimeout(release, DOWNLOAD_URL_GRACE_MS)
+  } catch (error) {
+    release()
+    throw error
   } finally {
-    anchor.remove()
-    // The browser consumes the object URL after the click handler returns.
-    setTimeout(() => { URL.revokeObjectURL(url) }, 0)
+    anchor?.remove()
   }
 }
 
@@ -47,6 +67,7 @@ export class ForkExportController {
   })
   private request = 0
   private noticeSeq = 0
+  private readonly downloads = new AbortController()
 
   /**
    * @param prepare Read-only Host export preparation.
@@ -54,7 +75,7 @@ export class ForkExportController {
    */
   constructor(
     private readonly prepare: (request: SourceExportRequest) => Promise<SourceExportResult>,
-    private readonly save: (value: ReadySourceExport) => void = downloadForkExport,
+    private readonly save: (value: ReadySourceExport) => void = (value) => { downloadForkExport(value, this.downloads.signal) },
   ) {}
 
   private set(patch: Partial<ForkExportState>): void { this.store.set({ ...this.store.getSnapshot(), ...patch }) }
@@ -116,6 +137,6 @@ export class ForkExportController {
   }
   /** Clear transient download feedback after its Toast settles. */
   dismissNotice(): void { this.set({ notice: null }) }
-  /** Invalidate outstanding reads when the feature unloads. */
-  dispose(): void { this.request++ }
+  /** Invalidate outstanding reads and release pending browser-download URLs when the feature unloads. */
+  dispose(): void { this.request++; this.downloads.abort() }
 }

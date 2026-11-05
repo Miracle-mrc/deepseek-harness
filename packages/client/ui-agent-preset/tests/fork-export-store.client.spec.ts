@@ -123,11 +123,11 @@ describe('source export review', () => {
 })
 
 describe('local source export download', () => {
-  it('downloads the complete JSON and releases the temporary URL after the gesture', async () => {
+  function browser() {
     vi.useFakeTimers()
     vi.stubGlobal('Blob', NodeBlob)
     const objects: Blob[] = []
-    const create = vi.fn((blob: Blob) => { objects.push(blob); return 'blob:source-export' })
+    const create = vi.fn((blob: Blob) => { objects.push(blob); return `blob:source-export-${objects.length}` })
     const revoke = vi.fn()
     const NativeURL = URL
     vi.stubGlobal('URL', class extends NativeURL {
@@ -135,31 +135,124 @@ describe('local source export download', () => {
       static override revokeObjectURL = revoke
     })
     const clicked: { href: string; filename: string }[] = []
-    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
       clicked.push({ href: this.href, filename: this.download })
     })
+    return { objects, create, revoke, clicked, click }
+  }
+
+  it('downloads the complete JSON and retains the URL through a bounded browser-start grace period', async () => {
+    const { objects, revoke, clicked } = browser()
     downloadForkExport(READY)
-    expect(clicked).toEqual([{ href: 'blob:source-export', filename: 'dsh-source-export.json' }])
+    expect(clicked).toEqual([{ href: 'blob:source-export-1', filename: 'dsh-source-export.json' }])
     expect(objects[0]!.type).toBe('application/json')
     expect(await objects[0]!.text()).toBe(`${JSON.stringify(READY, null, 2)}\n`)
     expect(document.querySelector('a[download]')).toBeNull()
+    await vi.advanceTimersByTimeAsync(0)
     expect(revoke).not.toHaveBeenCalled()
-    await vi.runAllTimersAsync()
-    expect(revoke).toHaveBeenCalledExactlyOnceWith('blob:source-export')
+    await vi.advanceTimersByTimeAsync(39_999)
+    expect(revoke).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(revoke).toHaveBeenCalledExactlyOnceWith('blob:source-export-1')
+    expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('releases the temporary URL when the browser refuses the click', async () => {
-    vi.useFakeTimers()
-    const revoke = vi.fn()
-    const NativeURL = URL
-    vi.stubGlobal('URL', class extends NativeURL {
-      static override createObjectURL = () => 'blob:source-export'
-      static override revokeObjectURL = revoke
-    })
-    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => { throw new Error('download denied') })
-    expect(() => { downloadForkExport(READY) }).toThrow('download denied')
-    expect(document.querySelector('a[download]')).toBeNull()
+  it('expires repeated downloads independently and detaches their abort listeners', async () => {
+    const { revoke } = browser()
+    const lifetime = new AbortController()
+    const remove = vi.spyOn(lifetime.signal, 'removeEventListener')
+    downloadForkExport(READY, lifetime.signal)
+    await vi.advanceTimersByTimeAsync(20_000)
+    downloadForkExport(READY, lifetime.signal)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(revoke.mock.calls).toEqual([['blob:source-export-1']])
+    expect(remove).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(revoke.mock.calls).toEqual([['blob:source-export-1'], ['blob:source-export-2']])
+    expect(remove).toHaveBeenCalledTimes(2)
+    expect(vi.getTimerCount()).toBe(0)
+    lifetime.abort()
+    expect(revoke).toHaveBeenCalledTimes(2)
+  })
+
+  it('releases a URL and cancels its timer when the download lifetime ends', async () => {
+    const { revoke } = browser()
+    const lifetime = new AbortController()
+    downloadForkExport(READY, lifetime.signal)
+    lifetime.abort()
+    expect(revoke).toHaveBeenCalledExactlyOnceWith('blob:source-export-1')
+    expect(vi.getTimerCount()).toBe(0)
+    lifetime.abort()
     await vi.runAllTimersAsync()
     expect(revoke).toHaveBeenCalledOnce()
+  })
+
+  it('creates no URL or download after the lifetime has ended', () => {
+    const { create, revoke, click } = browser()
+    const lifetime = new AbortController()
+    lifetime.abort(new Error('feature unloaded'))
+    expect(() => { downloadForkExport(READY, lifetime.signal) }).toThrow('feature unloaded')
+    expect(create).not.toHaveBeenCalled()
+    expect(click).not.toHaveBeenCalled()
+    expect(revoke).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each(['createElement', 'append', 'click'] as const)('releases the URL immediately when %s fails', (operation) => {
+    const { revoke, click } = browser()
+    const lifetime = new AbortController()
+    const remove = vi.spyOn(lifetime.signal, 'removeEventListener')
+    const fail = () => { throw new Error('download denied') }
+    if (operation === 'createElement') vi.spyOn(document, 'createElement').mockImplementationOnce(fail)
+    else if (operation === 'append') vi.spyOn(document.body, 'append').mockImplementationOnce(fail)
+    else click.mockImplementationOnce(fail)
+    expect(() => { downloadForkExport(READY, lifetime.signal) }).toThrow('download denied')
+    expect(document.querySelector('a[download]')).toBeNull()
+    expect(revoke).toHaveBeenCalledExactlyOnceWith('blob:source-export-1')
+    expect(remove).toHaveBeenCalledOnce()
+    expect(vi.getTimerCount()).toBe(0)
+    lifetime.abort()
+    expect(revoke).toHaveBeenCalledOnce()
+  })
+
+  it.each([false, true])('leaves no timer when a click ends its own lifetime (throws: %s)', (throws) => {
+    const { revoke, click } = browser()
+    const lifetime = new AbortController()
+    click.mockImplementationOnce(() => {
+      lifetime.abort()
+      if (throws) throw new Error('feature unloaded')
+    })
+    const download = () => { downloadForkExport(READY, lifetime.signal) }
+    if (throws) expect(download).toThrow('feature unloaded')
+    else download()
+    expect(revoke).toHaveBeenCalledExactlyOnceWith('blob:source-export-1')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('keeps closed-dialog downloads alive and releases every pending URL when the controller unloads', async () => {
+    const { revoke, create } = browser()
+    const prepare = vi.fn(async () => READY)
+    const controller = new ForkExportController(prepare)
+    controller.open()
+    await controller.inspect()
+    controller.review(true)
+    controller.download()
+    await vi.advanceTimersByTimeAsync(10_000)
+    controller.download()
+    controller.close()
+    expect(revoke).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(2)
+    controller.dispose()
+    expect(revoke.mock.calls).toEqual([['blob:source-export-1'], ['blob:source-export-2']])
+    expect(vi.getTimerCount()).toBe(0)
+    controller.dispose()
+    await vi.runAllTimersAsync()
+    expect(revoke).toHaveBeenCalledTimes(2)
+    controller.open()
+    await controller.inspect()
+    controller.review(true)
+    controller.download()
+    expect(create).toHaveBeenCalledTimes(2)
+    expect(controller.store.getSnapshot().notice?.kind).toBe('download-failed')
   })
 })

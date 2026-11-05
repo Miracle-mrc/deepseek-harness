@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { chromium, type Browser } from 'playwright'
+import { chromium, webkit, type Browser } from 'playwright'
 import { expect, it, onTestFailed } from 'vitest'
 import type { SourceExportResult } from '@deepseek-ai/dsh-plugin-manager'
 import {
@@ -15,7 +15,10 @@ const EXPECTED = fileURLToPath(new URL('./expected/creator-source-export', impor
 const MODE = webSnapshotMode()
 const ORIGINAL_SOURCE = 'export const greeting = "Created for my fork"\n'
 
-it('reviews Creator sources, downloads the captured files, and retains usable controls on mobile', async () => {
+it.each([
+  { name: 'Chromium', engine: chromium },
+  { name: 'WebKit', engine: webkit },
+])('$name reviews Creator sources, downloads the captured files, and retains usable controls on mobile', async ({ engine }) => {
   const fixture = await mkdtemp(join(tmpdir(), 'dsh-source-export-web-'))
   const evidence = await mkdtemp(join(tmpdir(), 'dsh-source-export-evidence-'))
   let scaffold: WebScaffold | undefined
@@ -32,23 +35,28 @@ it('reviews Creator sources, downloads the captured files, and retains usable co
       profile: { packages: [{ dir: fixture, enabled: true }] },
       agentPresets: { default: 'standard' },
     })
-    browser = await chromium.launch()
+    browser = await engine.launch()
     const page = await newEnglishPage(browser)
     const tripwire = watchConsole(page)
-    onTestFailed(() => saveFailureShot(page, 'web-e2e-creator-source-export'))
+    onTestFailed(() => saveFailureShot(page, `web-e2e-creator-source-export-${engine.name()}`))
+    const workspaceCwd = scaffold.workspaceCwd
+    const compareAria = async (filename: string, selector: string): Promise<void> => {
+      if (engine !== chromium) return
+      await compareOrRefreshGolden(join(EXPECTED, filename), await captureStableAria(page, selector, workspaceCwd), MODE)
+    }
     await page.goto(scaffold.authenticatedUrl, { waitUntil: 'load' })
     await connectFreshWorkspace(page, scaffold.workspaceCwd)
     expect(scaffold.ctx.agentPresets.defaultId).toBe('standard')
     await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Plugins', exact: true }).click()
     const menuTrigger = page.getByRole('button', { name: 'Choose how to add a plugin', exact: true })
-    await expect.poll(() => menuTrigger.isEnabled()).toBe(true)
+    // Plugin inventory and Creator roster readiness are independent of the workspace composer's readiness.
+    await expect.poll(() => menuTrigger.isEnabled(), { timeout: 30_000 }).toBe(true)
     await menuTrigger.focus()
     await page.keyboard.press('ArrowDown')
     const entry = page.getByRole('menuitem', { name: /^Save to My Fork/ })
-    await expect.poll(() => entry.isEnabled()).toBe(true)
-    await mkdir(EXPECTED, { recursive: true })
-    await compareOrRefreshGolden(join(EXPECTED, 'menu.expected.md'),
-      await captureStableAria(page, '[role="menu"]', scaffold.workspaceCwd), MODE)
+    await expect.poll(() => entry.isEnabled(), { timeout: 30_000 }).toBe(true)
+    if (engine === chromium) await mkdir(EXPECTED, { recursive: true })
+    await compareAria('menu.expected.md', '[role="menu"]')
     await entry.focus()
     await page.keyboard.press('Enter')
     const dialog = page.getByRole('dialog', { name: 'Save to My Fork', exact: true })
@@ -64,8 +72,7 @@ it('reviews Creator sources, downloads the captured files, and retains usable co
     expect(await branch.getAttribute('aria-invalid')).toBe('true')
     expect(await branch.inputValue()).toBe('master')
     expect(await dialog.getByRole('button', { name: 'Download source export', exact: true }).count()).toBe(0)
-    await compareOrRefreshGolden(join(EXPECTED, 'validation.expected.md'),
-      await captureStableAria(page, '[role="dialog"]', scaffold.workspaceCwd), MODE)
+    await compareAria('validation.expected.md', '[role="dialog"]')
 
     await branch.fill('creator-saved')
     const responsePromise = page.waitForResponse('**/api/pluginManager/exportSource')
@@ -83,8 +90,7 @@ it('reviews Creator sources, downloads the captured files, and retains usable co
     expect(await sourceSummary.locator('..').locator('pre').textContent()).toBe(ORIGINAL_SOURCE)
     const downloadButton = dialog.getByRole('button', { name: 'Download source export', exact: true })
     expect(await downloadButton.isEnabled()).toBe(false)
-    await compareOrRefreshGolden(join(EXPECTED, 'preview.expected.md'),
-      await captureStableAria(page, '[role="dialog"]', scaffold.workspaceCwd), MODE)
+    await compareAria('preview.expected.md', '[role="dialog"]')
     await page.screenshot({ path: join(evidence, 'desktop.png') })
     await page.emulateMedia({ colorScheme: 'dark' })
     await expect.poll(() => page.locator('body').evaluate(element => element.hasAttribute('data-ds-dark-theme'))).toBe(true)
@@ -102,8 +108,7 @@ it('reviews Creator sources, downloads the captured files, and retains usable co
         && controls.every(control => control.left >= bounds.left && control.right <= bounds.right)
     })
     expect(fits).toBe(true)
-    await compareOrRefreshGolden(join(EXPECTED, 'mobile.expected.md'),
-      await captureStableAria(page, '[role="dialog"]', scaffold.workspaceCwd), MODE)
+    await compareAria('mobile.expected.md', '[role="dialog"]')
     await page.screenshot({ path: join(evidence, 'mobile.png') })
 
     await dialog.getByRole('checkbox', { name: 'I reviewed every file for private information', exact: true }).check()
