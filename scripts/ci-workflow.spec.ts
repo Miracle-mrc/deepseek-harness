@@ -1345,7 +1345,7 @@ describe('Runtime and LLM e2e Blacksmith routing', () => {
     }
   })
 
-  it('keeps native release and dispatch builders hosted while routing x64 CI by platform', () => {
+  it('pins only fork ARM builds to macOS 15 while preserving release, dispatch, and x64 CI routing', () => {
     const workflow = loadWorkflow('.github/workflows/build-exe-for-python-sdk.yml')
     const build = workflowJob(workflow, 'build')
     for (const [target, runner, variable, blacksmith, releaseRunner] of [
@@ -1355,6 +1355,7 @@ describe('Runtime and LLM e2e Blacksmith routing', () => {
       ['node24-macos-arm64', 'macos-latest', 'DSH_CI_FAILOVER_LINUX', 'macos-latest', 'macos-15-xlarge'],
       ['node24-macos-x64', 'macos-15-intel', 'DSH_CI_FAILOVER_LINUX', 'macos-15-intel', 'macos-15-large'],
     ] as const) {
+      const forkRunner = target === 'node24-macos-arm64' ? 'macos-15' : runner
       for (const repository of ['Miracle-mrc/deepseek-harness', 'deepseek-harness/deepseek-harness', 'another-owner/deepseek-harness', 'Miracle-mrc/another-repository']) {
         for (const ci of [false, true]) {
           for (const release of [false, true]) {
@@ -1363,7 +1364,7 @@ describe('Runtime and LLM e2e Blacksmith routing', () => {
               expect(evaluateRunsOn(build['runs-on'], {
                 github: { repository }, inputs: { ci, release }, vars, matrix: { target, runner },
               }), `${repository} ${target} ci=${ci} release=${release} mode=${mode}`)
-                .toBe(repository === 'Miracle-mrc/deepseek-harness' ? runner : release ? releaseRunner : ci && mode === 'blacksmith' ? blacksmith : runner)
+                .toBe(repository === 'Miracle-mrc/deepseek-harness' ? forkRunner : release ? releaseRunner : ci && mode === 'blacksmith' ? blacksmith : runner)
             }
           }
         }

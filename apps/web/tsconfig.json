@@ -94,6 +94,7 @@
     "tests/plugin-config.e2e.ts",
     "tests/input-plugin-extensions.e2e.ts",
     "tests/plugin-manager.e2e.ts",
+    "tests/creator-source-export.e2e.ts",
     "tests/plugin-sticky-motion.e2e.ts",
     "tests/entry-customization.e2e.ts",
     "tests/cua-optin.e2e.ts",

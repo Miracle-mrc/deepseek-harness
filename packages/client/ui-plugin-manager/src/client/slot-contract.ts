@@ -108,7 +108,7 @@ export interface PluginTabProps {
 
 /** Add-plugin menu actions, independent of any selected bundle or Session. */
 export interface PluginAddActionsProps {
-  /** Close the add-plugin menu before starting the contributed action. */
+  /** Close the add-plugin menu and focus its arrow before starting the contributed action. */
   readonly onDismiss: () => void
 }
 

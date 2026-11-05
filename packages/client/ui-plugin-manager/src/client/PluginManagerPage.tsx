@@ -12,7 +12,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { PluginInstallFailureKind, Registry } from '@deepseek-ai/dsh-api-remotes/client'
 import {
-  Button, IconCheckCircleFillRegular, IconChevronDownOutlineRegular, IconChevronLeftOutlineMedium,
+  Button, focusWithoutRing, IconCheckCircleFillRegular, IconChevronDownOutlineRegular, IconChevronLeftOutlineMedium,
   IconChevronRightOutlineRegular, IconCloseOutlineMedium,
   IconDownloadOutlineRegular, IconInfoOutlineRegular, IconPlusOutlineRegular, IconRefreshOutlineRegular, IconTrashOutlineRegular,
   IconWarningOutlineRegular, Input, Menu, MenuItemButton, Modal, pointerModality,
@@ -64,7 +64,12 @@ function AddPluginMenu({ t, disabled, openInstall, renderSlot }: {
   readonly renderSlot: RenderConfig
 }): ReactNode {
   const [open, setOpen] = useState(false)
+  const trigger = useRef<HTMLButtonElement>(null)
   const onDismiss = (): void => { setOpen(false) }
+  const dismissBeforeAction = (): void => {
+    onDismiss()
+    if (trigger.current !== null) focusWithoutRing(trigger.current)
+  }
   return (
     <span className={css.addGroup} role="group" aria-label={t('addPlugin')}>
       <Tooltip label={t('addPlugin')} side="bottom" delayMs={500} focusDelayMs={500} portal disabled={disabled}>
@@ -75,7 +80,7 @@ function AddPluginMenu({ t, disabled, openInstall, renderSlot }: {
       </Tooltip>
       <Menu open={open} onClose={onDismiss} align="end" portal autoFocus listClassName={css.addMenu}
         anchor={(
-          <Button variant="primary" size="sm" className={css.addMore}
+          <Button ref={trigger} variant="primary" size="sm" className={css.addMore}
             disabled={disabled} aria-label={t('chooseAddMethod')} aria-haspopup="menu" aria-expanded={open}
             onClick={() => { setOpen(value => !value) }}
             onKeyDown={(event) => {
@@ -90,7 +95,7 @@ function AddPluginMenu({ t, disabled, openInstall, renderSlot }: {
             <span className={css.addMenuDescription}>{t('installExistingDescription')}</span>
           </span>
         </MenuItemButton>
-        {renderSlot('plugins.add.actions', { onDismiss })}
+        {renderSlot('plugins.add.actions', { onDismiss: dismissBeforeAction })}
       </Menu>
     </span>
   )

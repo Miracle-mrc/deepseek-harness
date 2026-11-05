@@ -134,7 +134,7 @@ The Host entry exposes `pluginRegistryProbe.fastest()` through the generated Rem
 
 The browser plugin registers the `plugins` sidebar entry and its `main` panel through `ctx.slots.inject()`, so both follow late slot declaration, locale changes and teardown. The page is global and belongs to no Session. Display text comes from package metadata and the page's dictionary.
 
-The add control reuses `Button`, `Menu`, and `MenuItemButton`. Both installation actions call the same `openInstall` callback and use `InstallDialog` and `PluginManagerController`. The root-scoped list slot `plugins.add.actions` accepts contributed `MenuItemButton` rows after the install action; each contribution receives an `onDismiss()` callback to close the menu before starting its action.
+The add control reuses `Button`, `Menu`, and `MenuItemButton`. Both installation actions call the same `openInstall` callback and use `InstallDialog` and `PluginManagerController`. The root-scoped list slot `plugins.add.actions` accepts contributed `MenuItemButton` rows after the install action; each contribution receives an `onDismiss()` callback to close the menu and focus its arrow before starting its action, so a dialog can return focus there on closure.
 
 While the Plugins page has access, other Client plugins can read `pluginNavigation` and call `openList()` to select the Plugins main list, including when a detail page is already open. This browsing action preserves the current Session and opens no installation dialog. Installation remains an explicit action on the Plugins page.
 

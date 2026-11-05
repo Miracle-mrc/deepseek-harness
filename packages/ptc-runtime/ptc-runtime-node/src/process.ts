@@ -83,6 +83,16 @@ export async function runNodeMain(
         },
       }
       current = evaluation
+      // A pending control write must finish before code can block the event loop and queue its first log behind it.
+      try {
+        await new Promise<void>((resolve, reject) => {
+          stream.write('', (error) => { if (error) reject(error); else resolve() })
+        })
+      } catch (error: unknown) {
+        stream.destroy(error as Error)
+        return await completion.promise
+      }
+      if (connection.$closed) return await completion.promise
       context.run(evaluation, () => {
         try {
           processState.chdir(cwd)

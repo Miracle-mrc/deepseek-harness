@@ -7,20 +7,36 @@ import { runNodeMain, type ProgramProcess } from '../src/process.ts'
 import type { HostMethods, ProgramBootData, ProgramMethods } from '../src/protocol.ts'
 import { decodePtcJsonWire, encodePtcJsonWire } from '../src/json-wire.ts'
 
-function endpoints() {
+function endpoints(holdReadyWrite = false) {
   const first = new PassThrough()
   const second = new PassThrough()
   const child = Duplex.from({ readable: first, writable: second })
   const host = Duplex.from({ readable: second, writable: first })
+  const readyWrite = Promise.withResolvers<() => void>()
+  if (holdReadyWrite) {
+    // Readiness bytes can arrive while their Writable callback still owns the outgoing queue.
+    const write = child._write.bind(child)
+    child._write = (chunk, encoding, callback) => {
+      child._write = write
+      write(chunk, encoding, (error) => {
+        let pending = true
+        readyWrite.resolve(() => {
+          if (!pending) return
+          pending = false
+          callback(error)
+        })
+      })
+    }
+  }
   child.on('error', () => {})
   host.on('error', () => {})
   onTestFinished(() => { child.destroy(); host.destroy() })
-  return { child, host }
+  return { child, host, readyWrite: readyWrite.promise }
 }
 function processState(): ProgramProcess { return { env: { FIXTURE_SECRET: 'test' }, stdout: { write: () => true }, stderr: { write: () => true }, exitCode: undefined, chdir: () => {} } }
 
-async function setup(limit = 4096, namespaces: ProgramBootData['namespaces'] = [{ global: 'tools', names: ['echo'] }]) {
-  const { child, host } = endpoints()
+async function setup(limit = 4096, namespaces: ProgramBootData['namespaces'] = [{ global: 'tools', names: ['echo'] }], holdReadyWrite = false) {
+  const { child, host, readyWrite } = endpoints(holdReadyWrite)
   const state = processState()
   const nativeEnvironment = state.env
   Object.assign(nativeEnvironment, { SystemRoot: 'C:\\Windows', PATH: '/native/bin', TMP: 'C:\\sandbox-temp', TEMP: 'C:\\sandbox-temp' })
@@ -34,14 +50,103 @@ async function setup(limit = 4096, namespaces: ProgramBootData['namespaces'] = [
   }
   const peer = createProcessRpc<ProgramMethods, HostMethods>(host, limit, methods, [], () => {})
   const main = runNodeMain(child, limit, state)
-  onTestFinished(async () => { peer.$close(); child.destroy(); await main })
+  let releaseReady = () => {}
+  onTestFinished(async () => { peer.$close(); child.destroy(); releaseReady(); await main })
   await ready.promise
+  if (holdReadyWrite) releaseReady = await readyWrite
   const run = (code: string, maxOutputBytes = 1024, programFormat?: PtcProgramFormat) => peer.run('/', {
     code, ...programFormat === undefined ? {} : { programFormat },
     retainsState: false, namespaces, maxOutputBytes,
   })
-  return { child, host, state, nativeEnvironment, methods, peer, main, logs, run }
+  return { child, host, state, nativeEnvironment, methods, peer, main, logs, run, releaseReady }
 }
+
+it('waits for the preceding control write to complete before evaluating a program', async () => {
+  const h = await setup(4096, undefined, true)
+  const chdir = vi.spyOn(h.state, 'chdir')
+  const received = Promise.withResolvers<undefined>()
+  h.child.once('data', () => { received.resolve(undefined) })
+  const active = h.run('console.log("after flush"); return 42')
+  try {
+    await received.promise
+    expect(chdir).not.toHaveBeenCalled()
+    expect(h.logs).toEqual([])
+    h.releaseReady()
+    expect(decodePtcJsonWire((await active).value)).toBe(42)
+    expect(chdir).toHaveBeenCalledExactlyOnceWith('/')
+    expect(h.logs).toEqual(['after flush'])
+  } finally {
+    h.releaseReady()
+    await active.catch((_error: unknown) => {
+      // RPC failures are asserted by the test; cleanup only waits for settlement.
+    })
+  }
+})
+
+it('does not evaluate queued code after the host closes during a pending control write', async () => {
+  const h = await setup(4096, undefined, true)
+  const chdir = vi.spyOn(h.state, 'chdir')
+  const received = Promise.withResolvers<undefined>()
+  h.child.once('data', () => { received.resolve(undefined) })
+  const active = expect(h.run('console.log("must not run"); return 42')).rejects.toThrow()
+  await received.promise
+  h.peer.$close()
+  await h.main
+  h.releaseReady()
+  await nextTurn()
+  await active
+  expect(chdir).not.toHaveBeenCalled()
+  expect(h.logs).toEqual([])
+  expect(h.state.exitCode).toBe(1)
+})
+
+it('does not start any queued program after the control endpoint closes', async () => {
+  const h = await setup()
+  const chdir = vi.spyOn(h.state, 'chdir')
+  const pending = Promise.withResolvers<undefined>()
+  const callbacks: ((error?: Error | null) => void)[] = []
+  const write = h.child.write.bind(h.child)
+  vi.spyOn(h.child, 'write').mockImplementation((...args) => {
+    const callback = [args[1], args[2]].find((value): value is (error?: Error | null) => void => typeof value === 'function')
+    if (callback === undefined) return write(...args)
+    callbacks.push(callback)
+    if (callbacks.length === 2) pending.resolve(undefined)
+    return true
+  })
+  const first = expect(h.run('return 1')).rejects.toThrow()
+  const second = expect(h.run('return 2')).rejects.toThrow()
+  await pending.promise
+  callbacks.forEach((callback) => { callback() })
+  h.child.emit('close')
+  await h.main
+  await Promise.all([first, second])
+  expect(chdir).not.toHaveBeenCalled()
+  expect(h.logs).toEqual([])
+  expect(h.state.exitCode).toBe(1)
+})
+
+it.each(['callback', 'throw'] as const)('closes without evaluating when the control flush fails by %s', async (failure) => {
+  const h = await setup()
+  const chdir = vi.spyOn(h.state, 'chdir')
+  const received = Promise.withResolvers<undefined>()
+  h.child.once('data', () => { received.resolve(undefined) })
+  const error = new Error('control flush failed')
+  vi.spyOn(h.child, 'write').mockImplementationOnce((...args) => {
+    if (failure === 'throw') throw error
+    const callback = [args[1], args[2]].find((value): value is (error?: Error | null) => void => typeof value === 'function')
+    callback?.(error)
+    return false
+  })
+  const active = expect(h.run('return 42')).rejects.toThrow()
+  try {
+    await received.promise
+    expect(chdir).not.toHaveBeenCalled()
+    await active
+    await h.main
+    expect(h.logs).toEqual([])
+    expect(h.state.exitCode).toBe(1)
+  } finally { h.peer.$close(); await h.main; await active }
+})
 
 it('clears the environment and returns a binding result after captured output', async () => {
   const h = await setup()

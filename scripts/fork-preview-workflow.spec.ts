@@ -59,7 +59,7 @@ describe('fork preview workflows', () => {
     expect(desktop['runs-on']).toBe('${{ matrix.runner }}')
     expect(record(record(desktop.strategy).matrix).include).toEqual([
       { target: 'win-x64', command: 'package:desktop:win:x64:unsigned', runner: 'windows-2025', shell: 'pwsh' },
-      { target: 'mac-arm64', command: 'package:desktop:mac:arm64:unsigned', runner: 'macos-latest', shell: 'bash' },
+      { target: 'mac-arm64', command: 'package:desktop:mac:arm64:unsigned', runner: 'macos-15', shell: 'bash' },
       { target: 'mac-x64', command: 'package:desktop:mac:x64:unsigned', runner: 'macos-15-intel', shell: 'bash' },
     ])
     expect(record(record(desktop.defaults).run).shell).toBe('${{ matrix.shell }}')

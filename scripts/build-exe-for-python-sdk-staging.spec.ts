@@ -1,10 +1,12 @@
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
+import { load } from 'js-yaml'
 import { afterEach, expect, it } from 'vitest'
-import { deduplicateStagedWorkspacePackages, materializeStagedLinks } from './build-exe-for-python-sdk-staging.ts'
+import { assertStagedBuildsApproved, deduplicateStagedWorkspacePackages, materializeStagedLinks, relocateStagedBuildApprovals } from './build-exe-for-python-sdk-staging.ts'
 
 const temporaryDirectories: string[] = []
 const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir'
@@ -16,7 +18,8 @@ afterEach(async () => {
 async function fixture(prefix: string) {
   const workspace = await mkdtemp(join(tmpdir(), prefix))
   temporaryDirectories.push(workspace)
-  return workspace
+  // File dependency identities use canonical paths even when the temp directory is an alias.
+  return realpath(workspace)
 }
 
 /** List every symbolic link below a directory. */
@@ -118,4 +121,74 @@ it('rejects invalid deployment metadata before removing any package', async () =
     expect(existsSync(duplicate)).toBe(true)
     expect(existsSync(outside)).toBe(true)
   }
+})
+
+it('leaves a deployment with no build approvals unchanged', async () => {
+  const workspace = await fixture('dsh-python-staging-no-build-approvals-')
+  const content = 'packages: [.]\n'
+  const file = join(workspace, 'pnpm-workspace.yaml')
+  await writeFile(file, content)
+  await relocateStagedBuildApprovals(workspace, workspace)
+  expect(await readFile(file, 'utf8')).toBe(content)
+})
+
+it('rejects conflicting exact build selectors before replacing deployment settings', async () => {
+  const workspace = await fixture('dsh-python-staging-build-conflict-')
+  const source = join(workspace, 'source')
+  await mkdir(source)
+  const content = JSON.stringify({ allowBuilds: {
+    'fixture@file:source': true,
+    [`fixture@${pathToFileURL(source).href}`]: false,
+  } })
+  const file = join(workspace, 'pnpm-workspace.yaml')
+  await writeFile(file, content)
+  await expect(relocateStagedBuildApprovals(workspace, workspace)).rejects.toThrow('conflicting build approvals')
+  expect(await readFile(file, 'utf8')).toBe(content)
+})
+
+it('preserves absolute build selectors and non-file decisions', async () => {
+  const workspace = await fixture('dsh-python-staging-absolute-approvals-')
+  const approvals = {
+    'fixture@file:/unchanged/source': true,
+    'windows@file:C:\\unchanged\\source': false,
+    'url@file:///unchanged/source': true,
+    'registry@1.0.0': false,
+    annotation: 'reviewed separately',
+  }
+  const file = join(workspace, 'pnpm-workspace.yaml')
+  await writeFile(file, JSON.stringify({ allowBuilds: approvals }))
+  await relocateStagedBuildApprovals(workspace, workspace)
+  expect(load(await readFile(file, 'utf8'))).toEqual({ allowBuilds: approvals })
+})
+
+it.each(['source(peer@1)', 'source#revision'])('refuses qualified file selectors before changing decisions: %s', async (path) => {
+  const workspace = await fixture('dsh-python-staging-qualified-approvals-')
+  const content = JSON.stringify({ allowBuilds: { [`fixture@file:${path}`]: true } })
+  const file = join(workspace, 'pnpm-workspace.yaml')
+  await writeFile(file, content)
+  await expect(relocateStagedBuildApprovals(workspace, workspace)).rejects.toThrow('qualified file build selectors')
+  expect(await readFile(file, 'utf8')).toBe(content)
+})
+
+it.each([null, [], { allowBuilds: null }, { allowBuilds: [] }, { allowBuilds: { fixture: 1 } }])('refuses malformed deployment approvals: %j', async (value) => {
+  const workspace = await fixture('dsh-python-staging-invalid-build-approvals-')
+  const content = JSON.stringify(value)
+  const file = join(workspace, 'pnpm-workspace.yaml')
+  await writeFile(file, content)
+  await expect(relocateStagedBuildApprovals(workspace, workspace)).rejects.toThrow('pnpm-workspace.yaml')
+  expect(await readFile(file, 'utf8')).toBe(content)
+})
+
+it.each([{}, { ignoredBuilds: [] }])('accepts pnpm metadata with no unapproved dependency builds: %j', async (value) => {
+  const workspace = await fixture('dsh-python-staging-approved-builds-')
+  await mkdir(join(workspace, 'node_modules'))
+  await writeFile(join(workspace, 'node_modules', '.modules.yaml'), JSON.stringify(value))
+  await expect(assertStagedBuildsApproved(workspace)).resolves.toBeUndefined()
+})
+
+it.each([null, [], { ignoredBuilds: null }, { ignoredBuilds: 'fixture' }, { ignoredBuilds: [1] }, { ignoredBuilds: [''] }])('rejects malformed dependency build metadata: %j', async (value) => {
+  const workspace = await fixture('dsh-python-staging-invalid-builds-')
+  await mkdir(join(workspace, 'node_modules'))
+  await writeFile(join(workspace, 'node_modules', '.modules.yaml'), JSON.stringify(value))
+  await expect(assertStagedBuildsApproved(workspace)).rejects.toThrow('.modules.yaml')
 })

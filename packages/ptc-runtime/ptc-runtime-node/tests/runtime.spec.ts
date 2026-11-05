@@ -169,8 +169,38 @@ describe('Node program process', () => {
   })
 
   it('retains console output emitted immediately before a non-yielding program', async () => {
-    const { run } = await setup({ timeoutMs: 1000, graceMs: 50 })
-    const result = await run({ program: 'console.log("before hot loop"); for (;;) {}', bindings: [] })
+    const { ctx, run } = await setup({ timeoutMs: 1000, graceMs: 50 })
+    const entered = Promise.withResolvers<undefined>()
+    const controller = new AbortController()
+    const spawn = ctx.subprocess.spawn.bind(ctx.subprocess)
+    const observed = vi.spyOn(ctx.subprocess, 'spawn').mockImplementationOnce((spec) => {
+      const handle = spawn(spec)
+      let output = ''
+      const onData = (chunk: Buffer | string): void => {
+        output += String(chunk)
+        if (output.includes('"m":"log"') && output.includes('"a":["before hot loop"]')) entered.resolve(undefined)
+      }
+      handle.control?.on('data', onData)
+      onTestFinished(() => { handle.control?.off('data', onData) })
+      return handle
+    })
+    onTestFinished(() => { observed.mockRestore() })
+    // Startup shares the elapsed deadline; wait for real output before advancing this fixture's clock.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    onTestFinished(() => { vi.useRealTimers() })
+    const active = run({
+      program: 'console.log("before hot loop"); for (;;) {}', bindings: [],
+      signal: controller.signal,
+    })
+    onTestFinished(async () => { vi.useRealTimers(); controller.abort(); await active })
+    expect(await Promise.race([
+      entered.promise.then(() => ({ kind: 'entered' })),
+      active.then(result => ({ kind: 'settled', result })),
+    ])).toEqual({ kind: 'entered' })
+    vi.advanceTimersByTime(1000)
+    // Process termination must own real timers for its asynchronous grace wait.
+    vi.useRealTimers()
+    const result = await active
     expect(result.error?.kind).toBe('timeout')
     expect(result.logs).toEqual(['before hot loop'])
   })

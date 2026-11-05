@@ -444,6 +444,38 @@ describe('PluginManagerPage', () => {
     expect(document.activeElement).toBe(screen.getByRole('textbox', { name: en.installSpecLabel }))
   })
 
+  it('returns focus before a contributed action opens its dialog and leaves outside-click focus alone', () => {
+    const focusedAtAction: (Element | null)[] = []
+    let dismiss = (): void => { throw new Error('the menu contribution has not rendered') }
+    renderTab({}, {}, {
+      'plugins.add.actions:': (_view, owner) => {
+        dismiss = (owner as PluginAddActionsProps).onDismiss
+        return <MenuItemButton onSelect={() => {
+          dismiss()
+          focusedAtAction.push(document.activeElement)
+        }}>Review source</MenuItemButton>
+      },
+    })
+    const trigger = screen.getByRole('button', { name: en.chooseAddMethod })
+    trigger.focus()
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+    const review = screen.getByRole('menuitem', { name: 'Review source' })
+    review.focus()
+    fireEvent.click(review)
+    expect(focusedAtAction).toEqual([trigger])
+    expect(screen.queryByRole('menu')).toBeNull()
+
+    fireEvent.click(trigger)
+    const refresh = screen.getByRole('button', { name: en.refresh })
+    refresh.focus()
+    fireEvent.pointerDown(refresh, { pointerType: 'mouse', button: 0 })
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(document.activeElement).toBe(refresh)
+    expect(focusedAtAction).toEqual([trigger])
+    cleanup()
+    expect(() => { dismiss() }).not.toThrow()
+  })
+
   it('keeps primary installation and mouse-selected creation on separate buttons', () => {
     const createPlugin = vi.fn()
     const { actions } = renderTab({}, {}, {

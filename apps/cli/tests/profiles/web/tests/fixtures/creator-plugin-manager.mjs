@@ -1,11 +1,13 @@
 /** Test-only IPC assertions over real Creator presets and profile management. */
 import { executeModelToolFixture } from '@deepseek-ai/dsh-tool-testkit'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 
-export const inject = ['agents', 'agentPresets', 'tools', 'pluginManager', 'permissionPresets']
+export const inject = ['agents', 'agentPresets', 'tools', 'pluginManager', 'permissionPresets', 'profileContext']
 
 export function apply(ctx, config) {
   const receive = message => {
-    if (message !== 'initial' && message !== 'restart') return
+    if (message !== 'initial' && message !== 'restart' && message !== 'restored') return
     void inspect(message).then(result => process.send({ result }), error => process.send({ error: String(error.stack ?? error) }))
   }
   ctx.effect(() => {
@@ -32,6 +34,11 @@ export function apply(ctx, config) {
     try {
       const first = await make(`${phase}-first`)
       const before = names(first)
+      if (phase === 'restored') {
+        const ping = await executeModelToolFixture(ctx, { name: 'mcp__demo__ping', arguments: {}, agent: first,
+          callId: `${phase}-ping`, signal: new AbortController().signal })
+        return { before, result: await ctx.pluginManager.listBundles(), ping, restoredProbe: ctx.get('creatorExportSourceProbe') }
+      }
       const manage = args => executeModelToolFixture(ctx, { name: 'plugin_manager', arguments: args, agent: first,
         callId: `${phase}-manage`, signal: new AbortController().signal })
       ctx.permissionPresets.set(first.session, 'workspace-write')
@@ -49,9 +56,15 @@ export function apply(ctx, config) {
       const other = names(second)
       const ping = await executeModelToolFixture(ctx, { name: 'mcp__demo__ping', arguments: {}, agent: first,
         callId: `${phase}-ping`, signal: new AbortController().signal })
+      const sources = [join(ctx.profileContext.dir, 'package.json'), ctx.profileContext.patchPath,
+        ...['package.json', 'cordis.patch.yml', 'probe.mjs'].map(name => join(config.bundle, name))]
+      const beforeExport = await Promise.all(sources.map(path => readFile(path, 'utf8')))
+      const sourceExport = await ctx.pluginManager.exportSource({ repository: 'example/source-export-fixture', branch: 'creator/saved' })
+      const afterExport = await Promise.all(sources.map(path => readFile(path, 'utf8')))
+      const exportUnchanged = beforeExport.every((content, index) => content === afterExport[index])
       const removed = phase === 'restart'
         ? JSON.parse((await manage({ action: 'remove_bundle', target: '@test/creator-mcp' })).value) : undefined
-      return { approvals, permission: ctx.permissionPresets.current(first.session), before, denied, afterDenied, bundlesAfterDenied, result, after, other, ping, removed, remaining: names(first) }
+      return { approvals, permission: ctx.permissionPresets.current(first.session), before, denied, afterDenied, bundlesAfterDenied, result, after, other, ping, sourceExport, exportUnchanged, removed, remaining: names(first) }
     } finally {
       disposeApproval()
       activeSession?.append('turn/end', { turn: 1, reason: { kind: 'completed' } })

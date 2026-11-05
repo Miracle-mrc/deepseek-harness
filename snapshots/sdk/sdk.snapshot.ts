@@ -173,6 +173,9 @@ const SDK_ASSERTIONS: Readonly<Record<string, SdkAssertions>> = {
   'subagent-fork-in-process': {
     patches: [fileURLToPath(new URL('./subagent-spawn-in-process/runtime.cordis.yml', import.meta.url))],
   },
+  'subagent-list-agents': {
+    patches: [fileURLToPath(new URL('./subagent-list-agents/runtime.cordis.yml', import.meta.url))],
+  },
   'subagent-mixed': {
     patches: [fileURLToPath(new URL('./subagent-spawn-in-process/runtime.cordis.yml', import.meta.url))],
   },

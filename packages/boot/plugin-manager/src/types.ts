@@ -25,6 +25,53 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
 /** Reasons a profile control cannot modify its target. */
 export type ReadOnlyReason = 'management-required' | 'unaddressable'
 
+/** Repository slug and non-default branch recorded for a manually reviewed local source export; neither is changed. */
+export interface SourceExportRequest {
+  readonly repository: string
+  readonly branch: string
+}
+
+/** A refusal that returns no configuration or source content. */
+export type SourceExportIssueCode =
+  | 'invalid-repository'
+  | 'invalid-branch'
+  | 'profile-unavailable'
+  | 'unsafe-path'
+  | 'source-unavailable'
+  | 'unsupported-source'
+  | 'secret-suspected'
+  | 'source-changed'
+  | 'too-large'
+
+/** An export refusal naming only its file within the proposed export. */
+export interface SourceExportIssue {
+  readonly code: SourceExportIssueCode
+  readonly path?: string
+}
+
+/** A UTF-8 file below the export root, with canonical portable relative path segments. */
+export interface SourceExportFile {
+  readonly path: string
+  readonly content: string
+}
+
+/**
+ * A captured file map for manual review and extraction. Preparation never writes, installs, runs code, or changes Git.
+ * Credential stores, environment files, home patches, and invocation overlays are excluded. Secret screening is
+ * conservative and cannot establish that arbitrary source or configuration is free of secrets; review remains required.
+ */
+export type SourceExportResult =
+  | {
+    readonly status: 'ready'
+    readonly formatVersion: 1
+    readonly repository: string
+    readonly branch: string
+    readonly profile: string
+    readonly files: readonly SourceExportFile[]
+    readonly reviewRequired: true
+  }
+  | { readonly status: 'blocked'; readonly issues: readonly SourceExportIssue[] }
+
 /** A package whose declared DSH requirements reject the running DSH version, without an exemption for the exact pair. */
 export interface IncompatiblePlugin {
   name: string

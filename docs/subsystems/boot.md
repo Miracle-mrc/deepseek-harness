@@ -8,6 +8,8 @@ The [boot package group](../../packages/boot/README.md) owns launcher-provided p
 
 ## Management records
 
+`SourceExportRequest` names a repository slug and a branch other than `main` or `master`; these are labels without Git or network effects. `SourceExportResult` is either a `ready` versioned UTF-8 file map with `reviewRequired: true`, or `blocked` issues without captured source. Each file has a portable relative `path` and `content`. The [source export reference](../../packages/boot/plugin-manager/README.md#source-export) owns capture restrictions and restoration.
+
 `PluginEntryId` identifies one Loader entry; callers obtain it from `listPlugins` rather than constructing a patch id.
 
 `PluginInfo` carries module identity, effective enablement, fiber phase and optional display `meta`, plus a unique `patchId` or a `readOnlyReason`.
@@ -217,6 +219,14 @@ Manage profile files and apply their declared reload lifecycle.
  *   `plugin-manager/detail-unavailable`.
  */
 @Remote async readBundleDetail(name: string, language: string, options?: { npmFileSources?: NpmFileSource[] }): Promise<BundleDetail>
+
+/**
+ * Capture this profile and local plugin source for a reviewed browser download without changing files or Git.
+ * Home patches, invocation overlays, credentials, and environment files are excluded; arbitrary source still needs review.
+ * @param request Repository slug and a branch other than main or master, recorded as metadata only.
+ * @returns A captured UTF-8 file map requiring manual review, or a refusal with no configuration or source content.
+ */
+@Remote async exportSource(request: SourceExportRequest): Promise<SourceExportResult>
 
 /** Read exact plugin-version exemptions saved in this profile.
  * @returns Accepted package-name@version keys with the runtime versions they may run on, and any
