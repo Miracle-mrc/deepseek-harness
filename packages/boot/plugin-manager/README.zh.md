@@ -80,7 +80,7 @@ pnpm 11 拦下依赖脚本时，失败的安装在 `pendingBuilds` 里报告 pro
 
 检测会检查 URI 中的凭据用户信息、敏感 URL 查询或片段参数、不透明的 token 类参数值、常见字面量赋值和已知凭据标记。检测也会检查通过标准 URL 参数解码得到的查询或片段值中的嵌套 URL；嵌套过深时拒绝导出。允许 `lang=vi` 等公开 URL 参数。普通 JSON 数据可包含任意有效 JSON 值；包清单仍须为对象，捕获的源文件字节保持不变。精确的 `!!js process.env.VARIABLE` 引用保持惰性并予以保留。启发式检测可能遗漏编码、计算生成或未知格式的凭据，也可能拒绝无害数据；发布或执行前必须逐一审查文件。
 
-浏览器下载的内容与显示的预览完全一致。仓库和分支值仅为目标标签；操作不检查访问权限，也不发布文件。Liveshare 查看者无法访问源码导出。[Creator 指南](../../../docs/user/develop/practice/dynamic-cordis.zh.md#save-to-my-fork) 介绍如何提取到新目录、人工进行 Git 审查，以及通过常规 profile 启动器恢复。每台机器都必须单独配置凭据。
+浏览器下载的内容与显示的预览完全一致。仓库和分支值仅为目标标签；操作不检查访问权限，也不发布文件。拒绝保留名称 `HEAD`，以及任意大小写的 `main` 和 `master`。Liveshare 查看者无法访问源码导出。[Creator 指南](../../../docs/user/develop/practice/dynamic-cordis.zh.md#save-to-my-fork) 介绍如何提取到新目录、人工进行 Git 审查，以及通过常规 profile 启动器恢复。每台机器都必须单独配置凭据。
 
 <a id="version-compatibility-and-exemptions"></a>
 ### 版本兼容性与豁免

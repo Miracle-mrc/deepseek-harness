@@ -53,7 +53,8 @@ function validRepository(value: string): boolean {
 }
 
 function validBranch(value: string): boolean {
-  return value !== '' && !['main', 'master', '@'].includes(value.toLowerCase()) && !value.startsWith('-') && !value.startsWith('refs/')
+  return value !== '' && value !== 'HEAD' && !['main', 'master', '@'].includes(value.toLowerCase())
+    && !value.startsWith('-') && !value.startsWith('refs/')
     && !value.endsWith('/') && !value.endsWith('.') && !value.includes('//') && !value.includes('..') && !value.includes('@{')
     && !/[\s~^:?*\[\\]/u.test(value) && !CONTROL_CHARACTERS.test(value)
     && value.split('/').every(part => part !== '' && !part.startsWith('.') && !part.toLowerCase().endsWith('.lock'))
@@ -64,7 +65,7 @@ function validateFiles(archive: unknown): CreatorExportFile[] {
     invalid('The download is not a supported ready source export')
   }
   if (typeof archive.repository !== 'string' || !validRepository(archive.repository)) invalid('The export repository is invalid')
-  if (typeof archive.branch !== 'string' || !validBranch(archive.branch)) invalid('The export branch must name a branch other than main or master')
+  if (typeof archive.branch !== 'string' || !validBranch(archive.branch)) invalid('The export branch must name a branch other than HEAD, main, or master')
   if (typeof archive.profile !== 'string' || archive.profile.trim() === '' || CONTROL_CHARACTERS.test(archive.profile)) invalid('The source profile is invalid')
   if (!Array.isArray(archive.files) || archive.files.length < 4 || archive.files.length > MAX_FILES) invalid('The export file count is invalid')
 

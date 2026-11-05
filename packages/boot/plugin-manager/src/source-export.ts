@@ -67,7 +67,7 @@ function repository(value: string): string | undefined {
 
 function branch(value: string): string | undefined {
   const text = value.trim()
-  return text !== '' && !/^(?:master|main)$/i.test(text) && text !== '@' && !/^[-/]|^refs\//u.test(text)
+  return text !== '' && text !== 'HEAD' && !/^(?:master|main)$/i.test(text) && text !== '@' && !/^[-/]|^refs\//u.test(text)
     && !/[/.]$/u.test(text) && !/[\p{Cc}\p{Z}\uFEFF~^:?*\[\\]/u.test(text)
     && !text.includes('//') && !text.includes('..') && !text.includes('@{')
     && text.split('/').every(part => !part.startsWith('.') && !part.toLowerCase().endsWith('.lock')) ? text : undefined
@@ -409,7 +409,7 @@ async function copyPackage(capture: Capture, root: string, prefix: string): Prom
  * Capture profile files and local dependency source without filesystem mutations, network, imports, or subprocesses.
  * The returned text requires manual review before publication; refusals contain no captured content or secret excerpts.
  * @param profile Launcher-owned current profile locations; only its own patch and manifest are captured.
- * @param request Repository slug and a branch other than main or master, recorded as metadata without contacting either.
+ * @param request Repository slug and a branch other than HEAD, main, or master, recorded as metadata without contacting either.
  * @returns A bounded UTF-8 file map, or one typed refusal without any source content.
  */
 export async function exportProfileSource(profile: ProfileContext, request: SourceExportRequest): Promise<SourceExportResult> {

@@ -729,7 +729,20 @@ it('refuses binary and oversized source files', async () => {
   expect(await exportProfileSource(profile, request)).toEqual({ status: 'blocked', issues: [{ code: 'too-large', path: 'bundles/0/src/binary.ts' }] })
 })
 
-it.each(['master', 'main', '@', 'feat\u0085branch', 'refs/heads/feature', '../secret', 'feature.lock', 'feature..branch'])('refuses an unsafe or default branch: %s', async (branch) => {
+it.each(['HEAD', ' HEAD ', '\tHEAD\n'])('refuses the reserved HEAD branch before reading source: %j', async (branch) => {
+  const { profile } = await fixture()
+  const sourceReads = vi.fn(async () => {})
+  filesystemHooks.beforeOpen = sourceReads
+  expect(await exportProfileSource(profile, { ...request, branch })).toEqual({ status: 'blocked', issues: [{ code: 'invalid-branch' }] })
+  expect(sourceReads).not.toHaveBeenCalled()
+})
+
+it.each(['head', 'Head', 'creator/HEAD', 'HEAD/creator', ' \tcreator/saved-plugin\n '])('captures an ordinary branch after trimming input: %j', async (branch) => {
+  const { profile } = await fixture()
+  expect(await exportProfileSource(profile, { ...request, branch })).toMatchObject({ status: 'ready', branch: branch.trim() })
+})
+
+it.each(['master', 'MASTER', 'main', 'MAIN', '@', 'feat\u0085branch', 'refs/heads/feature', '../secret', 'feature.lock', 'feature..branch'])('refuses an unsafe or default branch: %s', async (branch) => {
   const { profile } = await fixture()
   expect(await exportProfileSource(profile, { ...request, branch })).toEqual({ status: 'blocked', issues: [{ code: 'invalid-branch' }] })
 })

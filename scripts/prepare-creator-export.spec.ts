@@ -84,7 +84,24 @@ it.each(['', '../fork', '/owner/fork', 'owner/fork/extra', 'https://github.com/o
   rejected({ ...archive(), repository })
 })
 
+it('rejects the reserved HEAD branch before creating or writing a destination', () => {
+  const { destination } = fixture()
+  expect(() => prepareCreatorExport({ ...archive(), branch: 'HEAD' }, destination))
+    .toThrow(expect.objectContaining<{ code: CreatorExportPreparationError['code']; message: unknown }>({
+      code: 'invalid-export', message: expect.stringContaining('HEAD, main, or master'),
+    }))
+  expect(existsSync(destination)).toBe(false)
+  expect(writeFileSync).not.toHaveBeenCalled()
+})
+
+it.each(['head', 'Head', 'creator/HEAD', 'HEAD/creator'])('extracts an ordinary branch with its exact reviewed files: %s', (branch) => {
+  const { destination } = fixture()
+  expect(prepareCreatorExport({ ...archive(), branch }, destination)).toBe(resolve(destination))
+  for (const file of PROFILE_FILES) expect(readFileSync(join(destination, file.path), 'utf8')).toBe(file.content)
+})
+
 it.each(['', 'main', 'MAIN', 'master', 'MASTER', '@', '-option', 'refs/heads/creator', '/creator', 'creator/', 'creator.',
+  ' HEAD ', ' head ', '\tHead\n',
   'creator//saved', 'creator..saved', 'creator@{saved', 'creator saved', 'creator\nsaved', 'creator~saved', 'creator^saved',
   'creator:saved', 'creator?saved', 'creator*saved', 'creator[saved', 'creator\\saved', 'creator/.saved', 'creator/saved.lock', 'creator/saved.LOCK',
 ])('rejects an unsafe or protected branch: %s', (branch) => {
