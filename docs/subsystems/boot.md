@@ -173,7 +173,7 @@ Owns bounded source receipts, GitHub identity checks, atomic branch writes, and 
 
 /**
  * Commit only the retained preview after explicit confirmation, then create or reuse its open PR to the fork's reviewed default branch.
- * A changed default branch refuses the receipt without changing its approved destination or hiding earlier remote effects.
+ * A detected default-branch change refuses the receipt without changing its approved destination or hiding earlier remote effects.
  * Repeated calls share an in-flight operation and reconcile lost responses. A closed PR is reported without recreating it.
  * An in-flight publication retains its receipt past the preview's expiry.
  * A failed PR retains the approved commit; unknown writes remain unknown until reconciliation,

@@ -54,7 +54,7 @@ export type ForkPreviewResult = ForkFailure | {
   readonly branch: string
   /** Repository used only to verify fork eligibility; the PR targets repository. */
   readonly upstream: string
-  /** Selected fork's default branch at preview time; publication refuses a later name change. */
+  /** Selected fork's default branch at preview time; publication refuses detected later name changes. */
   readonly base: string
   readonly head: ForkCommitId | null
   readonly files: readonly ForkFileDiff[]

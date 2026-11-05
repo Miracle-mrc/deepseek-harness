@@ -87,13 +87,15 @@ pnpm 11 拦下依赖脚本时，失败的安装在 `pendingBuilds` 里报告 pro
 
 `ctx.creatorFork` 拥有用户触发的 `repositories`、`preview` 和显式确认的 `publish` 调用；Plugin Manager 挂载此独立服务时不联系 GitHub。身份验证由 Host 现有的 `gh` 凭据存储提供。子进程使用经过清理且非交互的环境；token、请求正文和 CLI 诊断信息不会进入远程结果或日志。Liveshare 查看者不能调用这些方法。
 
-发现仓库及每次发布都会核实不可变的账号和仓库 ID、fork 网络、写入权限与实际默认分支。预览在 Host 上保留精确的有界捕获结果，将写入映射到 `creator-exports/saved/` 下，并返回完整的 UTF-8 修改前后文本及不透明回执。已有目标链接、子模块、大小写别名、疑似秘密、二进制文本、变化的分支头和超大结果均被拒绝。新分支从所选 fork 的实际默认分支开始；已有分支保留其历史。预览将该默认分支记录为同一 fork 中的 PR 目标。默认分支发生变化时会拒绝发布。显示的目标路径之外的文件不会被修改。
+发现仓库及每次发布都会核实不可变的账号和仓库 ID、fork 网络、写入权限与实际默认分支。预览在 Host 上保留精确的有界捕获结果，将写入映射到 `creator-exports/saved/` 下，并返回完整的 UTF-8 修改前后文本及不透明回执。已有目标链接、子模块、大小写别名、疑似秘密、二进制文本、变化的分支头和超大结果均被拒绝。新分支从所选 fork 的实际默认分支开始；已有分支保留其历史。预览将该默认分支记录为同一 fork 中的 PR 目标。检测到默认分支变化后会停止后续依赖操作。显示的目标路径之外的文件不会被修改。
 
 保留子树 `creator-exports/saved/` 下的每个已有文件都必须包含在本次导出中。该目录下的其他文件会阻止预览；DSH 不会自动删除它们。请检查并移除目标位置的这些文件，然后重新预览。新分支也可能继承相同文件。
 
 发布要求 `confirmed: true` 和保留的回执。已有分支使用 `createCommitOnBranch.expectedHeadOid`；新引用仅在完整提交准备好后独占创建。并发调用共享同一操作。显式重试会核实操作标记、预期父提交和精确文件树，并复用匹配的已有 PR。PR 创建失败会保留已批准的提交；分支写入结果未知时会持续显示，直到核实。匹配的 PR 已关闭或合并时，返回 `pull-request-closed` 及其安全链接，不创建替代请求；请先查看原 PR，只有重新打开后才重试。`ForkFailure.effect` 表示分支或 PR 的影响：`none`、`unknown` 或 `committed`；已确认的准备过程可能留下不可达的 Git 对象。自动删除分支或强制回退可能抹除并发工作，因此绝不尝试。PR 不会被合并。
 
 默认分支冲突的影响为 `unknown` 或 `committed` 时，对话框会保留已批准回执，并锁定目标修改和新预览。请在 GitHub 上检查分支和 PR，然后恢复已审查的默认分支设置并重试该回执，或在 GitHub 上手动完成操作。重试不会自动更改 PR 目标。
+
+DSH 通过独立的 GitHub 请求读取默认分支元数据并写入引用。[`expectedHeadOid`](https://docs.github.com/en/graphql/reference/commits#createcommitonbranchinput) 仅原子核实分支头，不保护默认分支设置。若最后一次检查后并发修改了设置，已有目标分支变为默认分支后，写入仍可能成功。检测到变化时会保留 `committed` 或 `unknown` 影响，不回退或自动更改目标；两次检查之间的短暂变化可能无法被发现。
 
 Plugin Manager 的可选 `fork` 配置默认使用 `ghCommand: gh`、`upstreamRepository: deepseek-ai/deepseek-harness`、`timeoutMs: 20000`、`operationTimeoutMs: 120000`、`outputBytes: 16777216`、`previewLifetimeMs: 900000` 和 `maxPreviews: 4`。`upstreamRepository` 用于核实允许的 fork 网络；分支和 PR 的目标属于所选 fork。回执内存有界；未提交回执会过期，所有回执在卸载时丢弃。开始新预览时会移除已完成的回执，包括已确认关闭或合并的 PR；旧 ID 随后返回 `stale-preview`。正在进行的提交不会过期或被移除。结果未明的提交持续保留直到卸载，避免静默遗忘。用户流程和重启恢复见 [Creator 指南](../../../docs/user/develop/practice/dynamic-cordis.zh.md#save-to-my-fork)。
 
