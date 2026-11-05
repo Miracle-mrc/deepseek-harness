@@ -28,12 +28,17 @@ node scripts/prepare-creator-export.ts /path/to/download.json /path/to/new-custo
 
 提取器验证每个路径，并拒绝已经存在的目标目录，包括之前提取的目录。它不执行 Git 命令。将生成的源文件保存在 fork 的专用目录中。创建选定的分支，检查文件，再仅暂存这些文件并审查 `git diff --cached`。提交或推送前确认 Git remote 指向自己的 fork。身份验证失败需要在本地 Git/GitHub 配置中处理；导出本身不需要 GitHub token。
 
-在另一台机器上恢复时，克隆 fork 并完成[源码检出环境准备](../../../development.zh.md#setup-tutorial)，包括构建。执行导出的插件前先审查源码。在各个导出的本地组合包目录中安装依赖并执行必要的构建脚本，再从 `profiles/saved` 安装 profile 依赖。通过常规 CLI 启动，并将导出目录作为 Harness home：
+在另一台机器上恢复时，克隆 fork 并完成[源码检出环境准备](../../../development.zh.md#setup-tutorial)，包括构建。导出的源码不可信。先在每个导出的本地组合包目录中运行 `pnpm install --ignore-scripts`，再禁用脚本安装 profile 依赖：
+
+```sh
+pnpm --dir /path/to/new-customizations/profiles/saved install --ignore-scripts
+```
+
+批准构建前，检查导出包及其已安装依赖中的生命周期脚本。在各个相关组合包或 profile 目录中，仅将已审查的依赖标识记录到 pnpm 的 `allowBuilds` 策略中；对于待批准的构建，可使用 `pnpm approve-builds`，批准操作可能立即执行脚本。同时审查包自身的安装钩子后，再显式运行 `pnpm rebuild` 和必要的插件构建命令。重建既可能执行已批准的依赖脚本，也可能执行项目生命周期脚本。首次禁用脚本安装并不能证明插件代码可安全执行。完成审查后，才通过常规 CLI 启动：
 
 启动前，将 `DSH_HOME` 环境变量设为导出目录。POSIX shell 使用 `export DSH_HOME=/path/to/new-customizations`；PowerShell 使用 `$env:DSH_HOME="C:\path\to\new-customizations"`。
 
 ```sh
-pnpm --dir /path/to/new-customizations/profiles/saved install
 pnpm dsh --profile saved
 ```
 

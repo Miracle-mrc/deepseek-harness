@@ -28,12 +28,17 @@ node scripts/prepare-creator-export.ts /path/to/download.json /path/to/new-custo
 
 The extractor validates every path and refuses an existing destination, including one from an earlier extraction. It runs no Git commands. Keep the generated source files in a dedicated directory in your fork. Create the branch you chose, inspect the files, then stage only those files and review `git diff --cached`. Check that the Git remote names your fork before committing or pushing. Authentication failures belong to your local Git/GitHub setup; the export itself needs no GitHub token.
 
-To restore on another machine, clone your fork and complete the [source checkout setup](../../../development.md#setup-tutorial), including a build. Review the exported plugins before executing them. Install dependencies and run any required build scripts in the exported local bundle directories, then install the profile dependencies from `profiles/saved`. Launch through the normal CLI with the exported directory as the Harness home:
+To restore on another machine, clone your fork and complete the [source checkout setup](../../../development.md#setup-tutorial), including a build. Exported source is untrusted. First run `pnpm install --ignore-scripts` in each exported local bundle directory, then install the profile dependencies with scripts disabled:
+
+```sh
+pnpm --dir /path/to/new-customizations/profiles/saved install --ignore-scripts
+```
+
+Inspect lifecycle scripts in both the exported packages and their installed dependencies before approving any build. In each affected bundle or profile directory, record only reviewed dependency identities in pnpm's `allowBuilds` policy, using `pnpm approve-builds` for pending builds; approval can run scripts immediately. After reviewing the package's own install hooks too, explicitly run `pnpm rebuild` and any required plugin build commands. Rebuilding can execute project lifecycle scripts as well as approved dependency scripts. Initial script-free installation does not establish that plugin code is safe to execute. Launch through the normal CLI only after this review:
 
 Before launching, set the `DSH_HOME` environment variable to the exported directory. In a POSIX shell use `export DSH_HOME=/path/to/new-customizations`; in PowerShell use `$env:DSH_HOME="C:\path\to\new-customizations"`.
 
 ```sh
-pnpm --dir /path/to/new-customizations/profiles/saved install
 pnpm dsh --profile saved
 ```
 
