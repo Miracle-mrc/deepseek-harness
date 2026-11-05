@@ -120,6 +120,51 @@ async function fixture() {
   return { root, dir, local, profile }
 }
 
+async function captureUrl(url: string, location: 'configuration' | 'source' | 'json' = 'json') {
+  const { local, profile } = await fixture()
+  const path = location === 'configuration' ? 'profiles/saved/cordis.patch.yml'
+    : location === 'json' ? 'bundles/0/data.json' : 'bundles/0/src/index.ts'
+  const filename = location === 'configuration' ? profile.patchPath
+    : location === 'json' ? join(local, 'data.json') : join(local, 'src', 'index.ts')
+  const content = location === 'configuration' ? `- id: source-probe\n  config:\n    url: ${JSON.stringify(url)}\n`
+    : location === 'json' ? JSON.stringify({ nested: [url] }) : `export const endpoint = ${JSON.stringify(url)}\n`
+  await writeFile(filename, content)
+  return { result: await exportProfileSource(profile, request), content, path }
+}
+
+function nestedUrl(depth: number, leaf: string, component: 'query' | 'fragment' | 'route' = 'query'): string {
+  let url = leaf
+  const separator = component === 'query' ? '?' : component === 'fragment' ? '#' : '#/forward?'
+  for (let layer = 0; layer < depth; layer += 1) {
+    url = `https://proxy.example/layer-${layer}${separator}target=${encodeURIComponent(url)}`
+  }
+  return url
+}
+
+function wideUrl(count: number, distinct = true): string {
+  const url = new URL('https://proxy.example/')
+  for (let index = 0; index < count; index += 1) {
+    url.searchParams.append(`target${index}`, `https://api.example/item-${distinct ? index : 0}?lang=vi`)
+  }
+  return url.href
+}
+
+const uriWhitespace = [
+  { label: 'space', character: ' ' },
+  { label: 'tab', character: '\t' },
+  { label: 'line feed', character: '\n' },
+  { label: 'carriage return', character: '\r' },
+  { label: 'form feed', character: '\f' },
+  { label: 'nonbreaking space', character: '\u00a0' },
+]
+
+function expectSecretRefusal(result: Awaited<ReturnType<typeof exportProfileSource>>, path: string): void {
+  expect(result.status).toBe('blocked')
+  if (result.status !== 'blocked') throw new Error('credential export was accepted')
+  expect(result.issues).toEqual([{ code: 'secret-suspected', path }])
+  expect(JSON.stringify(result).includes('sensitive-value')).toBe(false)
+}
+
 async function virtualDirectory(directory: string, names: string[], content: string, anchor: string) {
   const fs = await import('node:fs/promises')
   const canonical = await fs.realpath(directory)
@@ -325,6 +370,211 @@ it.each(['accessToken', 'refresh_token', 'client-secret', 'apiKey', 'password'])
   const { local, profile } = await fixture()
   await writeFile(join(local, 'src', 'index.ts'), `export const config = { '${name}': "x" }\n`)
   expect(await exportProfileSource(profile, request)).toEqual({ status: 'blocked', issues: [{ code: 'secret-suspected', path: 'bundles/0/src/index.ts' }] })
+})
+
+it.each([
+  { label: 'plain query', url: 'https://proxy.example/?target=https://api.example/?access_token=example-sensitive-value' },
+  { label: 'decoded query', url: nestedUrl(1, 'https://api.example/?access_token=example-sensitive-value') },
+  { label: 'decoded fragment', url: nestedUrl(1, 'https://api.example/#client_secret=example-sensitive-value') },
+  { label: 'outer fragment', url: nestedUrl(1, 'https://api.example/?access_token=example-sensitive-value', 'fragment') },
+  { label: 'fragment route', url: nestedUrl(1, 'https://api.example/#client_secret=example-sensitive-value', 'route') },
+  { label: 'two decoded URL layers', url: nestedUrl(2, 'https://api.example/?access_token=example-sensitive-value') },
+].flatMap(test => (['configuration', 'source', 'json'] as const).map(location => ({ ...test, location }))))(
+  'refuses nested parameter URLs in $location ($label)', async ({ url, location }) => {
+    const { result, path } = await captureUrl(url, location)
+    expect(result.status).toBe('blocked')
+    if (result.status !== 'blocked') throw new Error('nested credential export was accepted')
+    expect(result.issues).toEqual([{ code: 'secret-suspected', path }])
+    expect(JSON.stringify(result).includes('example-sensitive-value')).toBe(false)
+  },
+)
+
+it.each([
+  { label: 'query', url: nestedUrl(2, 'https://api.example/?lang=vi') },
+  { label: 'fragment', url: nestedUrl(2, 'https://api.example/#section', 'fragment') },
+  { label: 'fragment route', url: nestedUrl(2, 'https://api.example/#/public?lang=vi', 'route') },
+  { label: 'empty credential parameter', url: nestedUrl(2, 'https://api.example/?token=&lang=vi') },
+].flatMap(test => (['configuration', 'source', 'json'] as const).map(location => ({ ...test, location }))))(
+  'preserves public nested parameter URLs in $location ($label)', async ({ url, location }) => {
+    const { result, path, content } = await captureUrl(url, location)
+    expect(result.status).toBe('ready')
+    if (result.status !== 'ready') throw new Error('public nested URL was refused')
+    expect(result.files.find(file => file.path === path)?.content).toBe(content)
+  },
+)
+
+it.each((['query', 'fragment', 'route'] as const).flatMap(component => [32, 33].map(depth => ({ component, depth })) ))(
+  'bounds nested URL traversal for $component at depth $depth', async ({ component, depth }) => {
+    const { result, path, content } = await captureUrl(nestedUrl(depth, 'https://api.example/?lang=vi', component))
+    const expected = depth === 32 ? 'ready' : 'blocked'
+    expect(result.status).toBe(expected)
+    if (result.status === 'ready') expect(result.files.find(file => file.path === path)?.content).toBe(content)
+    else expect(result.issues).toEqual([{ code: 'secret-suspected', path }])
+  },
+)
+
+it.each(['query', 'fragment', 'route'] as const)('checks credentials in the deepest admitted nested URL through %s', async (component) => {
+  const { result, path } = await captureUrl(nestedUrl(32, 'https://api.example/?access_token=example-sensitive-value', component))
+  expect(result.status).toBe('blocked')
+  if (result.status !== 'blocked') throw new Error('deep nested credential export was accepted')
+  expect(result.issues).toEqual([{ code: 'secret-suspected', path }])
+  expect(JSON.stringify(result).includes('example-sensitive-value')).toBe(false)
+})
+
+it.each([32, 33])('bounds distinct nested URL fanout at %i children', async (count) => {
+  const { result, path, content } = await captureUrl(wideUrl(count))
+  expect(result.status).toBe(count === 32 ? 'ready' : 'blocked')
+  if (result.status === 'ready') expect(result.files.find(file => file.path === path)?.content).toBe(content)
+  else expect(result.issues).toEqual([{ code: 'secret-suspected', path }])
+})
+
+it('checks the last admitted URL in a wide nested parameter list', async () => {
+  const url = new URL(wideUrl(31))
+  url.searchParams.append('target31', 'https://api.example/?client_secret=example-sensitive-value')
+  const { result, path } = await captureUrl(url.href)
+  expect(result.status).toBe('blocked')
+  if (result.status !== 'blocked') throw new Error('wide nested credential export was accepted')
+  expect(result.issues).toEqual([{ code: 'secret-suspected', path }])
+  expect(JSON.stringify(result).includes('example-sensitive-value')).toBe(false)
+})
+
+it('does not charge repeated nested URLs against the distinct traversal limit', async () => {
+  const { result, path, content } = await captureUrl(wideUrl(64, false))
+  expect(result.status).toBe('ready')
+  if (result.status !== 'ready') throw new Error('repeated public nested URL was refused')
+  expect(result.files.find(file => file.path === path)?.content).toBe(content)
+})
+
+it.each([
+  { label: 'deep', url: nestedUrl(128, 'https://api.example/?lang=vi') },
+  { label: 'wide', url: wideUrl(1000) },
+])('refuses excessive $label URL traversal within the file byte limit', async ({ url }) => {
+  expect(Buffer.byteLength(JSON.stringify({ nested: [url] }))).toBeLessThan(1024 * 1024)
+  const { result, path } = await captureUrl(url)
+  expect(result.status).toBe('blocked')
+  if (result.status !== 'blocked') throw new Error('unbounded public URL traversal was accepted')
+  expect(result.issues).toEqual([{ code: 'secret-suspected', path }])
+})
+
+it('gives independent flat public URLs separate nested traversal budgets', async () => {
+  const { local, profile } = await fixture()
+  const content = JSON.stringify(Array.from({ length: 64 }, (_, index) =>
+    `https://proxy.example/${index}?target=${encodeURIComponent(`https://api.example/${index}?lang=vi`)}`,
+  ))
+  await writeFile(join(local, 'data.json'), content)
+  const result = await exportProfileSource(profile, request)
+  expect(result.status).toBe('ready')
+  if (result.status !== 'ready') throw new Error('independent public URLs shared a traversal budget')
+  expect(result.files.find(file => file.path === 'bundles/0/data.json')?.content).toBe(content)
+})
+
+it.each(uriWhitespace.flatMap(test => (['configuration', 'json'] as const).map(location => ({ ...test, location }))))(
+  'refuses whitespace URI credentials in decoded $location values ($label)', async ({ character, location }) => {
+    const { result, path } = await captureUrl(`https://account:example${character}sensitive-value@api.example/path`, location)
+    expectSecretRefusal(result, path)
+  },
+)
+
+it.each(uriWhitespace.flatMap(test => (['yaml', 'json'] as const).map(format => ({ ...test, format }))))(
+  'refuses whitespace URI credentials in decoded $format keys ($label)', async ({ character, format }) => {
+    const { local, profile } = await fixture()
+    const url = `https://account:example${character}sensitive-value@api.example/path`
+    const content = format === 'json' ? JSON.stringify({ [url]: true }) : `${JSON.stringify(url)}: true\n`
+    await writeFile(join(local, `data.${format}`), content)
+    expectSecretRefusal(await exportProfileSource(profile, request), `bundles/0/data.${format}`)
+  },
+)
+
+it.each(uriWhitespace.flatMap(test => (['configuration', 'source', 'json'] as const).map(location => ({ ...test, location }))))(
+  'refuses normally decoded nested whitespace credentials in $location ($label)', async ({ character, location }) => {
+    const { result, path } = await captureUrl(nestedUrl(2, `https://account:example${character}sensitive-value@api.example/path`), location)
+    expectSecretRefusal(result, path)
+  },
+)
+
+it.each(uriWhitespace.filter(test => ['tab', 'line feed', 'carriage return'].includes(test.label))
+  .flatMap(test => (['configuration', 'source', 'json'] as const).map(location => ({ ...test, location }))))(
+  'refuses native-normalized nested schemes and names in $location ($label)', async ({ character, location }) => {
+    for (const url of [
+      `h${character}ttps://account:example-sensitive-value@api.example/path`,
+      `https://api.example/?access_${character}token=example-sensitive-value`,
+      `https://api.example/#/callback?client_${character}secret=example-sensitive-value`,
+    ]) {
+      const { result, path } = await captureUrl(nestedUrl(1, url, 'route'), location)
+      expectSecretRefusal(result, path)
+    }
+  },
+)
+
+it.each(uriWhitespace.flatMap(test => (test.character === '\n' || test.character === '\r' ? ['`'] : ['"', "'", '`'])
+  .map(quote => ({ ...test, quote }))))(
+  'refuses raw whitespace credentials in a $quote source assignment ($label)', async ({ character, quote }) => {
+    const { local, profile } = await fixture()
+    const url = `https://account:example${character}sensitive-value@api.example/path`
+    await writeFile(join(local, 'src', 'index.ts'), `export const endpoint = ${quote}${url}${quote}\n`)
+    expectSecretRefusal(await exportProfileSource(profile, request), 'bundles/0/src/index.ts')
+  },
+)
+
+it.each([
+  { label: 'double quotes', quote: '"', password: "example'sensitive-value" },
+  { label: 'single quotes', quote: "'", password: 'example"sensitive-value' },
+  { label: 'backticks', quote: '`', password: 'example\r\nsensitive-value' },
+])('refuses complete URI credentials inside $label source literals', async ({ quote, password }) => {
+  const { local, profile } = await fixture()
+  await writeFile(join(local, 'src', 'index.ts'), `export const endpoint = ${quote}https://account:${password}@api.example/path${quote}\n`)
+  expectSecretRefusal(await exportProfileSource(profile, request), 'bundles/0/src/index.ts')
+})
+
+it.each([
+  ' \t//account:example sensitive-value@api.example/path\r\n',
+  '\th\rtt\nps://account:example sensitive-value@api.example/path\r\n',
+])('refuses a scalar URI after native prefix normalization: %#', async (url) => {
+  const { result, path } = await captureUrl(url)
+  expectSecretRefusal(result, path)
+})
+
+it.each([
+  'https://api.example/public path@api.example/?lang=vi',
+  'https://api.example/public\tpath@api.example/?lang=vi',
+  'https://api.example/public\npath@api.example/?lang=vi',
+  'https://api.example/public\rpath@api.example/?lang=vi',
+  'https://api.example/public\fpath@api.example/?lang=vi',
+  'https://api.example/public\u00a0path@api.example/?lang=vi',
+  'Label: prose?token=public',
+  'relative/prose?token=public',
+  '//[invalid',
+])('preserves public complete scalar URL and prose bytes: %#', async (url) => {
+  const { result, path, content } = await captureUrl(url)
+  expect(result.status).toBe('ready')
+  if (result.status !== 'ready') throw new Error('public scalar text was refused')
+  expect(result.files.find(file => file.path === path)?.content).toBe(content)
+})
+
+it.each([
+  { filename: 'src/index.ts', content: '// https://api.example/?token=\nexport const visible = true\n' },
+  { filename: 'notes.md', content: 'https://api.example/?token=\nDocumentation follows.\n' },
+  { filename: 'notes.yaml', content: '# https://api.example/?token=\n- id: public-example\n' },
+  { filename: 'src/index.ts', content: 'export const endpoint = "https://api.example/?token=\nexport const visible = "public"\n' },
+  { filename: 'src/index.ts', content: "export const endpoint = 'https://api.example/?token=\rexport const visible = 'public'\n" },
+  { filename: 'src/index.ts', content: 'export const endpoint = "Label: prose?token=public"\n' },
+])('preserves source delimiters without joining unrelated text: %#', async ({ filename, content }) => {
+  const { local, profile } = await fixture()
+  await writeFile(join(local, filename), content)
+  const result = await exportProfileSource(profile, request)
+  expect(result.status).toBe('ready')
+  if (result.status !== 'ready') throw new Error('public source delimiters were joined')
+  expect(result.files.find(file => file.path === `bundles/0/${filename}`)?.content).toBe(content)
+})
+
+it('bounds source scanning for a long incomplete backtick assignment', async () => {
+  const { local, profile } = await fixture()
+  const content = 'export const endpoint = `https://api.example/?token=\n' + 'a-'.repeat(480_000)
+  await writeFile(join(local, 'src', 'index.ts'), content)
+  const result = await exportProfileSource(profile, request)
+  expect(result.status).toBe('ready')
+  if (result.status !== 'ready') throw new Error('bounded incomplete source assignment was refused')
+  expect(result.files.find(file => file.path === 'bundles/0/src/index.ts')?.content).toBe(content)
 })
 
 it.each([

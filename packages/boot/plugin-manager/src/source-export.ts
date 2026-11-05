@@ -12,6 +12,7 @@ const MAX_FILES = 2000
 const MAX_SOURCE_READS = MAX_FILES * 2
 const MAX_FILE_BYTES = 1024 * 1024
 const MAX_TOTAL_BYTES = 10 * 1024 * 1024
+const MAX_NESTED_URLS = 32
 const EXPORT_GITIGNORE = '/*\n!/.gitignore\n!/bundles/\n!/profiles/\n/profiles/*\n!/profiles/saved/\n/profiles/saved/*\n!/profiles/saved/package.json\n!/profiles/saved/cordis.patch.yml\n!/profiles/saved/pnpm-workspace.yaml\n**/node_modules/\n**/.env*\n**/.credentials*\n'
 const EXPORT_PNPM_WORKSPACE = 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n'
 const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/
@@ -30,10 +31,11 @@ const SECRET_TEXT = new RegExp(
 const LITERAL_ASSIGNMENT = new RegExp(
   /(?<![a-z0-9_.$-])([a-z_$][a-z0-9_.$-]*)(?:["'`](?:\s*\])?)?\s*/.source
   + /(?::\s*[a-z_$][a-z0-9_$.<>[\]|,?]*(?:[ \t]+[a-z_$|][a-z0-9_$.<>[\]|,?]*)*\s*)?/.source
-  + /[:=]\s*(?<quote>["'`])([^"'`\r\n]+)\k<quote>/.source,
+  + /[:=]\s*(?:"([^"\r\n]+)"|'([^'\r\n]+)'|`([^`]+)`)/.source,
   'giu',
 )
 const URI_PREFIX = /(?<![a-z0-9+.-])(?:(?:https?|ftp|wss?):[\\/]*|(?:[a-z][a-z0-9+.-]*:)?\/\/)/.source
+const SCALAR_URI_PREFIX = new RegExp(`^${URI_PREFIX}`, 'iu')
 const URI_TEXT = new RegExp(URI_PREFIX + /[^\s"'`<>]+/.source, 'giu')
 const URI_USER_INFO = new RegExp(URI_PREFIX + /[^\s"'`<>\\/?#]+@/.source, 'iu')
 // Unnamed URL credentials may still be recognizable as long opaque tokens, including JWTs and hex keys.
@@ -77,7 +79,18 @@ function sensitiveName(name: string, query = false): boolean {
     || (query && /^(?:access|auth|key|sig|sas|session|sessionid)$/u.test(normalized))
 }
 
-function* parsedUrls(value: string): Generator<URL, void> {
+function completeUrl(value: string): URL | undefined {
+  const base = /^[\u0000-\u0020]*\/[\t\r\n]*\//u.test(value) ? 'https://source-export.invalid' : undefined
+  if (!URL.canParse(value, base)) return undefined
+  const url = new URL(value, base)
+  return SCALAR_URI_PREFIX.test(url.href) ? url : undefined
+}
+
+function* parsedUrls(value: string, complete = false): Generator<URL, void> {
+  if (complete) {
+    const url = completeUrl(value)
+    if (url !== undefined) yield url
+  }
   for (const match of value.matchAll(URI_TEXT)) {
     const uri = match[0]
     const absolute = uri.startsWith('//') ? `https:${uri}` : uri
@@ -85,46 +98,54 @@ function* parsedUrls(value: string): Generator<URL, void> {
   }
 }
 
-function suspectedUserInfo(value: string): boolean {
-  for (const url of parsedUrls(value)) {
-    if (url.username !== '' || url.password !== '') return true
-  }
-  return URI_USER_INFO.test(value)
-}
-
-function suspectedParameters(parameters: URLSearchParams): boolean {
+function suspectedParameters(parameters: URLSearchParams, urls: URL[]): boolean {
   for (const [name, item] of parameters) {
     if (item !== '' && (sensitiveName(name, true) || SECRET_TEXT.test(item)
-      || suspectedUserInfo(item) || OPAQUE_QUERY_VALUE.test(item))) return true
+      || URI_USER_INFO.test(item) || OPAQUE_QUERY_VALUE.test(item))) return true
+    for (const url of parsedUrls(item, true)) {
+      if (urls.some(queued => queued.href === url.href)) continue
+      if (urls.length >= MAX_NESTED_URLS + 1) return true
+      urls.push(url)
+    }
   }
   return false
 }
 
-function suspectedText(value: string): boolean {
-  if (SECRET_TEXT.test(value)) return true
-  for (const match of value.matchAll(LITERAL_ASSIGNMENT)) {
-    if (sensitiveName(match[1] as string)) return true
-  }
-  for (const url of parsedUrls(value)) {
-    if (url.username !== '' || url.password !== '') return true
-    const fragment = url.hash.slice(1)
-    if (suspectedParameters(url.searchParams) || suspectedParameters(new URLSearchParams(fragment))) return true
-    const queryStart = fragment.indexOf('?')
-    if (queryStart !== -1 && suspectedParameters(new URLSearchParams(fragment.slice(queryStart + 1)))) return true
+function suspectedUrls(value: string, complete: boolean): boolean {
+  for (const root of parsedUrls(value, complete)) {
+    // The retained queue bounds distinct URLs across nesting levels and deduplicates fragment discoveries.
+    const urls = [root]
+    for (const url of urls) {
+      if (url.username !== '' || url.password !== '') return true
+      const fragment = url.hash.slice(1)
+      if (suspectedParameters(url.searchParams, urls) || suspectedParameters(new URLSearchParams(fragment), urls)) return true
+      const queryStart = fragment.indexOf('?')
+      if (queryStart !== -1 && suspectedParameters(new URLSearchParams(fragment.slice(queryStart + 1)), urls)) return true
+    }
   }
   // Malformed hosts and surrounding source text must not conceal user information that parsing cannot expose.
   return URI_USER_INFO.test(value)
 }
 
+function suspectedText(value: string, complete = false): boolean {
+  if (SECRET_TEXT.test(value)) return true
+  for (const match of value.matchAll(LITERAL_ASSIGNMENT)) {
+    if (sensitiveName(match[1] as string)) return true
+    const literal = (match[2] ?? match[3] ?? match[4]) as string
+    if (suspectedUrls(literal, true)) return true
+  }
+  return suspectedUrls(value, complete)
+}
+
 function inspectSecrets(value: unknown, path: string): void {
   if (typeof value === 'string') {
-    if (suspectedText(value)) refuse('secret-suspected', path)
+    if (suspectedText(value, true)) refuse('secret-suspected', path)
     return
   }
   if (Array.isArray(value)) { value.forEach((item) => { inspectSecrets(item, path) }); return }
   if (!record(value)) return
   for (const [key, item] of Object.entries(value)) {
-    if (suspectedText(key)) refuse('secret-suspected', path)
+    if (suspectedText(key, true)) refuse('secret-suspected', path)
     const reference = record(item) && Object.keys(item).length === 1 && typeof item.__jsExpr === 'string'
       && /^process\.env\.[A-Za-z_][A-Za-z0-9_]*$/u.test(item.__jsExpr.trim())
     if (sensitiveName(key) && item !== undefined && item !== null && item !== '' && !reference) refuse('secret-suspected', path)
@@ -397,7 +418,7 @@ export async function exportProfileSource(profile: ProfileContext, request: Sour
   const targetBranch = branch(request.branch)
   if (targetBranch === undefined) return { status: 'blocked', issues: [{ code: 'invalid-branch' }] }
   try {
-    if ([targetRepository, targetBranch, profile.name].some(suspectedText)) refuse('secret-suspected')
+    if ([targetRepository, targetBranch, profile.name].some(value => suspectedText(value))) refuse('secret-suspected')
     const envelope = { status: 'ready' as const, formatVersion: 1 as const, repository: targetRepository,
       branch: targetBranch, profile: profile.name, files: [], reviewRequired: true as const }
     const envelopeBytes = Buffer.byteLength(JSON.stringify(envelope))
