@@ -154,7 +154,8 @@ export function ForkPublishOverlay({
         {publishing ? <p className={css.hint}>{t('forkPublishClosingHint')}</p> : null}
         {state.failure === null ? null : <p id={`${id}-failure`} className={css.error} role="alert">{t(ISSUE_KEYS[state.failure.code])}</p>}
         {operation?.status !== 'blocked' ? null : <section className={css.failure} role="alert">
-          <p>{t(ISSUE_KEYS[operation.failure.code])}</p>
+          <p>{t(operation.failure.code === 'default-branch' && operation.failure.effect !== 'none'
+            ? 'forkPublishConflict' : ISSUE_KEYS[operation.failure.code])}</p>
           {operation.failure.code === 'pull-request-closed' ? null : <p>{t(operation.failure.effect === 'unknown' ? 'forkPublishUnknown'
             : operation.failure.effect === 'committed' ? 'forkPublishCommitted' : 'forkPublishNoEffects')}</p>}
           {operation.failure.pullRequestUrl === undefined ? null : <a href={operation.failure.pullRequestUrl}

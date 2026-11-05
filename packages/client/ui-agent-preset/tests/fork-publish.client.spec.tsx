@@ -77,7 +77,7 @@ describe('direct fork publication dialog', () => {
     expect(view.publish).not.toHaveBeenCalled()
   })
 
-  it.each([
+  it.each(([
     { locale: 'en', copy: en, effect: 'unknown', newBranch: 'New branch from the selected fork’s develop',
       conflict: 'The destination changed. Review the branch and pull request on GitHub before continuing.' },
     { locale: 'zh', copy: zh, effect: 'unknown', newBranch: '从所选 Fork 的 develop 创建新分支',
@@ -86,29 +86,48 @@ describe('direct fork publication dialog', () => {
       conflict: 'The destination changed. Review the branch and pull request on GitHub before continuing.' },
     { locale: 'zh', copy: zh, effect: 'committed', newBranch: '从所选 Fork 的 develop 创建新分支',
       conflict: '目标已发生变化，请先在 GitHub 上检查分支和拉取请求，再继续操作' },
-  ] as const)('retains the reviewed base in $locale after $effect effects and reopening', async ({ copy, effect, newBranch, conflict }) => {
+  ] as const).flatMap(testCase => (['conflict', 'default-branch'] as const).map(code => ({ ...testCase, code }))))(
+    'retains the reviewed base in $locale after $code with $effect effects and reopening', async ({ copy, effect, newBranch, conflict, code }) => {
+      const view = overlay(copy)
+      view.preview.mockResolvedValueOnce({ ...PREVIEW, base: 'develop', head: null })
+      await inspect(copy)
+      view.publish.mockResolvedValueOnce({ status: 'blocked', code, effect })
+      fireEvent.click(screen.getByRole('checkbox', { name: copy.forkPublishReviewed }))
+      fireEvent.click(screen.getByRole('button', { name: copy.forkPublishConfirm }))
+      await screen.findByText(effect === 'unknown' ? copy.forkPublishUnknown : copy.forkPublishCommitted)
+      await act(async () => {
+        view.controller.close()
+        view.controller.open()
+      })
+      const dialog = screen.getByRole('dialog', { name: copy.forkPublishTitle })
+      expect(within(dialog).getByText(`${PREVIEW.repository}:develop`, { exact: true })).toBeTruthy()
+      expect(within(dialog).getByText(newBranch, { exact: true })).toBeTruthy()
+      expect(within(dialog).getByRole<HTMLSelectElement>('combobox', { name: copy.forkRepository }).disabled).toBe(true)
+      expect(within(dialog).getByRole<HTMLInputElement>('textbox', { name: copy.forkBranch }).disabled).toBe(true)
+      expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishConnect }).disabled).toBe(true)
+      expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishInspect }).disabled).toBe(true)
+      expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishRetry }).disabled).toBe(false)
+      expect(screen.queryByRole('checkbox')).toBeNull()
+      expect(view.publish).toHaveBeenCalledExactlyOnceWith(PREVIEW.id, true)
+      const alert = within(dialog).getByRole('alert')
+      expect(within(alert).getByText(conflict, { exact: true })).toBeTruthy()
+      expect(within(alert).queryByText(copy.forkPublishDefaultBranch, { exact: true })).toBeNull()
+    })
+
+  it.each([['en', en], ['zh', zh]] as const)('keeps ordinary default-branch guidance when publication has no effects in %s', async (_locale, copy) => {
     const view = overlay(copy)
-    view.preview.mockResolvedValueOnce({ ...PREVIEW, base: 'develop', head: null })
     await inspect(copy)
-    view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'conflict', effect })
+    view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'default-branch', effect: 'none' })
     fireEvent.click(screen.getByRole('checkbox', { name: copy.forkPublishReviewed }))
     fireEvent.click(screen.getByRole('button', { name: copy.forkPublishConfirm }))
-    await screen.findByText(effect === 'unknown' ? copy.forkPublishUnknown : copy.forkPublishCommitted)
-    await act(async () => {
-      view.controller.close()
-      view.controller.open()
-    })
     const dialog = screen.getByRole('dialog', { name: copy.forkPublishTitle })
-    expect(within(dialog).getByText(`${PREVIEW.repository}:develop`, { exact: true })).toBeTruthy()
-    expect(within(dialog).getByText(newBranch, { exact: true })).toBeTruthy()
-    expect(within(dialog).getByRole<HTMLSelectElement>('combobox', { name: copy.forkRepository }).disabled).toBe(true)
-    expect(within(dialog).getByRole<HTMLInputElement>('textbox', { name: copy.forkBranch }).disabled).toBe(true)
-    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishConnect }).disabled).toBe(true)
-    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishInspect }).disabled).toBe(true)
-    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishRetry }).disabled).toBe(false)
-    expect(screen.queryByRole('checkbox')).toBeNull()
-    expect(view.publish).toHaveBeenCalledExactlyOnceWith(PREVIEW.id, true)
-    expect(within(dialog).getByText(conflict, { exact: true })).toBeTruthy()
+    const alert = await within(dialog).findByRole('alert')
+    expect(within(alert).getByText(copy.forkPublishDefaultBranch, { exact: true })).toBeTruthy()
+    expect(within(dialog).getByRole<HTMLSelectElement>('combobox', { name: copy.forkRepository }).disabled).toBe(false)
+    expect(within(dialog).getByRole<HTMLInputElement>('textbox', { name: copy.forkBranch }).disabled).toBe(false)
+    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishInspect }).disabled).toBe(false)
+    expect(within(dialog).queryByRole('button', { name: copy.forkPublishRetry })).toBeNull()
+    expect(within(alert).queryByText(copy.forkPublishConflict, { exact: true })).toBeNull()
   })
 
   it.each([['en', en], ['zh', zh]] as const)('requires explicit discovery, exact review, and confirmation in %s', async (_locale, copy) => {
