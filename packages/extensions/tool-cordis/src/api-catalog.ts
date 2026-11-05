@@ -921,6 +921,31 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'creatorFork',
+    summary: 'Owns bounded source receipts, GitHub identity checks, atomic branch writes, and PR reconciliation.',
+    description: 'Owns bounded source receipts, GitHub identity checks, atomic branch writes, and PR reconciliation.',
+    methods: [
+      {
+        signature: '@Remote async repositories(): Promise<ForkRepositoriesResult>',
+        description: 'Discover writable forks owned by the authenticated Host user. Only this explicit call contacts GitHub.',
+        parameters: [],
+        returns: 'Account, upstream, and authorized fork choices, or a sanitized refusal.',
+      },
+      {
+        signature: '@Remote async preview(request: SourceExportRequest): Promise<ForkPreviewResult>',
+        description: 'Capture safe local source and exact destination text, without uploading source or changing GitHub. A new preview releases successful and known-closed receipts; their IDs then become stale.',
+        parameters: [{ name: 'request', description: 'Authorized fork slug and a non-default branch; new branches start from that fork\'s master.' }],
+        returns: 'An opaque, expiring receipt and complete UTF-8 before/after text, or a refusal with no source content.',
+      },
+      {
+        signature: '@Remote async publish(id: ForkPreviewId, confirmed: boolean): Promise<ForkPublishResult>',
+        description: 'Commit only the retained preview after explicit confirmation, then create or reuse its open PR to the same fork\'s master. Repeated calls share an in-flight operation and reconcile lost responses. A closed PR is reported without recreating it. A failed PR retains the approved commit; unknown writes remain unknown until reconciliation, with no forced rollback or branch deletion.',
+        parameters: [{ name: 'id', description: 'Receipt from preview; source text and destinations cannot be replaced by this call.' }, { name: 'confirmed', description: 'The person\'s explicit acknowledgement of the displayed diff and destinations.' }],
+        returns: 'Confirmed commit and PR, or a sanitized refusal stating absent, unknown, or committed remote effects.',
+      },
+    ],
+  },
+  {
     key: 'credentials',
     summary: 'Abstract credential service over two key spaces that answer two questions.',
     description: 'Abstract credential service over two key spaces that answer two questions.\n\nA CredentialRef answers "what is behind this environment-variable name": the provider-managed store first, then ambient fallbacks such as the process environment and `.env` files. One seam-wide rule binds that half: an empty stored value is absent everywhere — `resolve` skips it, `describe` reports it unconfigured — so a blank never masquerades as a configured secret.\n\nA CredentialKey answers "what credential does this plugin hold for this id". Nothing can layer here — an authorization grant has no environment to be read from — so presence of the record is the whole fact, and modifyRecord is the only write path because a correct write depends on the current value (a token refresh is read-decide-replace under one lock).',
@@ -6484,6 +6509,42 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type ForgeWorktreeWaiting = \'creation\' | \'restoration\';',
   },
   {
+    name: 'ForkCommitId',
+    declaration: 'export type ForkCommitId = Branded<\'ForkCommitId\'>;',
+  },
+  {
+    name: 'ForkFailure',
+    declaration: 'export interface ForkFailure {\n    readonly status: \'blocked\';\n    readonly code: ForkIssueCode;\n    readonly effect: \'none\' | \'unknown\' | \'committed\';\n    readonly pullRequestUrl?: string;\n}',
+  },
+  {
+    name: 'ForkFileDiff',
+    declaration: 'export interface ForkFileDiff {\n    readonly path: string;\n    readonly before: string | null;\n    readonly after: string;\n}',
+  },
+  {
+    name: 'ForkIssueCode',
+    declaration: 'export type ForkIssueCode = SourceExportIssueCode | \'auth-required\' | \'permission-denied\' | \'not-found\' | \'conflict\' | \'timeout\' | \'unavailable\' | \'invalid-response\' | \'network\' | \'wrong-fork\' | \'mixed-account\' | \'default-branch\' | \'stale-preview\' | \'confirmation-required\' | \'no-changes\' | \'unsafe-destination\' | \'pull-request-closed\';',
+  },
+  {
+    name: 'ForkPreviewId',
+    declaration: 'export type ForkPreviewId = Branded<\'ForkPreviewId\'>;',
+  },
+  {
+    name: 'ForkPreviewResult',
+    declaration: 'export type ForkPreviewResult = ForkFailure | {\n    readonly status: \'ready\';\n    readonly id: ForkPreviewId;\n    readonly account: string;\n    readonly repository: string;\n    readonly branch: string;\n    readonly upstream: string;\n    readonly base: \'master\';\n    readonly head: ForkCommitId | null;\n    readonly files: readonly ForkFileDiff[];\n};',
+  },
+  {
+    name: 'ForkPublishResult',
+    declaration: 'export type ForkPublishResult = ForkFailure | {\n    readonly status: \'saved\';\n    readonly repository: string;\n    readonly branch: string;\n    readonly commit: ForkCommitId;\n    readonly pullRequestUrl: string;\n};',
+  },
+  {
+    name: 'ForkRepositoriesResult',
+    declaration: 'export type ForkRepositoriesResult = ForkFailure | {\n    readonly status: \'ready\';\n    readonly account: string;\n    readonly upstream: string;\n    readonly base: \'master\';\n    readonly repositories: readonly ForkRepository[];\n};',
+  },
+  {
+    name: 'ForkRepository',
+    declaration: 'export interface ForkRepository {\n    readonly repository: string;\n    readonly defaultBranch: string;\n}',
+  },
+  {
     name: 'FrequencyTooHighError',
     declaration: 'export interface FrequencyTooHighError {\n    readonly code: \'frequency_too_high\';\n    readonly message: string;\n}',
   },
@@ -8930,6 +8991,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SourceExportFile',
     declaration: 'export interface SourceExportFile {\n    readonly path: string;\n    readonly content: string;\n}',
+  },
+  {
+    name: 'SourceExportIssueCode',
+    declaration: 'export type SourceExportIssueCode = \'invalid-repository\' | \'invalid-branch\' | \'profile-unavailable\' | \'unsafe-path\' | \'source-unavailable\' | \'unsupported-source\' | \'secret-suspected\' | \'source-changed\' | \'too-large\';',
   },
   {
     name: 'SourceExportRequest',

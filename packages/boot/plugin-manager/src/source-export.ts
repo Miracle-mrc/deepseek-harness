@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:p
 import { parseDocument } from 'yaml'
 import semver from 'semver'
 import { resolveBundleDir, type ProfileContext } from '@deepseek-ai/dsh-app-boot'
-import type { SourceExportFile, SourceExportIssueCode, SourceExportRequest, SourceExportResult } from './types.ts'
+import type { SourceExportFile, SourceExportIssue, SourceExportIssueCode, SourceExportRequest, SourceExportResult } from './types.ts'
 
 // These admission bounds cap one response's retained source content and filesystem work.
 const MAX_FILES = 2000
@@ -135,6 +135,25 @@ function suspectedText(value: string, complete = false): boolean {
     if (suspectedUrls(literal, true)) return true
   }
   return suspectedUrls(value, complete)
+}
+
+/**
+ * Screen an existing destination before including its text in a publication preview.
+ * @param content Exact destination text, never included in a refusal.
+ * @param path Destination used to select JSON or YAML inspection.
+ * @returns The refusal code, or undefined when manual review may proceed.
+ */
+export function sourceTextIssue(content: string, path: string): SourceExportIssueCode | undefined {
+  try {
+    if (content.includes('\0')) return 'unsupported-source'
+    if (suspectedText(content)) return 'secret-suspected'
+    if (/\.json$/i.test(path)) inspectSecrets(parseJson(content, path), path)
+    if (/\.ya?ml$/i.test(path)) inspectYaml(content, path, false)
+    return undefined
+  } catch (error) {
+    if (error instanceof ExportRefusal) return error.code
+    return 'unsupported-source'
+  }
 }
 
 function inspectSecrets(value: unknown, path: string): void {
@@ -412,7 +431,9 @@ async function copyPackage(capture: Capture, root: string, prefix: string): Prom
  * @param request Repository slug and a branch other than HEAD, main, or master, recorded as metadata without contacting either.
  * @returns A bounded UTF-8 file map, or one typed refusal without any source content.
  */
-export async function exportProfileSource(profile: ProfileContext, request: SourceExportRequest): Promise<SourceExportResult> {
+export async function exportProfileSource(profile: ProfileContext, request: SourceExportRequest): Promise<
+  Extract<SourceExportResult, { status: 'ready' }> | { readonly status: 'blocked'; readonly issues: readonly [SourceExportIssue] }
+> {
   const targetRepository = repository(request.repository)
   if (targetRepository === undefined) return { status: 'blocked', issues: [{ code: 'invalid-repository' }] }
   const targetBranch = branch(request.branch)

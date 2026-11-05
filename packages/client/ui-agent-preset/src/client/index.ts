@@ -37,6 +37,8 @@ import { AgentPresetLabel } from './AgentPresetLabel.tsx'
 import { CreatePluginMenuItem } from './CreatePluginMenuItem.tsx'
 import { ForkExportMenuItem, ForkExportOverlay } from './ForkExport.tsx'
 import { ForkExportController } from './fork-export-store.ts'
+import { ForkPublishOverlay } from './ForkPublish.tsx'
+import { ForkPublishController } from './fork-publish-store.ts'
 import type { AgentPresetLabelInjected } from './AgentPresetLabel.tsx'
 import { AgentPresetSeat } from './AgentPresetSeat.tsx'
 import type { AgentPresetSeatInjected } from './AgentPresetSeat.tsx'
@@ -133,12 +135,32 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register('settings.agentPreset', { zh, en, ja, es, fr, de, ru, pt }), 'ui-agent-preset: settings row dictionaries')
 
   ctx.inject(['remote.pluginManager'], (scope: ClientContext) => {
+    const forkRemote = (): ClientContext['remote']['creatorFork'] | undefined =>
+      scope.get('remote.creatorFork') as ClientContext['remote']['creatorFork'] | undefined
+    const forkPublish = new ForkPublishController({
+      repositories: async () => {
+        const result = await forkRemote()?.repositories()
+        if (result === undefined || !result.ok) throw new Error('Creator fork discovery is unavailable')
+        return result.value
+      },
+      preview: async (request) => {
+        const result = await forkRemote()?.preview(request)
+        if (result === undefined || !result.ok) throw new Error('Creator fork preview is unavailable')
+        return result.value
+      },
+      publish: async (id, confirmed) => {
+        const result = await forkRemote()?.publish(id, confirmed)
+        if (result === undefined || !result.ok) throw new Error('Creator fork publication outcome is unavailable')
+        return result.value
+      },
+      openPullRequest: (url) => { window.open(url, '_blank', 'noopener,noreferrer') },
+    })
     const forkExport = new ForkExportController(async (request) => {
       const result = await scope.remote.pluginManager.exportSource(request)
       if (!result.ok) throw new Error(result.error.message)
       return result.value
     })
-    scope.effect(() => () => { forkExport.dispose() }, 'ui-agent-preset: source export')
+    scope.effect(() => () => { forkExport.dispose(); forkPublish.dispose() }, 'ui-agent-preset: source export and publication')
     scope.slots.inject('plugins.add.actions', () => scope.slots.register({
       name: 'plugins.add.actions', id: 'save-to-my-fork', order: 10, locale: 'settings.agentPreset',
       inject: () => ({
@@ -152,8 +174,18 @@ export function apply(ctx: ClientContext): void {
         edit: (field: 'repository' | 'branch', value: string) => { forkExport.edit(field, value) },
         inspect: () => forkExport.inspect(), review: (reviewed: boolean) => { forkExport.review(reviewed) },
         download: () => { forkExport.download() }, dismissNotice: () => { forkExport.dismissNotice() },
+        openPublish: () => { forkExport.close(); forkPublish.open() },
       }),
     }, ForkExportOverlay))
+    scope.slots.inject('shell.overlay', () => scope.slots.register({
+      name: 'shell.overlay', id: 'agent-preset.fork-publish', locale: 'settings.agentPreset',
+      inject: () => ({
+        hooks: { forkPublish: forkPublish.store }, close: () => { forkPublish.close() }, connect: () => forkPublish.connect(),
+        edit: (field: 'repository' | 'branch', value: string) => { forkPublish.edit(field, value) },
+        inspect: () => forkPublish.inspect(), review: (reviewed: boolean) => { forkPublish.review(reviewed) },
+        publish: () => forkPublish.publish(), retry: () => forkPublish.retry(), dismissNotice: () => { forkPublish.dismissNotice() },
+      }),
+    }, ForkPublishOverlay))
   })
 
   ctx.effect(() => {

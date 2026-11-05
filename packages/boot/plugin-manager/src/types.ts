@@ -5,6 +5,7 @@ import type { PluginInventoryEntry } from '@deepseek-ai/dsh-host-plugin-inventor
 export type { PluginEntryId } from '@deepseek-ai/dsh-host-plugin-inventory/types'
 import type { PluginEntryId } from '@deepseek-ai/dsh-host-plugin-inventory/types'
 import type {} from '@deepseek-ai/dsh-typert-protocol'
+export type * from './fork-types.ts'
 import type { DetailFailureReason } from '@deepseek-ai/dsh-plugin-detail/types'
 
 declare module '@deepseek-ai/dsh-typert-protocol' {

@@ -24,6 +24,8 @@ import type { AgentPresetSeatInjected } from '../src/client/AgentPresetSeat.tsx'
 import { AgentPresetSeatController } from '../src/client/seat-store.ts'
 import { CreatePluginMenuItem, type CreatePluginMenuItemInjected } from '../src/client/CreatePluginMenuItem.tsx'
 import { ForkExportMenuItem, ForkExportOverlay, type ForkExportMenuInjected, type ForkExportOverlayInjected } from '../src/client/ForkExport.tsx'
+import { ForkPublishOverlay, type ForkPublishOverlayInjected } from '../src/client/ForkPublish.tsx'
+import type { ForkCommitId, ForkPreviewId } from '@deepseek-ai/dsh-api-remotes/client'
 import { AgentPresetSectionController } from '../src/client/section-store.ts'
 import { apply as hostApply } from '../src/index.ts'
 import type { AgentPresetRow } from '@deepseek-ai/dsh-agent-preset-registry/types'
@@ -474,6 +476,59 @@ describe('ui-agent-preset apply', () => {
       action.open()
       await overlay.inspect()
       expect(overlay.hooks.forkExport.getSnapshot().phase).toBe('failed')
+      const publishEntry = slots.entries('shell.overlay').find(item => item.component === ForkPublishOverlay)
+      const publication: Partial<ForkPublishOverlayInjected> | undefined = publishEntry?.inject?.()
+      if (publication?.hooks === undefined || publication.connect === undefined || publication.edit === undefined
+        || publication.inspect === undefined || publication.review === undefined || publication.publish === undefined
+        || publication.retry === undefined || publication.close === undefined || publication.dismissNotice === undefined
+        || overlay.openPublish === undefined) throw new Error('expected fork-publication actions')
+      overlay.openPublish()
+      expect(overlay.hooks.forkExport.getSnapshot().open).toBe(false)
+      expect(publication.hooks.forkPublish.getSnapshot().open).toBe(true)
+      await publication.connect()
+      expect(publication.hooks.forkPublish.getSnapshot().failure?.code).toBe('network')
+      const repositories = vi.fn(async () => ({ ok: true as const, value: {
+        status: 'ready' as const, account: 'alice', upstream: 'deepseek-ai/deepseek-harness', base: 'master' as const,
+        repositories: [{ repository: 'alice/harness', defaultBranch: 'main' }],
+      } }))
+      type PreviewResponse = Awaited<ReturnType<typeof ctx.remote.creatorFork.preview>>
+      const preview = vi.fn(async (): Promise<PreviewResponse> => ({ ok: true, value: {
+        status: 'ready' as const, id: 'preview-1' as ForkPreviewId, account: 'alice', repository: 'alice/harness',
+        branch: 'my-changes', upstream: 'deepseek-ai/deepseek-harness', base: 'master' as const, head: null, files: [],
+      } }))
+      type PublishResponse = Awaited<ReturnType<typeof ctx.remote.creatorFork.publish>>
+      const publish = vi.fn(async (): Promise<PublishResponse> => ({ ok: false, error: new RemoteError('gateway/internal', 'disconnected', {}) }))
+      remote.provideNamespaces({ creatorFork: { repositories, preview, publish } })
+      expect(repositories).not.toHaveBeenCalled()
+      await publication.connect()
+      publication.edit('repository', 'alice/harness')
+      publication.edit('branch', 'my-changes')
+      await publication.inspect()
+      publication.review(true)
+      await publication.publish()
+      expect(publish).toHaveBeenCalledExactlyOnceWith('preview-1', true)
+      expect(publication.hooks.forkPublish.getSnapshot().operation).toMatchObject({ status: 'blocked', failure: { effect: 'unknown' } })
+      await publication.retry()
+      expect(publish).toHaveBeenCalledTimes(2)
+      const pullRequestUrl = 'https://github.com/alice/harness/pull/1'
+      publish.mockResolvedValueOnce({ ok: true, value: {
+        status: 'saved', repository: 'alice/harness', branch: 'my-changes',
+        commit: 'saved-commit' as ForkCommitId, pullRequestUrl,
+      } })
+      const open = vi.fn()
+      vi.stubGlobal('window', { open })
+      try {
+        await publication.retry()
+        expect(open).toHaveBeenCalledExactlyOnceWith(pullRequestUrl, '_blank', 'noopener,noreferrer')
+        expect(publication.hooks.forkPublish.getSnapshot().operation).toMatchObject({ status: 'saved', openFailed: false })
+      } finally { vi.unstubAllGlobals() }
+      publication.close()
+      overlay.openPublish()
+      preview.mockResolvedValueOnce({ ok: false, error: new RemoteError('gateway/internal', 'disconnected', {}) })
+      await publication.inspect()
+      expect(publication.hooks.forkPublish.getSnapshot().failure).toMatchObject({ code: 'network', effect: 'none' })
+      publication.dismissNotice()
+      publication.close()
       await feature.dispose()
       expect(slots.entries('plugins.add.actions')).toHaveLength(0)
       expect(slots.entries('shell.overlay')).toHaveLength(0)

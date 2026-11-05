@@ -55,6 +55,7 @@ export interface ForkExportOverlayInjected {
   review: (reviewed: boolean) => void
   download: () => void
   dismissNotice: () => void
+  openPublish: () => void
 }
 
 type ForkExportOverlayProps = PropsLocale<'settings.agentPreset'> & InjectFace<ForkExportOverlayInjected>
@@ -72,7 +73,7 @@ const ISSUE_KEYS = {
  * @returns The review modal and download outcome Toast, including after the modal closes.
  */
 export function ForkExportOverlay({
-  useForkExport, close, edit, inspect, review, download, dismissNotice, t,
+  useForkExport, close, edit, inspect, review, download, dismissNotice, openPublish, t,
 }: ForkExportOverlayProps): ReactNode {
   const state = useForkExport(value => value)
   const id = useId()
@@ -86,6 +87,7 @@ export function ForkExportOverlay({
       description={t('forkIntro')} className={css.dialog as string} contentClassName={css.content as string}
       footer={<div className={css.actions}>
         <Button variant="outline" onClick={close}>{t('close')}</Button>
+        <Button variant="outline" onClick={openPublish}>{t('forkPublishLaunch')}</Button>
         <Button variant={state.preview === null ? 'primary' : 'outline'} disabled={busy} onClick={() => { void inspect() }}>
           {t(retry ? 'forkRetry' : 'forkInspect')}
         </Button>

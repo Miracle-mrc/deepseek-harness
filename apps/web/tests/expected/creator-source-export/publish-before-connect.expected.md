@@ -1,0 +1,11 @@
+- dialog "Save to my GitHub fork":
+  - heading "Save to my GitHub fork" [level=2]
+  - button "Close"
+  - paragraph: Load your authorized forks, choose a branch, and review every file. Confirmation creates a commit and opens a pull request to master in the selected fork.
+  - text: Branch
+  - textbox "Branch":
+    - /placeholder: my-customizations
+  - paragraph: Choose a branch other than the fork’s default branch, main, or master.
+  - button "Close"
+  - button "Load my GitHub forks"
+  - button "Preview changes" [disabled]

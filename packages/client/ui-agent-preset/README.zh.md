@@ -37,6 +37,10 @@ kind: "package-reference"
 
 同一菜单中的**保存到我的 Fork**在存在健康的创造预设时下载本地源码导出文件，包括从标准模式会话中使用。按 `owner/repository` 格式填写目标 Fork，并填写除 `main` 和 `master` 以外的有效分支名，然后选择**检查文件**。仓库和分支只作为元数据写入下载文件；此操作不检查仓库访问权限，也不写入 Git 服务器。展开每个文件检查其完整内容，确认已检查私人信息后，选择**下载源码导出文件**，保存 `dsh-source-export.json`。修改任一目标字段都会清除检查结果和确认；下载使用已捕获的内容，不会重新读取文件。
 
+选择**直接保存到 GitHub**，按需加载已授权的 fork，选择非默认分支，并检查精确的修改前后文本。预览将 `<selected-fork>:master` 标为 PR 目标；显示的上游用于核实 fork 网络。新分支从该 fork 的 `master` 开始。确认已检查私人信息后，**确认提交并打开 PR**只发布保留的回执。结果未知或已提交的失败会保留同一已批准操作，供显式重试。
+
+匹配的 PR 已关闭或合并时，会提供原请求的链接供查看，不创建替代请求。你可以修改目标或预览新的保存；只有在 GitHub 上重新打开原请求后，才重试原请求。写入结果未知时，目标修改和新预览会保持锁定，直到完成核实。
+
 导出包含 profile 的补丁、所选 bundle 引用，以及 [Plugin Manager](../../boot/plugin-manager/README.zh.md) 所说明的受支持本地插件源码。不包含凭据、Session、主目录和命令行覆盖配置，以及临时动态插件。检查被拒绝时保留表单并说明需要修正的内容；下载失败时保留已检查的预览供重试。关闭对话框会丢弃尚未完成的检查结果。关闭对话框后，下载结果 Toast 仍可显示。
 
 每次下载会在点击后将 Blob URL 保留在有界的 40 秒宽限期内。启动下载失败时立即释放；功能卸载时取消待处理的计时器并释放对应 URL。关闭审查对话框不会取消已启动的下载。此延迟用于兼容浏览器的下载处理方式，并不证明所有 Safari 版本均兼容。
@@ -55,7 +59,7 @@ kind: "package-reference"
 
 `CreatePluginMenuItem` 使用共享的预设列表 store，向 `plugins.add.actions` 贡献菜单项。选择时先调用页面传入的 `onDismiss()`，再调用与设置页 `creatorDraft` 相同的 `startCreatorDraft` 回调。该回调通过 `AgentPresetSeatController` 暂存 `cordis`（主区空白 Session 列出其他 preset 时不暂存，因为导航会打开另一个空白 Session，原空白 Session 保持不变），再通过显式保留草稿并传入 `agentPreset: 'cordis'` 的 `uiWorkspace.startSession` 调用打开任务，由 Host 以创造模式组合被复用的空白 Session 或新 Session；没有目标工作区时，暂存选择在 Session 绑定可用时应用。暂存选择应用后即清除。代码工作工具开启或关闭时均使用同一个选择器和选择 store，`AgentPresetSeat` 通过共享的 `Toast` 组件显示拒绝原因。
 
-源码导出入口使用同一预设列表，并检查 `pluginManager/exportSource` 的访问权限。检查对话框与结果 Toast 注册在 `shell.overlay` 中，因此关闭菜单或离开插件页不会丢弃它们。修改目标或关闭对话框会使尚未完成的读取失效；只有已确认检查的捕获结果才会交给浏览器下载。
+源码导出入口使用同一预设列表，并检查 `pluginManager/exportSource` 的访问权限。检查对话框与结果 Toast 注册在 `shell.overlay` 中，因此关闭菜单或离开插件页不会丢弃它们。修改目标或关闭对话框会使尚未完成的读取失效；只有已确认检查的捕获结果才会交给浏览器下载。 独立的 shell 覆盖层通过 `creatorFork` 提供显式 GitHub fork 发现、精确目标审查及确认；打开时不发起网络调用。修改目标会使审查失效，结果未知或已提交的失败则保留已批准回执，供显式核实。本地下载保持独立。
 
 `AgentPresetSeatController.select()` 与 `apply()` 返回本次尝试的结果：Host 提交暂存 preset 时为 `applied`；没有当前 Session 时为 `staged`；忙碌、没有暂存选择、Session 已开始或已使用该 preset，或 Host 最终落在其他 preset 时为 `unchanged`；Host 拒绝时为携带原始原因的 `refused`。选择器注入的 `select` 根据该结果报告 `agent_preset_switch`，并且只返回拒绝原因。
 

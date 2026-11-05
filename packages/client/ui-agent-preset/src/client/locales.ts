@@ -2,11 +2,16 @@
 
 import { guideEn, guideJa, guideEs, guideFr, guideDe, guideRu, guidePt, guideZh, type PresetGuideKey } from './guide-locales.ts'
 import { forkEn, forkJa, forkEs, forkFr, forkDe, forkRu, forkPt, forkZh, type ForkExportKey } from './fork-locales.ts'
+import {
+  forkPublishEn, forkPublishJa, forkPublishEs, forkPublishFr, forkPublishDe, forkPublishRu, forkPublishPt, forkPublishZh,
+  type ForkPublishKey,
+} from './fork-publish-locales.ts'
 
 /** Locale keys these surfaces render. */
 export type AgentPresetSettingsKey =
   | PresetGuideKey
   | ForkExportKey
+  | ForkPublishKey
   | 'builtInGroup'
   | 'customGroup'
   | 'seatHint'
@@ -40,6 +45,7 @@ export type AgentPresetSettingsKey =
 export const en: Record<AgentPresetSettingsKey, string> = {
   ...guideEn,
   ...forkEn,
+  ...forkPublishEn,
   builtInGroup: 'Built-in', customGroup: 'Custom',
   sectionIntro: 'Choose the agent’s tools and how it works. Use Standard mode for everyday tasks, or Creator mode to add capabilities to DSH.',
 
@@ -86,6 +92,7 @@ export const en: Record<AgentPresetSettingsKey, string> = {
 export const zh: Record<AgentPresetSettingsKey, string> = {
   ...guideZh,
   ...forkZh,
+  ...forkPublishZh,
   builtInGroup: '内置', customGroup: '自定义',
   sectionIntro: '选择 Agent 的工具和工作方式。日常任务用「标准模式」，扩展 DSH 的能力用「创造模式」。',
 
@@ -134,6 +141,7 @@ export type { PresetDisplaySource, PresetDisplayText } from '@deepseek-ai/dsh-ag
 export const ja = {
   ...guideJa,
   ...forkJa,
+  ...forkPublishJa,
   'builtInGroup': '組み込み',
   'customGroup': 'カスタム',
   'sectionIntro': 'エージェントのツールと動作を選択します。日々のタスクには標準モードを、DSH に機能を追加するにはクリエイターモードを使用してください。',
@@ -168,6 +176,7 @@ export const ja = {
 export const es = {
   ...guideEs,
   ...forkEs,
+  ...forkPublishEs,
   builtInGroup: 'Incorporado', customGroup: 'personalizado',
   sectionIntro: 'Elija las herramientas del agente y cómo funciona. Utilice el modo Estándar para las tareas diarias o el modo Creador para agregar capacidades a DSH.',
 
@@ -214,6 +223,7 @@ export const es = {
 export const fr = {
   ...guideFr,
   ...forkFr,
+  ...forkPublishFr,
   builtInGroup: 'Intégré', customGroup: 'Personnalisé',
   sectionIntro: 'Choisissez les outils de l’agent et son fonctionnement. Utilisez le mode Standard pour les tâches quotidiennes ou le mode Créateur pour ajouter des fonctionnalités à DSH.',
 
@@ -260,6 +270,7 @@ export const fr = {
 export const de = {
   ...guideDe,
   ...forkDe,
+  ...forkPublishDe,
   builtInGroup: 'Eingebaut', customGroup: 'Benutzerdefiniert',
   sectionIntro: 'Wählen Sie die Tools des Agenten und deren Funktionsweise aus. Verwenden Sie den Standardmodus für alltägliche Aufgaben oder den Creator-Modus, um DSH Funktionen hinzuzufügen.',
 
@@ -306,6 +317,7 @@ export const de = {
 export const ru = {
   ...guideRu,
   ...forkRu,
+  ...forkPublishRu,
   builtInGroup: 'Встроенный', customGroup: 'Пользовательский',
   sectionIntro: 'Выбирайте инструменты агента и то, как они работают. Используйте стандартный режим для повседневных задач или режим Creator, чтобы расширить возможности DSH.',
 
@@ -352,6 +364,7 @@ export const ru = {
 export const pt = {
   ...guidePt,
   ...forkPt,
+  ...forkPublishPt,
   builtInGroup: 'Integrado', customGroup: 'Personalizado',
   sectionIntro: 'Escolha as ferramentas do agente e como funciona. Use o modo Padrão para tarefas diárias ou o modo Criador para adicionar recursos ao DSH.',
 

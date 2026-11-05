@@ -82,6 +82,17 @@ pnpm 11 拦下依赖脚本时，失败的安装在 `pendingBuilds` 里报告 pro
 
 浏览器下载的内容与显示的预览完全一致。仓库和分支值仅为目标标签；操作不检查访问权限，也不发布文件。拒绝保留名称 `HEAD`，以及任意大小写的 `main` 和 `master`。Liveshare 查看者无法访问源码导出。[Creator 指南](../../../docs/user/develop/practice/dynamic-cordis.zh.md#save-to-my-fork) 介绍如何提取到新目录、人工进行 Git 审查，以及通过常规 profile 启动器恢复。每台机器都必须单独配置凭据。
 
+<a id="direct-github-publication"></a>
+### 直接发布到 GitHub
+
+`ctx.creatorFork` 拥有用户触发的 `repositories`、`preview` 和显式确认的 `publish` 调用；Plugin Manager 挂载此独立服务时不联系 GitHub。身份验证由 Host 现有的 `gh` 凭据存储提供。子进程使用经过清理且非交互的环境；token、请求正文和 CLI 诊断信息不会进入远程结果或日志。Liveshare 查看者不能调用这些方法。
+
+发现仓库及每次发布都会核实不可变的账号和仓库 ID、fork 网络、写入权限与实际默认分支。预览在 Host 上保留精确的有界捕获结果，将写入映射到 `creator-exports/saved/` 下，并返回完整的 UTF-8 修改前后文本及不透明回执。已有目标链接、子模块、大小写别名、疑似秘密、二进制文本、变化的分支头和超大结果均被拒绝。新分支从所选 fork 的 `master` 开始；已有分支保留其历史。PR 的目标是同一 fork 的 `master`。显示的目标路径之外的文件不会被修改。
+
+发布要求 `confirmed: true` 和保留的回执。已有分支使用 `createCommitOnBranch.expectedHeadOid`；新引用仅在完整提交准备好后独占创建。并发调用共享同一操作。显式重试会核实操作标记、预期父提交和精确文件树，并复用匹配的已有 PR。PR 创建失败会保留已批准的提交；分支写入结果未知时会持续显示，直到核实。匹配的 PR 已关闭或合并时，返回 `pull-request-closed` 及其安全链接，不创建替代请求；请先查看原 PR，只有重新打开后才重试。`ForkFailure.effect` 表示分支或 PR 的影响：`none`、`unknown` 或 `committed`；已确认的准备过程可能留下不可达的 Git 对象。自动删除分支或强制回退可能抹除并发工作，因此绝不尝试。PR 不会被合并。
+
+Plugin Manager 的可选 `fork` 配置默认使用 `ghCommand: gh`、`upstreamRepository: deepseek-ai/deepseek-harness`、`timeoutMs: 20000`、`operationTimeoutMs: 120000`、`outputBytes: 16777216`、`previewLifetimeMs: 900000` 和 `maxPreviews: 4`。`upstreamRepository` 用于核实允许的 fork 网络；分支和 PR 的目标属于所选 fork。回执内存有界；未提交回执会过期，所有回执在卸载时丢弃。开始新预览时会移除已完成的回执，包括已确认关闭或合并的 PR；旧 ID 随后返回 `stale-preview`。结果未明的提交持续保留直到卸载，避免静默遗忘。用户流程和重启恢复见 [Creator 指南](../../../docs/user/develop/practice/dynamic-cordis.zh.md#save-to-my-fork)。
+
 <a id="version-compatibility-and-exemptions"></a>
 ### 版本兼容性与豁免
 
@@ -190,7 +201,7 @@ service 运行若在 `idleTimeoutMs` 内没有任何捕获输出即被终止，�
 - 失败的删除可能留下部分依赖改动，失败或被取消的安装可能在 `node_modules` 或 pnpm 缓存中留下已下载文件。文件缺失的未启用依赖仍可删除。诊断日志保留在 profile 的 `.plugin-manager/logs` 目录中。
 - 管理结果描述 Host 激活状态。浏览器同步失败会在设置的插件列表中单独显示。
 - Desktop 包管理操作仍由 Desktop shell 负责。
-- 源码导出支持 UTF-8 本地包文件和 semver 注册表依赖。Git、tarball、workspace 依赖声明、二进制资源、隐藏的源文件、`cordis:include` 条目及捕获文件中缺少的包入口会被拒绝或排除。导出不保留依赖锁文件，也不保证传递依赖版本完全相同；本地包构建仍是显式恢复步骤。运行时 GitHub 发布留待后续阶段。
+- 源码导出支持 UTF-8 本地包文件和 semver 注册表依赖。Git、tarball、workspace 依赖声明、二进制资源、隐藏的源文件、`cordis:include` 条目及捕获文件中缺少的包入口会被拒绝或排除。导出不保留依赖锁文件，也不保证传递依赖版本完全相同；本地包构建仍是显式恢复步骤。直接发布要求 Host 已通过 GitHub CLI 登录；不提供浏览器 token 输入或新的 OAuth 流程。
 
 <a id="failure-behavior"></a>
 ### 失败行为

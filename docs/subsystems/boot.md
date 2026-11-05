@@ -10,6 +10,8 @@ The [boot package group](../../packages/boot/README.md) owns launcher-provided p
 
 `SourceExportRequest` names a repository slug and a branch other than `main` or `master`; these are labels without Git or network effects. `SourceExportResult` is either a `ready` versioned UTF-8 file map with `reviewRequired: true`, or `blocked` issues without captured source. Each file has a portable relative `path` and `content`. The [source export reference](../../packages/boot/plugin-manager/README.md#source-export) owns capture restrictions and restoration.
 
+`ForkRepositoriesResult` lists writable account-owned forks. `ForkPreviewResult` pairs an opaque `ForkPreviewId` with exact destination before/after text, account, branch head and the selected fork's `master`; `upstream` identifies the repository used to verify fork eligibility. `ForkPublishResult` identifies the committed branch and open PR within the selected fork. `ForkFailure` carries a sanitized code and branch/PR effect (`none`, `unknown`, or `committed`); a closed matching PR can include a safe `pullRequestUrl` for review. The [direct publication reference](../../packages/boot/plugin-manager/README.md#direct-github-publication) owns receipt lifetime, concurrency and recovery.
+
 `PluginEntryId` identifies one Loader entry; callers obtain it from `listPlugins` rather than constructing a patch id.
 
 `PluginInfo` carries module identity, effective enablement, fiber phase and optional display `meta`, plus a unique `patchId` or a `readOnlyReason`.
@@ -146,6 +148,41 @@ async edit( entry: Entry, change: (current: Record<string, unknown>, inherited: 
 ```
 
 Source: [`packages/boot/config-editor/src/index.ts`](../../packages/boot/config-editor/src/index.ts)
+
+<a id="ctxcreatorfork--creatorfork"></a>
+
+### `ctx.creatorFork` — `CreatorFork`
+
+Owns bounded source receipts, GitHub identity checks, atomic branch writes, and PR reconciliation.
+
+```ts cordis-catalog
+/**
+ * Discover writable forks owned by the authenticated Host user. Only this explicit call contacts GitHub.
+ * @returns Account, upstream, and authorized fork choices, or a sanitized refusal.
+ */
+@Remote async repositories(): Promise<ForkRepositoriesResult>
+
+/**
+ * Capture safe local source and exact destination text, without uploading source or changing GitHub.
+ * A new preview releases successful and known-closed receipts; their IDs then become stale.
+ * @param request Authorized fork slug and a non-default branch; new branches start from that fork's master.
+ * @returns An opaque, expiring receipt and complete UTF-8 before/after text, or a refusal with no source content.
+ */
+@Remote async preview(request: SourceExportRequest): Promise<ForkPreviewResult>
+
+/**
+ * Commit only the retained preview after explicit confirmation, then create or reuse its open PR to the same fork's master.
+ * Repeated calls share an in-flight operation and reconcile lost responses. A closed PR is reported without recreating it.
+ * A failed PR retains the approved commit; unknown writes remain unknown until reconciliation,
+ * with no forced rollback or branch deletion.
+ * @param id Receipt from preview; source text and destinations cannot be replaced by this call.
+ * @param confirmed The person's explicit acknowledgement of the displayed diff and destinations.
+ * @returns Confirmed commit and PR, or a sanitized refusal stating absent, unknown, or committed remote effects.
+ */
+@Remote async publish(id: ForkPreviewId, confirmed: boolean): Promise<ForkPublishResult>
+```
+
+Source: [`packages/boot/plugin-manager/src/creator-fork.ts`](../../packages/boot/plugin-manager/src/creator-fork.ts)
 
 <a id="ctxheadlessstartup--headlessstartupvalues"></a>
 

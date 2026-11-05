@@ -40,5 +40,6 @@
   - checkbox "I reviewed every file for private information"
   - text: I reviewed every file for private information
   - button "Close"
+  - button "Save directly to GitHub"
   - button "Inspect files"
   - button "Download source export" [disabled]

@@ -82,6 +82,17 @@ Screening checks credential-bearing URI user information, sensitive URL query or
 
 The browser downloads the exact preview it displays. Repository and branch values are destination labels only; the operation does not check access or publish files. The reserved name `HEAD` is rejected; `main` and `master` are rejected regardless of case. Liveshare viewers cannot access source export. The [Creator guide](../../../docs/user/develop/practice/dynamic-cordis.md#save-to-my-fork) describes extraction into a fresh directory, manual Git review, and restoration through the normal profile launcher. Credentials must be configured independently on each machine.
 
+<a id="direct-github-publication"></a>
+### Direct GitHub publication
+
+`ctx.creatorFork` owns user-triggered `repositories`, `preview`, and explicitly confirmed `publish` calls; Plugin Manager mounts this separate service without contacting GitHub. The existing Host `gh` credential store supplies authentication. Its subprocess receives a scrubbed, noninteractive environment; tokens, request bodies, and CLI diagnostics never enter the remote result or logs. Liveshare viewers cannot invoke these methods.
+
+Discovery and each publication verify the immutable account and repository IDs, fork network, write access, and actual default branch. A preview retains the exact bounded capture on the Host, maps writes below `creator-exports/saved/`, and returns complete UTF-8 before/after text plus an opaque receipt. Existing destination links, submodules, case aliases, suspected secrets, binary text, changed heads, and oversized results are refused. A new branch starts from `master` in the selected fork; existing branches retain their history. PRs target that same fork's `master`. No files outside the displayed destinations are changed.
+
+Publication requires `confirmed: true` and the retained receipt. Existing branches use `createCommitOnBranch.expectedHeadOid`; new refs are created exclusively at the complete prepared commit. Concurrent calls share one operation. Explicit retries reconcile the operation marker, expected parent and exact file tree, and reuse an existing matching PR. PR creation failure retains the approved commit; unknown branch writes stay visible until checked. A closed or merged matching PR returns `pull-request-closed` and its safe link without creating a replacement; review it and retry only after reopening the existing PR. `ForkFailure.effect` describes branch/PR effects: `none`, `unknown`, or `committed`; confirmed preparation can leave unreachable Git objects. Automatic branch deletion or forced rollback could erase concurrent work and is never attempted. No PR is merged.
+
+Plugin Manager’s optional `fork` configuration uses `ghCommand: gh`, `upstreamRepository: deepseek-ai/deepseek-harness`, `timeoutMs: 20000`, `operationTimeoutMs: 120000`, `outputBytes: 16777216`, `previewLifetimeMs: 900000`, and `maxPreviews: 4`. `upstreamRepository` verifies the eligible fork network; the selected fork owns the branch and PR destination. Receipt memory is bounded; unsubmitted receipts expire, and all receipts are discarded on unload. Completed receipts, including confirmed closed or merged PRs, are evicted when another preview starts; their old IDs then return `stale-preview`. Unresolved submissions remain until unload so uncertain operations cannot be silently forgotten. See the [Creator guide](../../../docs/user/develop/practice/dynamic-cordis.md#save-to-my-fork) for the user flow and restart recovery.
+
 <a id="version-compatibility-and-exemptions"></a>
 ### Version compatibility and exemptions
 
@@ -190,7 +201,7 @@ Tool results append to the transcript. Enabling or disabling other tools can cha
 - A failed removal may leave dependencies partially changed, and a failed or cancelled installation can leave downloaded files under `node_modules` or the pnpm store. Inactive dependencies with missing files remain removable. Diagnostic logs remain under the profile's `.plugin-manager/logs` directory.
 - Management results describe Host activation. Browser synchronization failures appear separately in the Settings plugin list.
 - Desktop package operations remain owned by the Desktop shell.
-- Source export supports UTF-8 local package files and semver registry dependencies. Git, tarball, workspace dependency specs, binary assets, hidden source files, `cordis:include` entries, and package entries absent from the captured files are refused or excluded. It does not preserve dependency lockfiles or guarantee identical transitive versions; local package builds remain an explicit restoration step. Runtime GitHub publication is deferred.
+- Source export supports UTF-8 local package files and semver registry dependencies. Git, tarball, workspace dependency specs, binary assets, hidden source files, `cordis:include` entries, and package entries absent from the captured files are refused or excluded. It does not preserve dependency lockfiles or guarantee identical transitive versions; local package builds remain an explicit restoration step. Direct publication requires a Host with an existing GitHub CLI login; no browser token-entry or new OAuth flow is provided.
 
 <a id="failure-behavior"></a>
 ### Failure behavior

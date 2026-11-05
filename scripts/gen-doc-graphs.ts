@@ -171,6 +171,14 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Shares profile package operations with the CLI and reports persisted and running state to Web and agent callers.',
   },
   {
+    key: 'creatorFork',
+    pkg: 'plugin-manager',
+    title: 'Reviewed Creator source publication',
+    mode: 'service',
+    consumers: ['client-ui-agent-preset'],
+    note: 'Publishes a confirmed source receipt to a selected fork branch and opens a PR to master in that fork.',
+  },
+  {
     key: 'pluginMarket',
     pkg: 'plugin-market',
     title: 'Plugin market index reader',

@@ -1,0 +1,146 @@
+- dialog "Save to my GitHub fork":
+  - heading "Save to my GitHub fork" [level=2]
+  - button "Close"
+  - paragraph: Load your authorized forks, choose a branch, and review every file. Confirmation creates a commit and opens a pull request to master in the selected fork.
+  - text: Fork repository
+  - combobox "Fork repository":
+    - option "Choose an authorized fork"
+    - option "alice/harness" [selected]
+  - text: Branch
+  - textbox "Branch":
+    - /placeholder: my-customizations
+    - text: creator/saved
+  - paragraph: Choose a branch other than the fork’s default branch, main, or master.
+  - term: GitHub account
+  - definition: alice
+  - term: Upstream repository
+  - definition: deepseek-ai/deepseek-harness
+  - term: Fork repository
+  - definition: alice/harness
+  - term: Branch
+  - definition: creator/saved
+  - term: Pull request destination
+  - definition: alice/harness:master
+  - term: Destination head
+  - definition: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  - paragraph: This branch keeps earlier commits, which may also appear in the pull request. Choose a new branch to include only this save.
+  - heading "Files to change (11)" [level=3]
+  - paragraph: Before and after text is shown in full. Expand exact text to inspect whitespace and escaped line endings.
+  - group:
+    - code: creator-exports/saved/bundles/0/cordis.patch.yml
+    - region "Before":
+      - heading "Before" [level=4]
+      - paragraph: This file does not exist at the destination.
+    - region "After":
+      - heading "After" [level=4]
+      - paragraph: 3 UTF-8 bytes · 1 LF characters
+      - text: "[]"
+      - group: Exact text with escaped line endings
+  - group:
+    - code: creator-exports/saved/bundles/0/index.ts
+    - region "Before":
+      - heading "Before" [level=4]
+      - paragraph: 45 UTF-8 bytes · 0 LF characters
+      - text: export const greeting = "Created for my fork"
+      - group: Exact text with escaped line endings
+    - region "After":
+      - heading "After" [level=4]
+      - paragraph: 46 UTF-8 bytes · 1 LF characters
+      - text: export const greeting = "Created for my fork"
+      - group: Exact text with escaped line endings
+  - group:
+    - code: creator-exports/saved/bundles/0/package.json
+    - region "Before":
+      - heading "Before" [level=4]
+      - paragraph: This file does not exist at the destination.
+    - region "After":
+      - heading "After" [level=4]
+      - paragraph: 123 UTF-8 bytes · 1 LF characters
+      - text: "{\"name\":\"@fixture/creator-source-publish\",\"version\":\"1.0.0\",\"type\":\"module\",\"dsh\":{\"bundle\":{\"patch\":\"cordis.patch.yml\"}}}"
+      - group: Exact text with escaped line endings
+  - group:
+    - code: creator-exports/saved/bundles/0/pnpm-workspace.yaml
+    - region "Before":
+      - heading "Before" [level=4]
+      - paragraph: This file does not exist at the destination.
+    - region "After":
+      - heading "After" [level=4]
+      - paragraph: 61 UTF-8 bytes · 5 LF characters
+      - text: "packages: - . nodeLinker: hoisted autoInstallPeers: false"
+      - group: Exact text with escaped line endings
+  - group:
+    - code: creator-exports/saved/bundles/1/cordis.patch.yml
+    - region "Before":
+      - heading "Before" [level=4]
+      - paragraph: This file does not exist at the destination.
+    - region "After":
+      - heading "After" [level=4]
+      - paragraph: 273 UTF-8 bytes · 13 LF characters
+      - text: "- id: session-log-deepseek config: enabled: false - id: agent-default-model config: provider: deepseek-official model: deepseek-v4-flash - id: agent-preset-registry config: default: standard - id: agent-preset-registry config: default: standard"
+      - group: Exact text with escaped line endings
+  - group:
+    - code: creator-exports/saved/bundles/1/package.json
+    - region "Before":
+      - heading "Before" [level=4]
+      - paragraph: This file does not exist at the destination.
+    - region "After":
+      - heading "After" [level=4]
+      - paragraph: 100 UTF-8 bytes · 0 LF characters
+      - text: "{\"name\":\"dsh-web-scaffold-defaults\",\"version\":\"1.0.0\",\"dsh\":{\"bundle\":{\"patch\":\"cordis.patch.yml\"}}}"
+      - group: Exact text with escaped line endings
+  - group:
+    - code: creator-exports/saved/bundles/1/pnpm-workspace.yaml
+    - region "Before":
+      - heading "Before" [level=4]
+      - paragraph: This file does not exist at the destination.
+    - region "After":
+      - heading "After" [level=4]
+      - paragraph: 61 UTF-8 bytes · 5 LF characters
+      - text: "packages: - . nodeLinker: hoisted autoInstallPeers: false"
+      - group: Exact text with escaped line endings
+  - group:
+    - code: creator-exports/saved/profiles/saved/package.json
+    - region "Before":
+      - heading "Before" [level=4]
+      - paragraph: This file does not exist at the destination.
+    - region "After":
+      - heading "After" [level=4]
+      - paragraph: 431 UTF-8 bytes · 19 LF characters
+      - text: "{ \"name\": \"dsh-profile-saved\", \"private\": true, \"type\": \"module\", \"dependencies\": { \"@fixture/creator-source-publish\": \"link:../../bundles/0\", \"dsh-web-scaffold-defaults\": \"link:../../bundles/1\" }, \"dsh\": { \"profile\": { \"bundles\": [ \"@deepseek-ai/dsh-base\", \"@deepseek-ai/dsh-web-app\", \"@fixture/creator-source-publish\", \"dsh-web-scaffold-defaults\" ] } } }"
+      - group: Exact text with escaped line endings
+  - group:
+    - code: creator-exports/saved/profiles/saved/cordis.patch.yml
+    - region "Before":
+      - heading "Before" [level=4]
+      - paragraph: This file does not exist at the destination.
+    - region "After":
+      - heading "After" [level=4]
+      - paragraph: 343 UTF-8 bytes · 7 LF characters
+      - text: "# Your patch layer for this dsh profile, applied after every bundle layer: # a top-level YAML array of loader patch entries (id-targeted config # overrides, disables, and insert lists; `!!js` expressions allowed). - id: ui-settings-general name: \"@deepseek-ai/dsh-client-ui-settings-general\" config: welcomeNoticeVersion: 2026-09-28.1"
+      - group: Exact text with escaped line endings
+  - group:
+    - code: creator-exports/saved/profiles/saved/pnpm-workspace.yaml
+    - region "Before":
+      - heading "Before" [level=4]
+      - paragraph: This file does not exist at the destination.
+    - region "After":
+      - heading "After" [level=4]
+      - paragraph: 61 UTF-8 bytes · 5 LF characters
+      - text: "packages: - . nodeLinker: hoisted autoInstallPeers: false"
+      - group: Exact text with escaped line endings
+  - group:
+    - code: creator-exports/saved/.gitignore
+    - region "Before":
+      - heading "Before" [level=4]
+      - paragraph: This file does not exist at the destination.
+    - region "After":
+      - heading "After" [level=4]
+      - paragraph: 231 UTF-8 bytes · 13 LF characters
+      - text: /* !/.gitignore !/bundles/ !/profiles/ /profiles/* !/profiles/saved/ /profiles/saved/* !/profiles/saved/package.json !/profiles/saved/cordis.patch.yml !/profiles/saved/pnpm-workspace.yaml **/node_modules/ **/.env* **/.credentials*
+      - group: Exact text with escaped line endings
+  - checkbox "I checked every file for private information and authorize this commit and pull request"
+  - text: I checked every file for private information and authorize this commit and pull request
+  - button "Close"
+  - button "Load my GitHub forks"
+  - button "Preview changes"
+  - button "Confirm commit and open PR" [disabled]
