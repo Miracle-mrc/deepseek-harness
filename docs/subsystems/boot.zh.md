@@ -173,6 +173,7 @@ Owns bounded source receipts, GitHub identity checks, atomic branch writes, and 
 /**
  * Commit only the retained preview after explicit confirmation, then create or reuse its open PR to the same fork's master.
  * Repeated calls share an in-flight operation and reconcile lost responses. A closed PR is reported without recreating it.
+ * An in-flight publication retains its receipt past the preview's expiry.
  * A failed PR retains the approved commit; unknown writes remain unknown until reconciliation,
  * with no forced rollback or branch deletion.
  * @param id Receipt from preview; source text and destinations cannot be replaced by this call.

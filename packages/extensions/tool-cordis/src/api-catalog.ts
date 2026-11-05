@@ -939,7 +939,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: '@Remote async publish(id: ForkPreviewId, confirmed: boolean): Promise<ForkPublishResult>',
-        description: 'Commit only the retained preview after explicit confirmation, then create or reuse its open PR to the same fork\'s master. Repeated calls share an in-flight operation and reconcile lost responses. A closed PR is reported without recreating it. A failed PR retains the approved commit; unknown writes remain unknown until reconciliation, with no forced rollback or branch deletion.',
+        description: 'Commit only the retained preview after explicit confirmation, then create or reuse its open PR to the same fork\'s master. Repeated calls share an in-flight operation and reconcile lost responses. A closed PR is reported without recreating it. An in-flight publication retains its receipt past the preview\'s expiry. A failed PR retains the approved commit; unknown writes remain unknown until reconciliation, with no forced rollback or branch deletion.',
         parameters: [{ name: 'id', description: 'Receipt from preview; source text and destinations cannot be replaced by this call.' }, { name: 'confirmed', description: 'The person\'s explicit acknowledgement of the displayed diff and destinations.' }],
         returns: 'Confirmed commit and PR, or a sanitized refusal stating absent, unknown, or committed remote effects.',
       },

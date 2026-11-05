@@ -91,7 +91,7 @@ pnpm 11 拦下依赖脚本时，失败的安装在 `pendingBuilds` 里报告 pro
 
 发布要求 `confirmed: true` 和保留的回执。已有分支使用 `createCommitOnBranch.expectedHeadOid`；新引用仅在完整提交准备好后独占创建。并发调用共享同一操作。显式重试会核实操作标记、预期父提交和精确文件树，并复用匹配的已有 PR。PR 创建失败会保留已批准的提交；分支写入结果未知时会持续显示，直到核实。匹配的 PR 已关闭或合并时，返回 `pull-request-closed` 及其安全链接，不创建替代请求；请先查看原 PR，只有重新打开后才重试。`ForkFailure.effect` 表示分支或 PR 的影响：`none`、`unknown` 或 `committed`；已确认的准备过程可能留下不可达的 Git 对象。自动删除分支或强制回退可能抹除并发工作，因此绝不尝试。PR 不会被合并。
 
-Plugin Manager 的可选 `fork` 配置默认使用 `ghCommand: gh`、`upstreamRepository: deepseek-ai/deepseek-harness`、`timeoutMs: 20000`、`operationTimeoutMs: 120000`、`outputBytes: 16777216`、`previewLifetimeMs: 900000` 和 `maxPreviews: 4`。`upstreamRepository` 用于核实允许的 fork 网络；分支和 PR 的目标属于所选 fork。回执内存有界；未提交回执会过期，所有回执在卸载时丢弃。开始新预览时会移除已完成的回执，包括已确认关闭或合并的 PR；旧 ID 随后返回 `stale-preview`。结果未明的提交持续保留直到卸载，避免静默遗忘。用户流程和重启恢复见 [Creator 指南](../../../docs/user/develop/practice/dynamic-cordis.zh.md#save-to-my-fork)。
+Plugin Manager 的可选 `fork` 配置默认使用 `ghCommand: gh`、`upstreamRepository: deepseek-ai/deepseek-harness`、`timeoutMs: 20000`、`operationTimeoutMs: 120000`、`outputBytes: 16777216`、`previewLifetimeMs: 900000` 和 `maxPreviews: 4`。`upstreamRepository` 用于核实允许的 fork 网络；分支和 PR 的目标属于所选 fork。回执内存有界；未提交回执会过期，所有回执在卸载时丢弃。开始新预览时会移除已完成的回执，包括已确认关闭或合并的 PR；旧 ID 随后返回 `stale-preview`。正在进行的提交不会过期或被移除。结果未明的提交持续保留直到卸载，避免静默遗忘。用户流程和重启恢复见 [Creator 指南](../../../docs/user/develop/practice/dynamic-cordis.zh.md#save-to-my-fork)。
 
 <a id="version-compatibility-and-exemptions"></a>
 ### 版本兼容性与豁免

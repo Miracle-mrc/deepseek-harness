@@ -419,6 +419,62 @@ it('requires a known unexpired preview before any publication lookup', async () 
   expect(state.requests).toHaveLength(reads)
 })
 
+it('shares a pending publication after its unsubmitted preview lifetime expires', async () => {
+  const { service, state } = await fixture(true, { config: { previewLifetimeMs: 100 } })
+  const now = vi.spyOn(Date, 'now').mockReturnValue(1000)
+  onTestFinished(() => { now.mockRestore() })
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  const entered = Promise.withResolvers<undefined>()
+  const release = Promise.withResolvers<undefined>()
+  onTestFinished(() => { release.resolve(undefined) })
+  let identityReads = 0
+  state.beforeRequest = async (request) => {
+    if (request.path !== 'user' || ++identityReads !== 1) return
+    entered.resolve(undefined)
+    await release.promise
+  }
+  const first = service.publish(preview.id, true)
+  await entered.promise
+  now.mockReturnValue(1101)
+  const duplicate = service.publish(preview.id, true)
+  release.resolve(undefined)
+  const [one, two] = await Promise.all([first, duplicate])
+  expect(one.status).toBe('saved')
+  expect(two).toEqual(one)
+  expect(state.requests.filter(request => request.path === 'graphql')).toHaveLength(1)
+  expect(state.requests.filter(request => request.method === 'POST' && request.path.endsWith('/pulls'))).toHaveLength(1)
+})
+
+it('retains a pending receipt across expiry cleanup and reconciles its later unknown write', async () => {
+  const { service, state } = await fixture(true, { config: { previewLifetimeMs: 100, maxPreviews: 1 } })
+  const now = vi.spyOn(Date, 'now').mockReturnValue(1000)
+  onTestFinished(() => { now.mockRestore() })
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  const entered = Promise.withResolvers<undefined>()
+  const release = Promise.withResolvers<undefined>()
+  onTestFinished(() => { release.resolve(undefined) })
+  let identityReads = 0
+  state.beforeRequest = async (request) => {
+    if (request.path !== 'user' || ++identityReads !== 1) return
+    entered.resolve(undefined)
+    await release.promise
+  }
+  state.lostCommit = true
+  const first = service.publish(preview.id, true)
+  await entered.promise
+  now.mockReturnValue(1101)
+  const next = await service.preview(TARGET).finally(() => { release.resolve(undefined) })
+  const unknown = await first
+  const reconciled = await service.publish(preview.id, true)
+  expect(unknown).toEqual({ status: 'blocked', code: 'timeout', effect: 'unknown' })
+  expect(next).toEqual({ status: 'blocked', code: 'too-large', effect: 'none' })
+  expect(reconciled.status).toBe('saved')
+  expect(state.commits.size).toBe(1)
+  expect(state.requests.filter(request => request.path === 'graphql')).toHaveLength(1)
+})
+
 it('keeps concurrent preview admission within the retained receipt limit', async () => {
   const { service, state } = await fixture(false, { config: { maxPreviews: 1 } })
   const firstEntered = Promise.withResolvers<undefined>()

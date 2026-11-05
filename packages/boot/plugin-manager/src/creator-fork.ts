@@ -169,6 +169,7 @@ export class CreatorFork extends TypertRemoteService {
   }
   private releaseReceipts(): void {
     for (const [id, receipt] of this.receipts) {
+      if (receipt.pending !== null) continue
       if (receipt.saved !== null || receipt.closed || (!receipt.attempted && receipt.expires <= Date.now())) this.receipts.delete(id)
     }
   }
@@ -271,6 +272,7 @@ export class CreatorFork extends TypertRemoteService {
   /**
    * Commit only the retained preview after explicit confirmation, then create or reuse its open PR to the same fork's master.
    * Repeated calls share an in-flight operation and reconcile lost responses. A closed PR is reported without recreating it.
+   * An in-flight publication retains its receipt past the preview's expiry.
    * A failed PR retains the approved commit; unknown writes remain unknown until reconciliation,
    * with no forced rollback or branch deletion.
    * @param id Receipt from preview; source text and destinations cannot be replaced by this call.
@@ -282,9 +284,10 @@ export class CreatorFork extends TypertRemoteService {
     return this.operation(async (signal) => {
       if (!confirmed) return failed(new Refusal('confirmation-required'))
       const receipt = this.receipts.get(id)
-      if (receipt === undefined || (!receipt.attempted && receipt.expires <= Date.now())) return failed(new Refusal('stale-preview'))
-      if (receipt.saved !== null) return receipt.saved
+      if (receipt === undefined) return failed(new Refusal('stale-preview'))
       if (receipt.pending !== null) return receipt.pending
+      if (!receipt.attempted && receipt.expires <= Date.now()) return failed(new Refusal('stale-preview'))
+      if (receipt.saved !== null) return receipt.saved
       const pending = this.submit(receipt, signal)
       receipt.pending = pending
       try { return await pending }
