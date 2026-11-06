@@ -7,7 +7,8 @@ import {
   Button, Checkbox, IconCheckOutlineRegular, IconWarningOutlineRegular, Input, Modal, StateDot, Toast,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AgentPresetSettingsKey } from './locales.ts'
-import type { ForkPublishState, ReadyForkPreview } from './fork-publish-store.ts'
+import type { ForkPublishState } from './fork-publish-store.ts'
+import { ForkFilePreview } from './ForkFilePreview.tsx'
 import css from './ForkPublish.module.css'
 
 /** Read-only snapshots and explicit commands supplied by the owning registration. */
@@ -24,7 +25,6 @@ export interface ForkPublishOverlayInjected {
 }
 
 type ForkPublishOverlayProps = PropsLocale<'settings.agentPreset'> & InjectFace<ForkPublishOverlayInjected>
-type Translate = ForkPublishOverlayProps['t']
 
 const ISSUE_KEYS = {
   'invalid-repository': 'forkInvalidRepository', 'invalid-branch': 'forkInvalidBranch',
@@ -41,48 +41,8 @@ const ISSUE_KEYS = {
   'pull-request-closed': 'forkPublishPullRequestClosed',
 } satisfies Record<ForkIssueCode, AgentPresetSettingsKey>
 
-function textMetrics(value: string, t: Translate): string {
-  let newlines = 0
-  for (const character of value) if (character === '\n') newlines++
-  return t('forkPublishTextMetrics', { bytes: String(new TextEncoder().encode(value).byteLength), newlines: String(newlines) })
-}
-
-function ExactText({ value, t }: { readonly value: string; readonly t: Translate }): ReactNode {
-  return <>
-    <pre tabIndex={0}>{value}</pre>
-    <details>
-      <summary>{t('forkPublishEscapedText')}</summary>
-      <pre tabIndex={0}>{JSON.stringify(value)}</pre>
-    </details>
-  </>
-}
-
-function FilePreview({ preview, t }: { readonly preview: ReadyForkPreview; readonly t: Translate }): ReactNode {
-  return <section className={css.preview}>
-    <h3>{t('forkPublishFiles', { count: String(preview.files.length) })}</h3>
-    <p className={css.hint}>{t('forkPublishExactText')}</p>
-    <div className={css.files}>
-      {preview.files.map(file => <details key={file.path} open className={css.file}>
-        <summary><code>{file.path}</code></summary>
-        <section aria-label={t('forkPublishBefore')}>
-          <h4>{t('forkPublishBefore')}</h4>
-          {file.before === null ? <p className={css.hint}>{t('forkPublishAbsent')}</p> : <>
-            <p className={css.hint}>{textMetrics(file.before, t)}</p>
-            <ExactText value={file.before} t={t} />
-          </>}
-        </section>
-        <section aria-label={t('forkPublishAfter')}>
-          <h4>{t('forkPublishAfter')}</h4>
-          <p className={css.hint}>{textMetrics(file.after, t)}</p>
-          <ExactText value={file.after} t={t} />
-        </section>
-      </details>)}
-    </div>
-  </section>
-}
-
 /**
- * Render authorized choices and complete text before requiring an explicit commit and PR confirmation.
+ * Render authorized choices and on-demand exact file review before explicit commit and PR confirmation.
  * @param props Publication view state, user-triggered commands, and localized copy.
  * @returns The review dialog and outcome Toast, including after the dialog closes.
  */
@@ -161,7 +121,7 @@ export function ForkPublishOverlay({
           {operation.failure.pullRequestUrl === undefined ? null : <a href={operation.failure.pullRequestUrl}
             target="_blank" rel="noopener noreferrer">{t('forkPublishOpenPr')}</a>}
         </section>}
-        {preview === undefined ? null : <FilePreview preview={preview} t={t} />}
+        {preview === undefined ? null : <ForkFilePreview key={preview.id} preview={preview} t={t} />}
         {state.preview === null || operation !== null ? null : <Checkbox checked={state.reviewed}
           onChange={review} label={t('forkPublishReviewed')} />}
         {operation?.status !== 'saved' ? null : <section className={css.success}>

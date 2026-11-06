@@ -18,7 +18,7 @@ agent 编写纯配置组合包，在 patch 中插入 `@deepseek-ai/dsh-mcp-clien
 
 Creator 可用时，打开 **插件 → 添加插件 → Save to My Fork**。本地源码下载仍无需连接 GitHub：填写目标标签、检查捕获的文件、确认审查后下载 JSON。要直接发布，选择**直接保存到 GitHub**，然后显式加载 Host 现有 GitHub 登录可访问的仓库。打开任一对话框都不会请求 GitHub。
 
-选择显示的 GitHub 账号拥有且可写的 fork，并输入 `main`、`master` 和该 fork 实际默认分支以外的分支。配置的上游用于核实允许的 fork 网络，默认为 `deepseek-ai/deepseek-harness`；部署所有者可在 Plugin Manager 中设置 `fork.upstreamRepository`。检查精确的修改前后文本（包括转义空白字符）、`creator-exports/saved/` 下的每个目标路径、账号以及 PR 目标 `<selected-fork>:<default-branch>`。新分支从所选 fork 的实际默认分支开始；已有分支保留其历史。修改目标后需要重新预览并确认。仅在审查全部文件后确认**确认提交并打开 PR**。DSH 创建或更新该分支，并打开或复用指向同一 fork 中已审查默认分支的 PR，永不合并。
+选择显示的 GitHub 账号拥有且可写的 fork，并输入 `main`、`master` 和该 fork 实际默认分支以外的分支。配置的上游用于核实允许的 fork 网络，默认为 `deepseek-ai/deepseek-harness`；部署所有者可在 Plugin Manager 中设置 `fork.upstreamRepository`。检查精确的修改前后文本（包括转义空白字符）、`creator-exports/saved/` 下的每个目标路径、账号以及 PR 目标 `<selected-fork>:<default-branch>`。可按路径搜索或逐页浏览列表，选择文件后才会显示其完整文本；需要时再打开转义文本。筛选仅改变视图，不会改变待发布的文件集合。新分支从所选 fork 的实际默认分支开始；已有分支保留其历史。修改目标后需要重新预览并确认。仅在审查全部文件后确认**确认提交并打开 PR**。DSH 创建或更新该分支，并打开或复用指向同一 fork 中已审查默认分支的 PR，永不合并。
 
 身份验证使用 Host 现有的 `gh` 凭据存储，不会将 token 复制到配置或导出文件。身份验证或仓库访问失败时，通过现有流程修复 Host 的 GitHub 登录或权限，再显式重试。账号变化、意外的 fork、分支头变化和不安全的目标路径会阻止发布。超时后分支可能已经提交：对话框说明结果未知还是已提交，重试会先核实同一回执对应的结果再继续。核实尚未完成时，不要启动第二次保存。未提交的预览默认 15 分钟后过期；Host 重启会丢弃内存中的回执，因此再次保存前应先检查 fork 分支和已有 PR。
 
