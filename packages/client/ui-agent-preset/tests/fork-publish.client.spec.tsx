@@ -26,6 +26,30 @@ const PREVIEW = {
   ],
 } satisfies ForkPreviewResult
 
+const ACCESS_FAILURES = [
+  { code: 'mixed-account', key: 'forkPublishMixedAccount' },
+  { code: 'permission-denied', key: 'forkPublishPermissionDenied' },
+  { code: 'not-found', key: 'forkPublishNotFound' },
+  { code: 'wrong-fork', key: 'forkPublishWrongFork' },
+  { code: 'auth-required', key: 'forkPublishAuthRequired' },
+] as const
+const ACCESS_LOCALES = [
+  { locale: 'en', copy: en,
+    retainedAccess: 'Restore GitHub access for the account and fork shown above. Inspect the branch and pull request on GitHub before retrying this same save.' },
+  { locale: 'zh', copy: zh,
+    retainedAccess: '恢复此 Host 上所显示账号及 Fork 的 GitHub 访问权限。请先在 GitHub 检查分支和拉取请求，再重试同一保存' },
+] as const
+const RECEIPT_LOCALES = [
+  { locale: 'en', copy: en,
+    lostReceipt: 'The approved save receipt is no longer available on this host. Inspect the original account, fork, branch and pull request on GitHub and finish manually before starting another save.',
+    unknownOutcome: 'An earlier write may have reached GitHub; its outcome is still unknown.',
+    committedOutcome: 'A commit was saved earlier; this host cannot confirm the pull request.' },
+  { locale: 'zh', copy: zh,
+    lostReceipt: '此 Host 上已无法使用已批准保存的回执。请在 GitHub 检查原账号、Fork、分支和拉取请求，并手动完成此次保存，再开始新的保存',
+    unknownOutcome: '先前的写入可能已到达 GitHub，其结果仍未知',
+    committedOutcome: '先前已保存提交，此 Host 无法确认拉取请求' },
+] as const
+
 function overlay(copy = en) {
   const repositories = vi.fn(async (): Promise<ForkRepositoriesResult> => REPOSITORIES)
   const preview = vi.fn(async (): Promise<ForkPreviewResult> => PREVIEW)
@@ -40,6 +64,8 @@ function overlay(copy = en) {
     t: makeTranslate(copy), useForkPublish: bindSnapshotSelector(controller.store),
     close: () => { controller.close() }, connect: () => controller.connect(),
     edit: (field, value) => { controller.edit(field, value) }, inspect: () => controller.inspect(),
+    selectFile: (id, path) => { controller.selectFile(id, path) },
+    reviewFile: (id, path, value) => { controller.reviewFile(id, path, value) },
     review: (value) => { controller.review(value) }, publish: () => controller.publish(), retry: () => controller.retry(),
     dismissNotice: () => { controller.dismissNotice() },
   }
@@ -71,7 +97,83 @@ function renderedText(): (string | null)[] {
   return [...screen.getByRole('dialog', { name: en.forkPublishTitle }).querySelectorAll('pre')].map(element => element.textContent)
 }
 
+function reviewAllFiles(view: ReturnType<typeof overlay>, copy = en): void {
+  const snapshot = view.controller.store.getSnapshot()
+  if (snapshot.preview === null) throw new Error('Review requires a current preview')
+  const remaining = snapshot.preview.files.length - snapshot.reviewedFiles.length
+  for (let index = 0; index < remaining; index++) {
+    fireEvent.click(screen.getByRole('button', { name: copy.forkPublishNextUnreviewed }))
+    const file = screen.getByRole<HTMLInputElement>('checkbox', { name: copy.forkPublishFileReviewed })
+    expect(file.checked).toBe(false)
+    fireEvent.click(file)
+  }
+  expect(new Set(view.controller.store.getSnapshot().reviewedFiles)).toEqual(new Set(snapshot.preview.files.map(file => file.path)))
+}
+
 describe('direct fork publication dialog', () => {
+  it.each([
+    ['en', en, 'Files', 'I checked this file for private information', 'Next unreviewed file'],
+    ['zh', zh, '文件', '我已检查此文件是否含有私人信息', '下一个未检查的文件'],
+  ] as const)('per-file review disables global acknowledgement until each selected file is explicitly checked in %s', async (locale, copy, listLabel, fileLabel, nextLabel) => {
+    const view = overlay(copy)
+    await inspect(copy)
+    const progress = (count: number): string => locale === 'zh' ? `已检查文件：${String(count)}/2` : `Files reviewed: ${String(count)}/2`
+    const global = screen.getByRole<HTMLInputElement>('checkbox', { name: copy.forkPublishReviewed })
+    expect(global.disabled).toBe(true)
+    expect(screen.getByText(progress(0), { exact: true })).toBeTruthy()
+    fireEvent.click(global)
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: copy.forkPublishConfirm }).disabled).toBe(true)
+    expect(view.publish).not.toHaveBeenCalled()
+    fireEvent.change(fileList(listLabel), { target: { value: PREVIEW.files[0]!.path } })
+    expect(global.disabled).toBe(true)
+    const file = screen.getByRole<HTMLInputElement>('checkbox', { name: fileLabel })
+    expect(file.checked).toBe(false)
+    fireEvent.click(file)
+    expect(screen.getByText(progress(1), { exact: true })).toBeTruthy()
+    expect(global.disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: nextLabel }))
+    expect(fileList(listLabel).value).toBe(PREVIEW.files[1]!.path)
+    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: fileLabel }).checked).toBe(false)
+    expect(screen.getByText(progress(1), { exact: true })).toBeTruthy()
+    fireEvent.click(screen.getByRole('checkbox', { name: fileLabel }))
+    expect(screen.getByText(progress(2), { exact: true })).toBeTruthy()
+    expect(global.disabled).toBe(false)
+    expect(global.checked).toBe(false)
+    expect(view.publish).not.toHaveBeenCalled()
+    fireEvent.click(global)
+    fireEvent.click(screen.getByRole('button', { name: copy.forkPublishConfirm }))
+    await waitFor(() => { expect(view.publish).toHaveBeenCalledExactlyOnceWith(PREVIEW.id, true) })
+  })
+
+  it.each([['en', en], ['zh', zh]] as const)('per-file review requires a new global acknowledgement after revoking a file in %s', async (locale, copy) => {
+    const view = overlay(copy)
+    await inspect(copy)
+    reviewAllFiles(view, copy)
+    const global = screen.getByRole<HTMLInputElement>('checkbox', { name: copy.forkPublishReviewed })
+    const confirm = screen.getByRole<HTMLButtonElement>('button', { name: copy.forkPublishConfirm })
+    fireEvent.click(global)
+    expect(confirm.disabled).toBe(false)
+    fireEvent.change(fileList(locale === 'zh' ? '文件' : 'Files'), { target: { value: PREVIEW.files[0]!.path } })
+    const file = screen.getByRole<HTMLInputElement>('checkbox', { name: copy.forkPublishFileReviewed })
+    expect(file.checked).toBe(true)
+    fireEvent.click(file)
+    expect(screen.getByText(makeTranslate(copy)('forkPublishReviewProgress', { count: '1', total: '2' }), { exact: true })).toBeTruthy()
+    expect(global.checked).toBe(false)
+    expect(global.disabled).toBe(true)
+    expect(confirm.disabled).toBe(true)
+    fireEvent.click(global)
+    fireEvent.click(confirm)
+    expect(view.publish).not.toHaveBeenCalled()
+    fireEvent.click(file)
+    expect(screen.getByText(makeTranslate(copy)('forkPublishReviewProgress', { count: '2', total: '2' }), { exact: true })).toBeTruthy()
+    expect(global.disabled).toBe(false)
+    expect(global.checked).toBe(false)
+    expect(confirm.disabled).toBe(true)
+    fireEvent.click(global)
+    expect(confirm.disabled).toBe(false)
+    expect(view.publish).not.toHaveBeenCalled()
+  })
+
   it.each(['main', 'master', 'develop'].flatMap(base => [
     { locale: 'en', copy: en, base, newBranch: `New branch from the selected fork’s ${base}`,
       intro: 'Load your authorized forks, choose a branch, and review every file. Confirmation creates a commit and opens a pull request to the selected fork’s default branch.' },
@@ -107,6 +209,7 @@ describe('direct fork publication dialog', () => {
       view.preview.mockResolvedValueOnce({ ...PREVIEW, base: 'develop', head: null })
       await inspect(copy)
       view.publish.mockResolvedValueOnce({ status: 'blocked', code, effect })
+      reviewAllFiles(view, copy)
       fireEvent.click(screen.getByRole('checkbox', { name: copy.forkPublishReviewed }))
       fireEvent.click(screen.getByRole('button', { name: copy.forkPublishConfirm }))
       await screen.findByText(effect === 'unknown' ? copy.forkPublishUnknown : copy.forkPublishCommitted)
@@ -133,6 +236,7 @@ describe('direct fork publication dialog', () => {
     const view = overlay(copy)
     await inspect(copy)
     view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'default-branch', effect: 'none' })
+    reviewAllFiles(view, copy)
     fireEvent.click(screen.getByRole('checkbox', { name: copy.forkPublishReviewed }))
     fireEvent.click(screen.getByRole('button', { name: copy.forkPublishConfirm }))
     const dialog = screen.getByRole('dialog', { name: copy.forkPublishTitle })
@@ -143,6 +247,154 @@ describe('direct fork publication dialog', () => {
     expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishInspect }).disabled).toBe(false)
     expect(within(dialog).queryByRole('button', { name: copy.forkPublishRetry })).toBeNull()
     expect(within(alert).queryByText(copy.forkPublishConflict, { exact: true })).toBeNull()
+  })
+
+  it.each(ACCESS_LOCALES.flatMap(locale => ACCESS_FAILURES.flatMap(failure => (['unknown', 'committed'] as const)
+    .map(effect => ({ ...locale, ...failure, effect })))))('gives retained-access recovery in $locale for $code with $effect effects', async ({ copy, retainedAccess, code, key, effect }) => {
+    const view = overlay(copy)
+    await inspect(copy)
+    view.publish.mockResolvedValueOnce({ status: 'blocked', code, effect })
+    reviewAllFiles(view, copy)
+    fireEvent.click(screen.getByRole('checkbox', { name: copy.forkPublishReviewed }))
+    fireEvent.click(screen.getByRole('button', { name: copy.forkPublishConfirm }))
+    await screen.findByText(effect === 'unknown' ? copy.forkPublishUnknown : copy.forkPublishCommitted)
+    const dialog = screen.getByRole('dialog', { name: copy.forkPublishTitle })
+    expect(within(dialog).getByText(PREVIEW.account, { exact: true })).toBeTruthy()
+    expect(within(dialog).getByText(`${PREVIEW.repository}:${PREVIEW.base}`, { exact: true })).toBeTruthy()
+    const repository = within(dialog).getByRole<HTMLSelectElement>('combobox', { name: copy.forkRepository })
+    expect(repository.value).toBe(PREVIEW.repository)
+    expect(repository.disabled).toBe(true)
+    const branch = within(dialog).getByRole<HTMLInputElement>('textbox', { name: copy.forkBranch })
+    expect(branch.value).toBe(PREVIEW.branch)
+    expect(branch.disabled).toBe(true)
+    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishConnect }).disabled).toBe(true)
+    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishInspect }).disabled).toBe(true)
+    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishRetry }).disabled).toBe(false)
+    expect(within(dialog).queryByRole('checkbox')).toBeNull()
+    expect(view.publish).toHaveBeenCalledExactlyOnceWith(PREVIEW.id, true)
+    const alert = within(dialog).getByRole('alert')
+    expect(alert.firstElementChild?.textContent).toBe(retainedAccess)
+    expect(within(alert).queryByText(copy[key], { exact: true })).toBeNull()
+  })
+
+  it.each(ACCESS_LOCALES.flatMap(locale => ACCESS_FAILURES.map(failure => ({ ...locale, ...failure }))))(
+    'keeps ordinary access guidance in $locale for $code when publication has no effects', async ({ copy, retainedAccess, code, key }) => {
+      const view = overlay(copy)
+      await inspect(copy)
+      view.publish.mockResolvedValueOnce({ status: 'blocked', code, effect: 'none' })
+      reviewAllFiles(view, copy)
+      fireEvent.click(screen.getByRole('checkbox', { name: copy.forkPublishReviewed }))
+      fireEvent.click(screen.getByRole('button', { name: copy.forkPublishConfirm }))
+      const dialog = screen.getByRole('dialog', { name: copy.forkPublishTitle })
+      const alert = await within(dialog).findByRole('alert')
+      expect(alert.firstElementChild?.textContent).toBe(copy[key])
+      expect(within(alert).queryByText(retainedAccess, { exact: true })).toBeNull()
+      expect(within(alert).getByText(copy.forkPublishNoEffects, { exact: true })).toBeTruthy()
+      expect(within(dialog).getByRole<HTMLSelectElement>('combobox', { name: copy.forkRepository }).disabled).toBe(false)
+      expect(within(dialog).getByRole<HTMLInputElement>('textbox', { name: copy.forkBranch }).disabled).toBe(false)
+      expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishConnect }).disabled).toBe(false)
+      expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishInspect }).disabled).toBe(false)
+      expect(within(dialog).queryByRole('button', { name: copy.forkPublishRetry })).toBeNull()
+      expect(view.publish).toHaveBeenCalledExactlyOnceWith(PREVIEW.id, true)
+    })
+
+  it.each(RECEIPT_LOCALES.flatMap(locale => (['unknown', 'committed'] as const).map(effect => ({ ...locale, effect }))))(
+    'retains approved $effect effects with lost-receipt recovery in $locale after retry', async ({ copy, lostReceipt, unknownOutcome, committedOutcome, effect }) => {
+      const view = overlay(copy)
+      await inspect(copy)
+      view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'network', effect })
+      reviewAllFiles(view, copy)
+      fireEvent.click(screen.getByRole('checkbox', { name: copy.forkPublishReviewed }))
+      fireEvent.click(screen.getByRole('button', { name: copy.forkPublishConfirm }))
+      await screen.findByText(effect === 'unknown' ? copy.forkPublishUnknown : copy.forkPublishCommitted)
+      view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'stale-preview', effect: 'none' })
+      fireEvent.click(screen.getByRole('button', { name: copy.forkPublishRetry }))
+      await waitFor(() => {
+        expect(view.publish).toHaveBeenCalledTimes(2)
+        expect(view.controller.store.getSnapshot().operation?.status).toBe('blocked')
+      })
+      await act(async () => { view.controller.close(); view.controller.open() })
+      const dialog = screen.getByRole('dialog', { name: copy.forkPublishTitle })
+      const alert = within(dialog).getByRole('alert')
+      expect(alert.firstElementChild?.textContent).toBe(lostReceipt)
+      expect(within(alert).queryByText(copy.forkPublishStalePreview, { exact: true })).toBeNull()
+      expect(within(alert).queryByText(copy.forkPublishNoEffects, { exact: true })).toBeNull()
+      expect(alert.children[1]?.textContent).toBe(effect === 'unknown' ? unknownOutcome : committedOutcome)
+      expect(within(alert).queryByText(copy.forkPublishUnknown, { exact: true })).toBeNull()
+      expect(within(alert).queryByText(copy.forkPublishCommitted, { exact: true })).toBeNull()
+      expect(view.controller.store.getSnapshot().operation).toMatchObject({
+        status: 'blocked', preview: PREVIEW, failure: { code: 'stale-preview', effect },
+      })
+      expect(view.controller.store.getSnapshot().operation?.preview).toBe(PREVIEW)
+      expect(within(dialog).getByText(`${PREVIEW.repository}:${PREVIEW.base}`, { exact: true })).toBeTruthy()
+      expect(within(dialog).getByRole<HTMLSelectElement>('combobox', { name: copy.forkRepository }).disabled).toBe(true)
+      expect(within(dialog).getByRole<HTMLInputElement>('textbox', { name: copy.forkBranch }).disabled).toBe(true)
+      expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishConnect }).disabled).toBe(true)
+      expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishInspect }).disabled).toBe(true)
+      expect(within(dialog).queryByRole('button', { name: copy.forkPublishRetry })).toBeNull()
+      expect(within(dialog).queryByRole('checkbox')).toBeNull()
+      expect(within(dialog).queryByRole('button', { name: copy.forkPublishNextUnreviewed })).toBeNull()
+      expect(view.publish.mock.calls).toEqual([[PREVIEW.id, true], [PREVIEW.id, true]])
+      expect(view.preview).toHaveBeenCalledOnce()
+    })
+
+  it.each(RECEIPT_LOCALES)('keeps ordinary stale-preview recovery in $locale before any save effects', async ({ copy, lostReceipt }) => {
+    const view = overlay(copy)
+    await inspect(copy)
+    view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'stale-preview', effect: 'none' })
+    reviewAllFiles(view, copy)
+    fireEvent.click(screen.getByRole('checkbox', { name: copy.forkPublishReviewed }))
+    fireEvent.click(screen.getByRole('button', { name: copy.forkPublishConfirm }))
+    const dialog = screen.getByRole('dialog', { name: copy.forkPublishTitle })
+    const alert = await within(dialog).findByRole('alert')
+    expect(alert.firstElementChild?.textContent).toBe(copy.forkPublishStalePreview)
+    expect(within(alert).getByText(copy.forkPublishNoEffects, { exact: true })).toBeTruthy()
+    expect(within(alert).queryByText(lostReceipt, { exact: true })).toBeNull()
+    expect(within(dialog).getByRole<HTMLSelectElement>('combobox', { name: copy.forkRepository }).disabled).toBe(false)
+    expect(within(dialog).getByRole<HTMLInputElement>('textbox', { name: copy.forkBranch }).disabled).toBe(false)
+    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishConnect }).disabled).toBe(false)
+    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishInspect }).disabled).toBe(false)
+    expect(within(dialog).queryByRole('button', { name: copy.forkPublishRetry })).toBeNull()
+    const next = { ...PREVIEW, id: 'preview-fresh' as ForkPreviewId }
+    view.preview.mockResolvedValueOnce(next)
+    fireEvent.click(within(dialog).getByRole('button', { name: copy.forkPublishInspect }))
+    const acknowledgement = await within(dialog).findByRole<HTMLInputElement>('checkbox', { name: copy.forkPublishReviewed })
+    expect(acknowledgement.disabled).toBe(true)
+    expect(acknowledgement.checked).toBe(false)
+    expect(view.controller.store.getSnapshot()).toMatchObject({ preview: next, operation: null, reviewedFiles: [], reviewed: false })
+    expect(view.publish).toHaveBeenCalledExactlyOnceWith(PREVIEW.id, true)
+  })
+
+  it.each([['en', en], ['zh', zh]] as const)('retains committed recovery after a rejected retry transport in %s', async (_locale, copy) => {
+    const view = overlay(copy)
+    await inspect(copy)
+    view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'network', effect: 'committed' })
+    reviewAllFiles(view, copy)
+    fireEvent.click(screen.getByRole('checkbox', { name: copy.forkPublishReviewed }))
+    fireEvent.click(screen.getByRole('button', { name: copy.forkPublishConfirm }))
+    await screen.findByText(copy.forkPublishCommitted)
+    view.publish.mockRejectedValueOnce(new Error('transport disconnected'))
+    fireEvent.click(screen.getByRole('button', { name: copy.forkPublishRetry }))
+    await waitFor(() => {
+      expect(view.publish).toHaveBeenCalledTimes(2)
+      expect(view.controller.store.getSnapshot().operation?.status).toBe('blocked')
+    })
+    const dialog = screen.getByRole('dialog', { name: copy.forkPublishTitle })
+    const alert = within(dialog).getByRole('alert')
+    expect(within(alert).getByText(copy.forkPublishCommitted, { exact: true })).toBeTruthy()
+    expect(within(alert).queryByText(copy.forkPublishUnknown, { exact: true })).toBeNull()
+    expect(within(alert).queryByText(copy.forkPublishNoEffects, { exact: true })).toBeNull()
+    expect(view.controller.store.getSnapshot().operation).toMatchObject({
+      status: 'blocked', preview: PREVIEW, failure: { code: 'network', effect: 'committed' },
+    })
+    expect(view.controller.store.getSnapshot().operation?.preview).toBe(PREVIEW)
+    expect(within(dialog).getByRole<HTMLSelectElement>('combobox', { name: copy.forkRepository }).disabled).toBe(true)
+    expect(within(dialog).getByRole<HTMLInputElement>('textbox', { name: copy.forkBranch }).disabled).toBe(true)
+    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishConnect }).disabled).toBe(true)
+    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishInspect }).disabled).toBe(true)
+    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishRetry }).disabled).toBe(false)
+    expect(within(dialog).queryByRole('checkbox')).toBeNull()
+    expect(view.publish.mock.calls).toEqual([[PREVIEW.id, true], [PREVIEW.id, true]])
   })
 
   it.each([['en', en], ['zh', zh]] as const)('requires explicit discovery, exact review, and confirmation in %s', async (_locale, copy) => {
@@ -173,8 +425,10 @@ describe('direct fork publication dialog', () => {
     expect([...dialog.querySelectorAll('pre')].map(element => element.textContent)).toContain(PREVIEW.files[0]!.after)
     expect(dialog.textContent).toContain(makeTranslate(copy)('forkPublishTextMetrics', { bytes: '22', newlines: '0' }))
     expect(dialog.textContent).toContain(makeTranslate(copy)('forkPublishTextMetrics', { bytes: '23', newlines: '1' }))
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: copy.forkPublishFileReviewed }))
     fireEvent.change(files, { target: { value: PREVIEW.files[1]!.path } })
     expect(dialog.textContent).toContain(copy.forkPublishAbsent)
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: copy.forkPublishFileReviewed }))
     const confirm = within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishConfirm })
     expect(confirm.disabled).toBe(true)
     fireEvent.click(confirm)
@@ -227,6 +481,10 @@ describe('direct fork publication dialog', () => {
       fireEvent.change(list, { target: { value: files[1999]!.path } })
       expect(renderedText()).toEqual([files[1999]!.before, files[1999]!.after])
       expect(serializedSource()).toBe(false)
+      expect(screen.getByText('Files reviewed: 0/2000', { exact: true })).toBeTruthy()
+      fireEvent.click(screen.getByRole('checkbox', { name: en.forkPublishFileReviewed }))
+      expect(screen.getByText('Files reviewed: 1/2000', { exact: true })).toBeTruthy()
+      expect(screen.getByRole<HTMLInputElement>('checkbox', { name: en.forkPublishReviewed }).disabled).toBe(true)
       expect(screen.getByRole<HTMLInputElement>('checkbox', { name: en.forkPublishReviewed }).checked).toBe(false)
       expect(screen.getByRole<HTMLButtonElement>('button', { name: en.forkPublishConfirm }).disabled).toBe(true)
       expect(view.publish).not.toHaveBeenCalled()
@@ -370,6 +628,8 @@ describe('direct fork publication dialog', () => {
     expect(fileOptions(list).map(option => option.value)).toEqual(files.slice(0, 50).map(file => file.path))
     fireEvent.change(list, { target: { value: files[49]!.path } })
     expect(renderedText()).toEqual([files[49]!.after])
+    fireEvent.click(screen.getByRole('checkbox', { name: en.forkPublishFileReviewed }))
+    expect(screen.getByText('Files reviewed: 1/101', { exact: true })).toBeTruthy()
     fireEvent.click(next)
     expect(list.value).toBe('')
     expect(renderedText()).toEqual([])
@@ -400,7 +660,7 @@ describe('direct fork publication dialog', () => {
     expect(list.value).toBe('')
     expect(renderedText()).toEqual([])
     expect(screen.getByText('Matching files: 0', { exact: true })).toBeTruthy()
-    expect(screen.getByRole('status').textContent).toMatch(/no .*files|no .*matches|no .*results/i)
+    expect(screen.getByText(en.forkPublishNoMatchingFiles, { selector: '[role="status"]' }).textContent).toMatch(/no .*files|no .*matches|no .*results/i)
     expect(previous.disabled).toBe(true)
     expect(next.disabled).toBe(true)
     fireEvent.change(search, { target: { value: '' } })
@@ -409,12 +669,15 @@ describe('direct fork publication dialog', () => {
     expect(previous.disabled).toBe(true)
     expect(next.disabled).toBe(false)
     expect(screen.getByRole<HTMLInputElement>('checkbox', { name: en.forkPublishReviewed }).checked).toBe(false)
+    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: en.forkPublishReviewed }).disabled).toBe(true)
+    expect(view.controller.store.getSnapshot().reviewedFiles).toEqual([files[49]!.path])
     expect(view.publish).not.toHaveBeenCalled()
   })
 
   it.each(['repository', 'branch'] as const)('lazy file preview clears selected source and acknowledgement after a %s edit', async (field) => {
     const view = overlay()
     await inspect()
+    reviewAllFiles(view)
     const list = fileList()
     fireEvent.change(list, { target: { value: PREVIEW.files[0]!.path } })
     fireEvent.click(within(screen.getByRole('region', { name: en.forkPublishAfter })).getByRole('button'))
@@ -428,6 +691,8 @@ describe('direct fork publication dialog', () => {
     expect(screen.queryByRole('button', { name: en.forkPublishConfirm })).toBeNull()
     expect(view.controller.store.getSnapshot().preview).toBeNull()
     expect(view.controller.store.getSnapshot().reviewed).toBe(false)
+    expect(view.controller.store.getSnapshot().reviewedFiles).toEqual([])
+    expect(view.controller.store.getSnapshot().activeFile).toBeNull()
     expect(view.publish).not.toHaveBeenCalled()
   })
 
@@ -441,6 +706,29 @@ describe('direct fork publication dialog', () => {
     const list = fileList()
     const reviewed = screen.getByRole<HTMLInputElement>('checkbox', { name: en.forkPublishReviewed })
     const confirm = screen.getByRole<HTMLButtonElement>('button', { name: en.forkPublishConfirm })
+    expect(reviewed.disabled).toBe(true)
+    expect(screen.getByText('Files reviewed: 0/51', { exact: true })).toBeTruthy()
+    fireEvent.click(reviewed)
+    fireEvent.click(confirm)
+    expect(reviewed.checked).toBe(false)
+    expect(view.publish).not.toHaveBeenCalled()
+    fireEvent.change(list, { target: { value: files[0]!.path } })
+    fireEvent.click(screen.getByRole('checkbox', { name: en.forkPublishFileReviewed }))
+    expect(screen.getByText('Files reviewed: 1/51', { exact: true })).toBeTruthy()
+    expect(reviewed.disabled).toBe(true)
+    fireEvent.click(reviewed)
+    fireEvent.click(confirm)
+    await act(async () => {
+      view.controller.review(true)
+      await view.controller.publish()
+    })
+    expect(view.publish).not.toHaveBeenCalled()
+    expect(view.controller.store.getSnapshot().reviewed).toBe(false)
+    reviewAllFiles(view)
+    expect(screen.getByText('Files reviewed: 51/51', { exact: true })).toBeTruthy()
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: en.forkPublishNextUnreviewed }).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Previous files' }))
+    expect(reviewed.disabled).toBe(false)
     fireEvent.click(reviewed)
     fireEvent.change(list, { target: { value: files[0]!.path } })
     fireEvent.click(within(screen.getByRole('region', { name: en.forkPublishAfter })).getByRole('button'))
@@ -464,11 +752,14 @@ describe('direct fork publication dialog', () => {
     expect(view.controller.store.getSnapshot().reviewed).toBe(true)
     expect(view.controller.store.getSnapshot().preview?.id).toBe(PREVIEW.id)
     expect(view.publish).not.toHaveBeenCalled()
+    fireEvent.click(confirm)
+    await waitFor(() => { expect(view.publish).toHaveBeenCalledExactlyOnceWith(PREVIEW.id, true) })
   })
 
   it('lazy file preview resets selection and escaped text for a new receipt with the same file path', async () => {
     const view = overlay()
     await inspect()
+    reviewAllFiles(view)
     fireEvent.change(fileList(), { target: { value: PREVIEW.files[0]!.path } })
     fireEvent.click(within(screen.getByRole('region', { name: en.forkPublishAfter })).getByRole('button'))
     fireEvent.click(screen.getByRole('checkbox', { name: en.forkPublishReviewed }))
@@ -481,16 +772,21 @@ describe('direct fork publication dialog', () => {
     expect(list.value).toBe('')
     expect(renderedText()).toEqual([])
     expect(screen.getByRole<HTMLInputElement>('checkbox', { name: en.forkPublishReviewed }).checked).toBe(false)
+    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: en.forkPublishReviewed }).disabled).toBe(true)
     expect(screen.getByRole<HTMLButtonElement>('button', { name: en.forkPublishConfirm }).disabled).toBe(true)
+    expect(screen.getByText('Files reviewed: 0/1', { exact: true })).toBeTruthy()
+    expect(view.controller.store.getSnapshot().reviewedFiles).toEqual([])
     fireEvent.change(list, { target: { value: next.files[0]!.path } })
     expect(renderedText()).toEqual([next.files[0]!.before, next.files[0]!.after])
     expect(within(screen.getByRole('region', { name: en.forkPublishAfter })).getByRole('button').getAttribute('aria-expanded')).toBe('false')
+    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: en.forkPublishFileReviewed }).checked).toBe(false)
     expect(view.publish).not.toHaveBeenCalled()
   })
 
   it('clears the visible receipt and acknowledgement when the destination changes', async () => {
     const view = overlay()
     await inspect()
+    reviewAllFiles(view)
     fireEvent.click(screen.getByRole('checkbox', { name: en.forkPublishReviewed }))
     fireEvent.change(screen.getByRole('textbox', { name: en.forkBranch }), { target: { value: 'new-branch' } })
     expect(screen.queryByRole('checkbox', { name: en.forkPublishReviewed })).toBeNull()
@@ -502,6 +798,7 @@ describe('direct fork publication dialog', () => {
     const view = overlay(copy)
     await inspect(copy)
     view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'network', effect: 'unknown' })
+    reviewAllFiles(view, copy)
     fireEvent.click(screen.getByRole('checkbox', { name: copy.forkPublishReviewed }))
     fireEvent.click(screen.getByRole('button', { name: copy.forkPublishConfirm }))
     expect(await screen.findByText(copy.forkPublishUnknown)).toBeTruthy()
@@ -512,6 +809,11 @@ describe('direct fork publication dialog', () => {
     await act(async () => { view.controller.close(); view.controller.open() })
     expect(screen.queryByRole('checkbox')).toBeNull()
     expect(screen.getByText(copy.forkPublishCommitted)).toBeTruthy()
+    fireEvent.change(fileList(copy === zh ? '文件' : 'Files'), { target: { value: PREVIEW.files[0]!.path } })
+    expect(screen.getByRole('region', { name: copy.forkPublishBefore }).querySelector('pre')?.textContent).toBe(PREVIEW.files[0]!.before)
+    expect(screen.queryByRole('checkbox', { name: copy.forkPublishFileReviewed })).toBeNull()
+    expect(screen.queryByRole('button', { name: copy.forkPublishNextUnreviewed })).toBeNull()
+    expect(view.controller.store.getSnapshot()).toMatchObject({ reviewedFiles: [], reviewed: false })
     fireEvent.click(screen.getByRole('button', { name: copy.forkPublishRetry }))
     await screen.findByRole('link', { name: copy.forkPublishOpenPr })
     expect(view.publish.mock.calls).toEqual([[PREVIEW.id, true], [PREVIEW.id, true], [PREVIEW.id, true]])
@@ -535,6 +837,7 @@ describe('direct fork publication dialog', () => {
     await inspect(copy)
     const pullRequestUrl = 'https://github.com/alice/harness/pull/1'
     view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'pull-request-closed', effect: 'committed', pullRequestUrl })
+    reviewAllFiles(view, copy)
     fireEvent.click(screen.getByRole('checkbox', { name: copy.forkPublishReviewed }))
     fireEvent.click(screen.getByRole('button', { name: copy.forkPublishConfirm }))
     expect(await screen.findByText(copy.forkPublishPullRequestClosed)).toBeTruthy()
@@ -584,6 +887,7 @@ describe('direct fork publication dialog', () => {
     expect(screen.getByText(makeTranslate(en)('forkPublishNewBranch', { base: PREVIEW.base }))).toBeTruthy()
     expect(screen.queryByText(en.forkPublishBranchHistory)).toBeNull()
     view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'conflict', effect: 'none' })
+    reviewAllFiles(view)
     fireEvent.click(screen.getByRole('checkbox', { name: en.forkPublishReviewed }))
     fireEvent.click(screen.getByRole('button', { name: en.forkPublishConfirm }))
     expect(await screen.findByText(en.forkPublishNoEffects)).toBeTruthy()
@@ -591,6 +895,7 @@ describe('direct fork publication dialog', () => {
     fireEvent.click(screen.getByRole('button', { name: en.forkPublishInspect }))
     await screen.findByRole('checkbox', { name: en.forkPublishReviewed })
     view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'network', effect: 'none' })
+    reviewAllFiles(view)
     fireEvent.click(screen.getByRole('checkbox', { name: en.forkPublishReviewed }))
     fireEvent.click(screen.getByRole('button', { name: en.forkPublishConfirm }))
     const retry = await screen.findByRole('button', { name: en.forkPublishRetry })

@@ -15,6 +15,8 @@ const EXPECTED = fileURLToPath(new URL('./expected/creator-source-export', impor
 const MODE = webSnapshotMode()
 const ORIGINAL_SOURCE = 'export const greeting = "Created for my fork"\n'
 const PUBLISH_SOURCE_PATH = 'creator-exports/saved/bundles/0/index.ts'
+const FILE_REVIEW_LABEL = 'I checked this file for private information'
+const PUBLICATION_REVIEW_LABEL = 'I checked every file for private information and authorize this commit and pull request'
 type PublicationFile = Extract<ForkPreviewResult, { status: 'ready' }>['files'][number]
 type GithubCall = { method: string; path: string; body?: Record<string, unknown> }
 
@@ -50,6 +52,35 @@ async function showPublicationEscapedText(dialog: Locator, side: 'Before' | 'Aft
   const escaped = await dialog.evaluate((element, id) => element.ownerDocument.getElementById(id)?.textContent, controlledId)
   expect(escaped).toBe(JSON.stringify(content))
   return controlledId
+}
+
+async function expectPublicationReviewProgress(dialog: Locator, count: number, total: number): Promise<void> {
+  await dialog.getByText(`Files reviewed: ${String(count)}/${String(total)}`, { exact: true }).waitFor()
+}
+
+async function reviewPublicationFiles(
+  dialog: Locator, captured: readonly PublicationFile[], reviewedPaths: readonly string[],
+): Promise<void> {
+  const reviewed = new Set(reviewedPaths)
+  const search = dialog.getByRole('searchbox', { name: 'Search files', exact: true })
+  const files = dialog.getByRole('listbox', { name: 'Files', exact: true })
+  const acknowledgement = dialog.getByRole('checkbox', { name: PUBLICATION_REVIEW_LABEL, exact: true })
+  const confirm = dialog.getByRole('button', { name: 'Confirm commit and open PR', exact: true })
+  for (const file of captured) {
+    await search.fill(file.path)
+    await files.selectOption(file.path)
+    await expectSelectedPublicationText(dialog, file)
+    const review = dialog.getByRole('checkbox', { name: FILE_REVIEW_LABEL, exact: true })
+    expect(await review.isChecked()).toBe(reviewed.has(file.path))
+    if (!reviewed.has(file.path)) {
+      await review.check()
+      reviewed.add(file.path)
+    }
+    await expectPublicationReviewProgress(dialog, reviewed.size, captured.length)
+    expect(await acknowledgement.isEnabled()).toBe(reviewed.size === captured.length)
+    expect(await acknowledgement.isChecked()).toBe(false)
+    expect(await confirm.isEnabled()).toBe(false)
+  }
 }
 
 it.each([
@@ -251,6 +282,7 @@ it.each([
     expect(envelope.result.ok).toBe(true)
     const captured = envelope.result.value
     if (captured.status !== 'ready') throw new Error(`Publication preview was blocked: ${captured.code}`)
+    expect(captured.files).toHaveLength(11)
     expect(captured.base).toBe('main')
     expect(await dialog.getByText('alice/harness:main', { exact: true }).count()).toBe(1)
     const sourcePath = PUBLISH_SOURCE_PATH
@@ -258,7 +290,10 @@ it.each([
       path: sourcePath, before: ORIGINAL_SOURCE.slice(0, -1), after: ORIGINAL_SOURCE,
     })
     const files = dialog.getByRole('listbox', { name: 'Files', exact: true })
+    const acknowledgement = dialog.getByRole('checkbox', { name: PUBLICATION_REVIEW_LABEL, exact: true })
     await files.waitFor()
+    await expectPublicationReviewProgress(dialog, 0, captured.files.length)
+    expect(await acknowledgement.isEnabled()).toBe(false)
     expect(await files.inputValue()).toBe('')
     expect(await dialog.locator('pre').count()).toBe(0)
     expect(await dialog.textContent()).not.toContain(ORIGINAL_SOURCE)
@@ -304,8 +339,30 @@ it.each([
     expect(fits).toBe(true)
     await compareAria('publish-mobile.expected.md')
     await page.screenshot({ path: join(evidence, 'mobile.png') })
+    const selectedReview = dialog.getByRole('checkbox', { name: FILE_REVIEW_LABEL, exact: true })
+    await selectedReview.focus()
+    await page.keyboard.press('Space')
+    expect(await selectedReview.isChecked()).toBe(true)
+    await expectPublicationReviewProgress(dialog, 1, captured.files.length)
+    expect(await acknowledgement.isEnabled()).toBe(false)
+    expect(await confirm.isEnabled()).toBe(false)
+    const nextUnreviewed = dialog.getByRole('button', { name: 'Next unreviewed file', exact: true })
+    await nextUnreviewed.focus()
+    await page.keyboard.press('Enter')
+    const nextFile = captured.files[(captured.files.indexOf(selectedSource) + 1) % captured.files.length]
+    if (nextFile === undefined) throw new Error('The publication fixture has no next unreviewed file')
+    expect(await files.inputValue()).toBe(nextFile.path)
+    expect(await dialog.getByRole('checkbox', { name: FILE_REVIEW_LABEL, exact: true }).isChecked()).toBe(false)
+    await expectPublicationReviewProgress(dialog, 1, captured.files.length)
+    await reviewPublicationFiles(dialog, captured.files, [selectedSource.path])
+    expect(await nextUnreviewed.isEnabled()).toBe(false)
+    await dialog.getByRole('searchbox', { name: 'Search files', exact: true }).fill('')
+    await files.selectOption(sourcePath)
+    await expectSelectedPublicationText(dialog, selectedSource)
+    await showPublicationEscapedText(dialog, 'Before', selectedSource.before)
+    await showPublicationEscapedText(dialog, 'After', selectedSource.after)
     await writeFile(join(transport, 'hold-commit'), '')
-    await dialog.getByRole('checkbox', { name: 'I checked every file for private information and authorize this commit and pull request', exact: true }).check()
+    await acknowledgement.check()
     await confirm.click()
     await dialog.getByText('Saving the reviewed files', { exact: true }).waitFor()
     await expect.poll(async () => (await calls()).filter(call => call.path === 'graphql').length).toBe(1)
@@ -346,9 +403,11 @@ it.each([
 })
 
 it.each([
-  { name: 'Chromium', engine: chromium },
-  { name: 'WebKit', engine: webkit },
-])('$name reviews a real 2000-file Creator preview with bounded file choices and explicit text disclosure', async ({ engine }) => {
+  { name: 'Chromium', engine: chromium, fileCount: 51 },
+  { name: 'WebKit', engine: webkit, fileCount: 51 },
+  { name: 'Chromium', engine: chromium, fileCount: 2000 },
+  { name: 'WebKit', engine: webkit, fileCount: 2000 },
+])('$name reviews a real $fileCount-file Creator preview with bounded choices and explicit per-file review', async ({ engine, fileCount }) => {
   const fixture = await mkdtemp(join(tmpdir(), 'dsh-source-publish-large-web-'))
   const source = join(fixture, 'bundle')
   const transport = join(fixture, 'github')
@@ -372,8 +431,8 @@ it.each([
     await writeFile(join(source, longRelativePath), longContent)
     const samples = join(source, 'samples')
     await mkdir(samples)
-    // The scaffold's defaults bundle contributes three of the eleven baseline capture files.
-    const sampleFiles = Array.from({ length: 1988 }, (_, index) => ({
+    // The eleven baseline capture files plus the long-path file precede the samples.
+    const sampleFiles = Array.from({ length: fileCount - 12 }, (_, index) => ({
       name: `file-${String(index).padStart(4, '0')}.txt`, content: `Public source fixture ${String(index).padStart(4, '0')}\n`,
     }))
     for (let start = 0; start < sampleFiles.length; start += 32) {
@@ -390,7 +449,7 @@ it.each([
     const page = await newEnglishPage(browser)
     await page.context().route('https://github.com/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: '<title>Fixture pull request</title>' }))
     const tripwire = watchConsole(page)
-    onTestFailed(() => saveFailureShot(page, `web-e2e-creator-source-publish-large-${engine.name()}`))
+    onTestFailed(() => saveFailureShot(page, `web-e2e-creator-source-publish-large-${String(fileCount)}-${engine.name()}`))
     const apiCalls: string[] = []
     page.on('request', (request) => {
       const path = new URL(request.url()).pathname
@@ -423,7 +482,7 @@ it.each([
     expect(envelope.result.ok).toBe(true)
     const captured = envelope.result.value
     if (captured.status !== 'ready') throw new Error(`Large publication preview was blocked: ${captured.code}`)
-    expect(captured.files).toHaveLength(2000)
+    expect(captured.files).toHaveLength(fileCount)
     expect(Buffer.byteLength(JSON.stringify(captured))).toBeLessThan(10 * 1024 * 1024)
     expect(captured.files.every(file => Buffer.byteLength(file.after) <= 1024 * 1024)).toBe(true)
     const unicodeFile = captured.files.find(file => file.path === PUBLISH_SOURCE_PATH)
@@ -442,7 +501,7 @@ it.each([
     const search = dialog.getByRole('searchbox', { name: 'Search files', exact: true })
     const previous = dialog.getByRole('button', { name: 'Previous files', exact: true })
     const next = dialog.getByRole('button', { name: 'Next files', exact: true })
-    const acknowledgement = dialog.getByRole('checkbox', { name: 'I checked every file for private information and authorize this commit and pull request', exact: true })
+    const acknowledgement = dialog.getByRole('checkbox', { name: PUBLICATION_REVIEW_LABEL, exact: true })
     const confirm = dialog.getByRole('button', { name: 'Confirm commit and open PR', exact: true })
     const fileValues = (): Promise<string[]> => files.locator('option').evaluateAll(options => options
       .map(option => option.getAttribute('value') ?? '').filter(value => value !== ''))
@@ -450,13 +509,15 @@ it.each([
     expect(await files.getAttribute('size')).toBe('8')
     expect(await files.locator('option').count()).toBeLessThanOrEqual(51)
     expect(await fileValues()).toEqual(captured.files.slice(0, 50).map(file => file.path))
-    expect(await dialog.getByText('Matching files: 2000', { exact: true }).count()).toBe(1)
+    expect(await dialog.getByText(`Matching files: ${String(fileCount)}`, { exact: true }).count()).toBe(1)
     expect(await files.inputValue()).toBe('')
     expect(await files.getByRole('option', { name: 'Choose a file', exact: true }).isEnabled()).toBe(true)
     expect(await dialog.locator('pre').count()).toBe(0)
     expect(await dialog.textContent()).not.toContain(after)
     expect(await dialog.textContent()).not.toContain(JSON.stringify(after))
     expect(await acknowledgement.isChecked()).toBe(false)
+    expect(await acknowledgement.isEnabled()).toBe(false)
+    await expectPublicationReviewProgress(dialog, 0, fileCount)
     expect(await confirm.isEnabled()).toBe(false)
     await files.focus()
     expect(await files.inputValue()).toBe('')
@@ -468,6 +529,24 @@ it.each([
     await page.keyboard.press('ArrowDown')
     await expect.poll(() => files.inputValue()).toBe(first.path)
     await expectSelectedPublicationText(dialog, first)
+    await expectPublicationReviewProgress(dialog, 0, fileCount)
+    const selectedReview = dialog.getByRole('checkbox', { name: FILE_REVIEW_LABEL, exact: true })
+    await selectedReview.focus()
+    await page.keyboard.press('Space')
+    expect(await selectedReview.isChecked()).toBe(true)
+    await expectPublicationReviewProgress(dialog, 1, fileCount)
+    expect(await acknowledgement.isEnabled()).toBe(false)
+    expect(await confirm.isEnabled()).toBe(false)
+    const nextUnreviewed = dialog.getByRole('button', { name: 'Next unreviewed file', exact: true })
+    await nextUnreviewed.focus()
+    await page.keyboard.press('Enter')
+    const following = captured.files[1]
+    if (following === undefined) throw new Error('The review fixture has no second file')
+    expect(await files.inputValue()).toBe(following.path)
+    await expectSelectedPublicationText(dialog, following)
+    expect(await selectedReview.isChecked()).toBe(false)
+    await expectPublicationReviewProgress(dialog, 1, fileCount)
+    await files.focus()
     await page.keyboard.press('End')
     await expect.poll(() => files.inputValue()).toBe(firstPageLast.path)
     await expectSelectedPublicationText(dialog, firstPageLast)
@@ -483,6 +562,8 @@ it.each([
       expect(await dialog.locator('pre').count()).toBe(0)
       expect(await files.locator('option').count()).toBeLessThanOrEqual(51)
       expect(await fileValues()).toEqual(captured.files.slice(pageIndex * 50, (pageIndex + 1) * 50).map(file => file.path))
+      await expectPublicationReviewProgress(dialog, 1, fileCount)
+      expect(await acknowledgement.isEnabled()).toBe(false)
     }
     expect(await next.isEnabled()).toBe(false)
     expect(await previous.isEnabled()).toBe(true)
@@ -502,6 +583,8 @@ it.each([
     await page.keyboard.press('ArrowDown')
     await expect.poll(() => files.inputValue()).toBe(PUBLISH_SOURCE_PATH)
     await expectSelectedPublicationText(dialog, unicodeFile)
+    await expectPublicationReviewProgress(dialog, 1, fileCount)
+    expect(await acknowledgement.isEnabled()).toBe(false)
     const beforeDisclosure = await showPublicationEscapedText(dialog, 'Before', before)
     expect(await dialog.locator('pre').allTextContents()).toEqual([before, JSON.stringify(before), after])
     const afterDisclosure = await showPublicationEscapedText(dialog, 'After', after)
@@ -554,31 +637,120 @@ it.each([
         return bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight
       })).toBe(true)
     }
+    const assertReviewControlsFit = async (): Promise<void> => {
+      await nextUnreviewed.scrollIntoViewIfNeeded()
+      await acknowledgement.locator('..').scrollIntoViewIfNeeded()
+      for (const control of [selectedReview, nextUnreviewed, acknowledgement]) {
+        expect(await control.evaluate((element) => {
+          const target = element.closest('label') ?? element
+          const bounds = target.getBoundingClientRect()
+          if (bounds.width <= 0 || bounds.height <= 0 || bounds.left < 0 || bounds.right > innerWidth
+            || bounds.top < 0 || bounds.bottom > innerHeight) return false
+          for (let ancestor = target.parentElement; ancestor !== null; ancestor = ancestor.parentElement) {
+            const style = getComputedStyle(ancestor)
+            const clip = ancestor.getBoundingClientRect()
+            if (['auto', 'scroll', 'hidden', 'clip'].includes(style.overflowY)
+              && (bounds.top < clip.top || bounds.bottom > clip.bottom)) return false
+            if (['auto', 'scroll', 'hidden', 'clip'].includes(style.overflowX)
+              && (bounds.left < clip.left || bounds.right > clip.right)) return false
+          }
+          return true
+        })).toBe(true)
+      }
+      expect(await selectedReview.isChecked()).toBe(false)
+      expect(await selectedReview.isEnabled()).toBe(true)
+      expect(await nextUnreviewed.isEnabled()).toBe(true)
+      expect(await acknowledgement.isChecked()).toBe(false)
+      expect(await acknowledgement.isEnabled()).toBe(false)
+      expect(await confirm.isEnabled()).toBe(false)
+      expect(await confirm.evaluate((element) => {
+        const bounds = element.getBoundingClientRect()
+        return bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight
+      })).toBe(true)
+    }
     await assertFits()
-    await page.screenshot({ path: join(evidence, 'desktop-light.png') })
+    if (fileCount === 2000) await page.screenshot({ path: join(evidence, 'desktop-light.png') })
     await page.emulateMedia({ colorScheme: 'dark' })
     await expect.poll(() => page.locator('body').evaluate(element => element.hasAttribute('data-ds-dark-theme'))).toBe(true)
     await assertFits()
-    await page.screenshot({ path: join(evidence, 'desktop-dark.png') })
+    if (fileCount === 2000) await page.screenshot({ path: join(evidence, 'desktop-dark.png') })
     await page.setViewportSize({ width: 390, height: 844 })
     await assertFits()
-    await page.screenshot({ path: join(evidence, 'mobile-dark.png') })
+    if (fileCount === 2000) await page.screenshot({ path: join(evidence, 'mobile-dark.png') })
+    await assertReviewControlsFit()
+    if (fileCount === 2000) await page.screenshot({ path: join(evidence, 'mobile-review-dark.png') })
     await page.emulateMedia({ colorScheme: 'light' })
     await expect.poll(() => page.locator('body').evaluate(element => element.hasAttribute('data-ds-dark-theme'))).toBe(false)
     await assertFits()
-    await page.screenshot({ path: join(evidence, 'mobile-light.png') })
+    if (fileCount === 2000) await page.screenshot({ path: join(evidence, 'mobile-light.png') })
+    await assertReviewControlsFit()
+    if (fileCount === 2000) await page.screenshot({ path: join(evidence, 'mobile-review-light.png') })
     expect(await acknowledgement.isChecked()).toBe(false)
+    expect(await acknowledgement.isEnabled()).toBe(false)
     expect(await confirm.isEnabled()).toBe(false)
-    await acknowledgement.check()
-    expect(await confirm.isEnabled()).toBe(true)
-    await search.fill('')
-    expect(await files.inputValue()).toBe('')
-    expect(await dialog.locator('pre').count()).toBe(0)
-    await next.click()
-    expect(await acknowledgement.isChecked()).toBe(true)
-    expect(await confirm.isEnabled()).toBe(true)
+    await expectPublicationReviewProgress(dialog, 1, fileCount)
+    const longIndex = captured.files.indexOf(longFile)
+    const nextUnreviewedFile = [...captured.files.slice(longIndex + 1), ...captured.files.slice(0, longIndex + 1)]
+      .find(file => file.path !== first.path)
+    if (nextUnreviewedFile === undefined) throw new Error('The partial review has no unchecked file')
+    await nextUnreviewed.focus()
+    await page.keyboard.press('Enter')
+    expect(await search.inputValue()).toBe('')
+    expect(await files.inputValue()).toBe(nextUnreviewedFile.path)
+    await expectSelectedPublicationText(dialog, nextUnreviewedFile)
+    expect(await selectedReview.isChecked()).toBe(false)
+    await expectPublicationReviewProgress(dialog, 1, fileCount)
+    expect(await acknowledgement.isEnabled()).toBe(false)
+    expect(await confirm.isEnabled()).toBe(false)
+    if (fileCount === 51) {
+      await reviewPublicationFiles(dialog, captured.files, [first.path])
+      expect(await nextUnreviewed.isEnabled()).toBe(false)
+      await acknowledgement.check()
+      expect(await confirm.isEnabled()).toBe(true)
+      await search.fill('')
+      expect(await files.inputValue()).toBe('')
+      expect(await dialog.locator('pre').count()).toBe(0)
+      await next.click()
+      await expectPublicationReviewProgress(dialog, fileCount, fileCount)
+      expect(await acknowledgement.isChecked()).toBe(true)
+      expect(await confirm.isEnabled()).toBe(true)
+      await previous.click()
+      await files.selectOption(first.path)
+      await selectedReview.uncheck()
+      await expectPublicationReviewProgress(dialog, fileCount - 1, fileCount)
+      expect(await acknowledgement.isChecked()).toBe(false)
+      expect(await acknowledgement.isEnabled()).toBe(false)
+      expect(await confirm.isEnabled()).toBe(false)
+      await selectedReview.check()
+      await expectPublicationReviewProgress(dialog, fileCount, fileCount)
+      expect(await acknowledgement.isChecked()).toBe(false)
+      expect(await acknowledgement.isEnabled()).toBe(true)
+      expect(await confirm.isEnabled()).toBe(false)
+      await acknowledgement.check()
+      expect(await confirm.isEnabled()).toBe(true)
+    }
     expect(await readGithubCalls(transport)).toEqual(capturedCalls)
     expect(apiCalls).toEqual(capturedApiCalls)
+    expect(apiCalls.filter(path => path.endsWith('/publish'))).toEqual([])
+    expect((await readGithubCalls(transport)).filter(call => call.method !== 'GET')).toEqual([])
+    if (fileCount === 51) {
+      const refreshResponse = page.waitForResponse('**/api/creatorFork/preview')
+      await dialog.getByRole('button', { name: 'Preview changes', exact: true }).click()
+      const refreshedEnvelope = await (await refreshResponse).json() as { result: { ok: boolean; value: ForkPreviewResult } }
+      expect(refreshedEnvelope.result.ok).toBe(true)
+      const refreshed = refreshedEnvelope.result.value
+      if (refreshed.status !== 'ready') throw new Error(`Refreshed publication preview was blocked: ${refreshed.code}`)
+      expect(refreshed.id).not.toBe(captured.id)
+      expect(refreshed.files).toHaveLength(fileCount)
+      await expectPublicationReviewProgress(dialog, 0, fileCount)
+      expect(await files.inputValue()).toBe('')
+      expect(await dialog.locator('pre').count()).toBe(0)
+      expect(await acknowledgement.isChecked()).toBe(false)
+      expect(await acknowledgement.isEnabled()).toBe(false)
+      expect(await confirm.isEnabled()).toBe(false)
+    }
+    const settledApiCalls = fileCount === 51 ? [...capturedApiCalls, '/api/creatorFork/preview'] : capturedApiCalls
+    expect(apiCalls).toEqual(settledApiCalls)
     expect(apiCalls.filter(path => path.endsWith('/publish'))).toEqual([])
     expect((await readGithubCalls(transport)).filter(call => call.method !== 'GET')).toEqual([])
     await branch.fill('creator/changed-target')
@@ -586,7 +758,7 @@ it.each([
     expect(await dialog.locator('pre').count()).toBe(0)
     expect(await acknowledgement.count()).toBe(0)
     expect(await confirm.count()).toBe(0)
-    expect(apiCalls).toEqual(capturedApiCalls)
+    expect(apiCalls).toEqual(settledApiCalls)
     expect(scaffold.ctx.agentPresets.defaultId).toBe('standard')
     expect(tripwire.pageErrors).toEqual([])
     expect(tripwire.warnings).toEqual([])

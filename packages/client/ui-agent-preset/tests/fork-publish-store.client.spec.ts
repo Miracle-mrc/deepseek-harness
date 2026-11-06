@@ -29,17 +29,345 @@ function bench() {
   return { controller, repositories, preview, publish, openPullRequest }
 }
 
-async function prepared() {
+function reviewEveryFile(controller: ForkPublishController): void {
+  const preview = controller.store.getSnapshot().preview
+  if (preview === null) throw new Error('Review requires a current preview')
+  for (const file of preview.files) {
+    controller.selectFile(preview.id, file.path)
+    controller.reviewFile(preview.id, file.path, true)
+  }
+}
+
+async function prepared(result: ForkPreviewResult = PREVIEW, reviewFiles = true) {
   const view = bench()
+  view.preview.mockResolvedValueOnce(result)
   view.controller.open()
   await view.controller.connect()
   view.controller.edit('repository', PREVIEW.repository)
   view.controller.edit('branch', PREVIEW.branch)
   await view.controller.inspect()
+  if (reviewFiles) reviewEveryFile(view.controller)
   return view
 }
 
+async function expectRetainedRetry(view: ReturnType<typeof bench>, effect: 'unknown' | 'committed', calls: number): Promise<void> {
+  const operation = view.controller.store.getSnapshot().operation
+  expect(operation).toMatchObject({ status: 'blocked', failure: { effect } })
+  if (operation?.status !== 'blocked') throw new Error('Expected a retained failed publication')
+  expect(operation.preview).toBe(PREVIEW)
+  expect(operation.preview.files).toEqual(PREVIEW.files)
+  expect(view.openPullRequest).not.toHaveBeenCalled()
+  view.preview.mockResolvedValueOnce({ ...PREVIEW, id: 'unreviewed-replacement' as ForkPreviewId,
+    files: [{ ...PREVIEW.files[0]!, after: 'unreviewed replacement bytes\n' }] })
+  view.controller.edit('branch', 'creator/another')
+  view.controller.close()
+  view.controller.open()
+  expect(view.controller.store.getSnapshot()).toMatchObject({ preview: null, reviewed: false, reviewedFiles: [] })
+  expect(view.controller.store.getSnapshot().operation).toMatchObject({ status: 'blocked', preview: PREVIEW, failure: { effect } })
+  await view.controller.connect()
+  await view.controller.inspect()
+  expect(view.repositories).toHaveBeenCalledOnce()
+  expect(view.preview).toHaveBeenCalledOnce()
+  await view.controller.retry()
+  expect(view.publish.mock.calls).toEqual(Array.from({ length: calls }, () => [PREVIEW.id, true]))
+  expect(view.controller.store.getSnapshot().operation).toMatchObject({ status: 'saved', preview: PREVIEW, result: SAVED })
+  expect(view.openPullRequest).toHaveBeenCalledExactlyOnceWith(SAVED.pullRequestUrl)
+}
+
 describe('Creator fork publication', () => {
+  it.each((['unknown', 'committed'] as const).flatMap(effect =>
+    (['stale-preview', 'unavailable', 'timeout'] as const).map(code => ({ effect, code })),
+  ))('retry effect knowledge retains $effect after a $code refusal without receipt evidence', async ({ effect, code }) => {
+    const view = await prepared()
+    view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'network', effect })
+    view.publish.mockResolvedValueOnce({ status: 'blocked', code, effect: 'none' })
+    view.controller.review(true)
+    await view.controller.publish()
+    await view.controller.retry()
+    expect(view.controller.store.getSnapshot().operation).toMatchObject({ status: 'blocked', failure: { code, effect } })
+    await expectRetainedRetry(view, effect, 3)
+  })
+
+  it('retry effect knowledge retains a known commit after a retry transport rejection', async () => {
+    const view = await prepared()
+    view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'network', effect: 'committed' })
+    view.publish.mockRejectedValueOnce(new Error('retry response lost'))
+    view.controller.review(true)
+    await view.controller.publish()
+    await view.controller.retry()
+    expect(view.controller.store.getSnapshot().operation).toMatchObject({
+      status: 'blocked', failure: { code: 'network', effect: 'committed' },
+    })
+    await expectRetainedRetry(view, 'committed', 3)
+  })
+
+  it('retry effect knowledge retains a known commit when a later failed response reports only unknown effects', async () => {
+    const view = await prepared()
+    view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'network', effect: 'committed' })
+    view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'network', effect: 'unknown' })
+    view.controller.review(true)
+    await view.controller.publish()
+    await view.controller.retry()
+    await expectRetainedRetry(view, 'committed', 3)
+  })
+
+  it('retry effect knowledge retains a known commit even when a later failure reports authoritative absence', async () => {
+    const view = await prepared()
+    view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'network', effect: 'committed' })
+    view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'auth-required', effect: 'none' })
+    view.controller.review(true)
+    await view.controller.publish()
+    await view.controller.retry()
+    expect(view.controller.store.getSnapshot().operation).toMatchObject({
+      status: 'blocked', failure: { code: 'auth-required', effect: 'committed' },
+    })
+    await expectRetainedRetry(view, 'committed', 3)
+  })
+
+  it('retry effect knowledge retains a commit learned after unknown effects when the next response is lost', async () => {
+    const view = await prepared()
+    view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'network', effect: 'unknown' })
+    view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'network', effect: 'committed' })
+    view.publish.mockRejectedValueOnce(new Error('later retry response lost'))
+    view.controller.review(true)
+    await view.controller.publish()
+    await view.controller.retry()
+    expect(view.controller.store.getSnapshot().operation).toMatchObject({ status: 'blocked', failure: { effect: 'committed' } })
+    await view.controller.retry()
+    await expectRetainedRetry(view, 'committed', 4)
+  })
+
+  it('retry effect knowledge leaves an initial stale receipt with no writes refreshable', async () => {
+    const view = await prepared()
+    view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'stale-preview', effect: 'none' })
+    view.controller.review(true)
+    await view.controller.publish()
+    expect(view.controller.store.getSnapshot().operation).toMatchObject({
+      status: 'blocked', failure: { code: 'stale-preview', effect: 'none' },
+    })
+    const next = { ...PREVIEW, id: 'new-preview' as ForkPreviewId, branch: 'creator/next' }
+    view.preview.mockResolvedValueOnce(next)
+    await view.controller.connect()
+    view.controller.edit('branch', next.branch)
+    await view.controller.inspect()
+    expect(view.repositories).toHaveBeenCalledTimes(2)
+    expect(view.preview).toHaveBeenCalledTimes(2)
+    expect(view.controller.store.getSnapshot()).toMatchObject({ preview: next, operation: null, reviewed: false, reviewedFiles: [] })
+    expect(view.publish).toHaveBeenCalledExactlyOnceWith(PREVIEW.id, true)
+  })
+
+  it('retry effect knowledge permits an unknown write to resolve to authoritative absence for a surviving receipt', async () => {
+    const view = await prepared()
+    view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'network', effect: 'unknown' })
+    view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'auth-required', effect: 'none' })
+    view.controller.review(true)
+    await view.controller.publish()
+    await view.controller.retry()
+    expect(view.controller.store.getSnapshot().operation).toMatchObject({
+      status: 'blocked', failure: { code: 'auth-required', effect: 'none' },
+    })
+    const next = { ...PREVIEW, id: 'new-preview' as ForkPreviewId, branch: 'creator/next' }
+    view.preview.mockResolvedValueOnce(next)
+    await view.controller.connect()
+    view.controller.edit('branch', next.branch)
+    await view.controller.inspect()
+    expect(view.repositories).toHaveBeenCalledTimes(2)
+    expect(view.preview).toHaveBeenCalledTimes(2)
+    expect(view.controller.store.getSnapshot()).toMatchObject({ preview: next, operation: null, reviewed: false, reviewedFiles: [] })
+    expect(view.publish.mock.calls).toEqual([[PREVIEW.id, true], [PREVIEW.id, true]])
+  })
+
+  it.each([0, 1, 51])('per-file review refuses global approval without individual marks for %s preview files', async (count) => {
+    const files = Array.from({ length: count }, (_, index) => ({ path: `customizations/file-${String(index)}.txt`, before: null, after: 'reviewed bytes' }))
+    const { controller, publish } = await prepared({ ...PREVIEW, files }, false)
+    controller.review(true)
+    await controller.publish()
+    expect(publish).not.toHaveBeenCalled()
+    expect(controller.store.getSnapshot().reviewed).toBe(false)
+    expect(controller.store.getSnapshot().operation).toBeNull()
+    expect(controller.store.getSnapshot()).toMatchObject({ activeFile: null, reviewedFiles: [] })
+    controller.store.set({ ...controller.store.getSnapshot(), reviewed: true })
+    await controller.publish()
+    expect(publish).not.toHaveBeenCalled()
+    expect(controller.store.getSnapshot().operation).toBeNull()
+  })
+
+  it('per-file review refuses publication after checking only one of 51 files', async () => {
+    const files = Array.from({ length: 51 }, (_, index) => ({ path: `customizations/file-${String(index)}.txt`, before: null, after: 'reviewed bytes' }))
+    const { controller, publish } = await prepared({ ...PREVIEW, files }, false)
+    controller.selectFile(PREVIEW.id, files[0]!.path)
+    controller.reviewFile(PREVIEW.id, files[0]!.path, true)
+    controller.review(true)
+    await controller.publish()
+    expect(publish).not.toHaveBeenCalled()
+    expect(controller.store.getSnapshot()).toMatchObject({ reviewed: false, reviewedFiles: [files[0]!.path] })
+    controller.store.set({ ...controller.store.getSnapshot(), reviewed: true })
+    await controller.publish()
+    expect(publish).not.toHaveBeenCalled()
+    expect(controller.store.getSnapshot().operation).toBeNull()
+  })
+
+  it('per-file review requires 51 explicit marks and a separate global acknowledgement', async () => {
+    const files = Array.from({ length: 51 }, (_, index) => ({ path: `customizations/file-${String(index)}.txt`, before: null, after: 'reviewed bytes' }))
+    const { controller, publish } = await prepared({ ...PREVIEW, files }, false)
+    controller.review(true)
+    await controller.publish()
+    expect(publish).not.toHaveBeenCalled()
+    for (const file of files) {
+      controller.selectFile(PREVIEW.id, file.path)
+      expect(controller.store.getSnapshot().reviewedFiles).not.toContain(file.path)
+      controller.reviewFile(PREVIEW.id, file.path, true)
+    }
+    expect(controller.store.getSnapshot().reviewedFiles).toEqual(files.map(file => file.path))
+    expect(controller.store.getSnapshot().reviewed).toBe(false)
+    await controller.publish()
+    expect(publish).not.toHaveBeenCalled()
+    controller.review(true)
+    await controller.publish()
+    expect(publish).toHaveBeenCalledExactlyOnceWith(PREVIEW.id, true)
+  })
+
+  it('per-file review accepts only the active current file and ignores stale or invalid handlers', async () => {
+    const other = { ...PREVIEW.files[0]!, path: 'customizations/other.txt' }
+    const { controller, publish } = await prepared({ ...PREVIEW, files: [PREVIEW.files[0]!, other] }, false)
+    const path = PREVIEW.files[0]!.path
+    const stale = 'stale-preview' as ForkPreviewId
+    controller.reviewFile(PREVIEW.id, path, true)
+    controller.selectFile(stale, path)
+    controller.selectFile(PREVIEW.id, 'customizations/missing.txt')
+    expect(controller.store.getSnapshot()).toMatchObject({ activeFile: null, reviewedFiles: [], reviewed: false })
+    controller.selectFile(PREVIEW.id, path)
+    expect(controller.store.getSnapshot()).toMatchObject({ activeFile: path, reviewedFiles: [] })
+    controller.reviewFile(PREVIEW.id, other.path, true)
+    controller.reviewFile(stale, path, true)
+    controller.reviewFile(PREVIEW.id, 'customizations/missing.txt', true)
+    controller.reviewFile(PREVIEW.id, path, false)
+    expect(controller.store.getSnapshot().reviewedFiles).toEqual([])
+    controller.reviewFile(PREVIEW.id, path, true)
+    controller.selectFile(stale, other.path)
+    controller.selectFile(PREVIEW.id, 'customizations/missing.txt')
+    expect(controller.store.getSnapshot()).toMatchObject({ activeFile: path, reviewedFiles: [path], reviewed: false })
+    controller.selectFile(PREVIEW.id, null)
+    controller.reviewFile(PREVIEW.id, path, false)
+    expect(controller.store.getSnapshot()).toMatchObject({ activeFile: null, reviewedFiles: [path], reviewed: false })
+    expect(publish).not.toHaveBeenCalled()
+  })
+
+  it('per-file review revokes global acknowledgement only when an actual file mark changes', async () => {
+    const first = PREVIEW.files[0]!
+    const last = { ...first, path: 'customizations/last.txt' }
+    const { controller, publish } = await prepared({ ...PREVIEW, files: [first, last] })
+    controller.review(true)
+    expect(controller.store.getSnapshot().reviewed).toBe(true)
+    controller.reviewFile(PREVIEW.id, last.path, true)
+    controller.reviewFile(PREVIEW.id, first.path, false)
+    controller.reviewFile('stale-preview' as ForkPreviewId, last.path, false)
+    controller.reviewFile(PREVIEW.id, 'customizations/missing.txt', false)
+    expect(controller.store.getSnapshot().reviewed).toBe(true)
+    expect(controller.store.getSnapshot().reviewedFiles).toEqual([first.path, last.path])
+    controller.selectFile(PREVIEW.id, null)
+    expect(controller.store.getSnapshot().reviewed).toBe(true)
+    controller.selectFile(PREVIEW.id, last.path)
+    controller.reviewFile(PREVIEW.id, last.path, false)
+    expect(controller.store.getSnapshot()).toMatchObject({ reviewedFiles: [first.path], reviewed: false })
+    controller.review(true)
+    await controller.publish()
+    expect(publish).not.toHaveBeenCalled()
+    controller.reviewFile(PREVIEW.id, last.path, true)
+    expect(controller.store.getSnapshot().reviewed).toBe(false)
+    await controller.publish()
+    expect(publish).not.toHaveBeenCalled()
+    controller.review(true)
+    controller.review(false)
+    expect(controller.store.getSnapshot()).toMatchObject({ reviewedFiles: [first.path, last.path], reviewed: false })
+    controller.review(true)
+    await controller.publish()
+    expect(publish).toHaveBeenCalledExactlyOnceWith(PREVIEW.id, true)
+  })
+
+  it.each(['repository', 'branch', 'connect', 'inspect', 'close', 'dispose'] as const)(
+    'per-file review resets marks and selection after %s and refuses callbacks for the old receipt', async (action) => {
+      const view = await prepared()
+      view.controller.review(true)
+      const next = { ...PREVIEW, id: 'preview-2' as ForkPreviewId }
+      if (action === 'connect') await view.controller.connect()
+      else if (action === 'inspect') {
+        view.preview.mockResolvedValueOnce(next)
+        await view.controller.inspect()
+      } else if (action === 'close') view.controller.close()
+      else if (action === 'dispose') view.controller.dispose()
+      else view.controller.edit(action, 'changed')
+      expect(view.controller.store.getSnapshot()).toMatchObject({ activeFile: null, reviewedFiles: [], reviewed: false })
+      view.controller.selectFile(PREVIEW.id, PREVIEW.files[0]!.path)
+      view.controller.reviewFile(PREVIEW.id, PREVIEW.files[0]!.path, true)
+      view.controller.review(true)
+      await view.controller.publish()
+      expect(view.controller.store.getSnapshot()).toMatchObject({ activeFile: null, reviewedFiles: [], reviewed: false })
+      expect(view.publish).not.toHaveBeenCalled()
+      if (action === 'inspect') {
+        expect(view.controller.store.getSnapshot().preview?.id).toBe(next.id)
+        view.controller.selectFile(next.id, PREVIEW.files[0]!.path)
+        expect(view.controller.store.getSnapshot()).toMatchObject({ activeFile: PREVIEW.files[0]!.path, reviewedFiles: [] })
+      }
+    },
+  )
+
+  it.each(['connect', 'inspect'] as const)('per-file review ignores old handlers while %s is pending', async (action) => {
+    const view = await prepared()
+    view.controller.review(true)
+    const discovery = Promise.withResolvers<ForkRepositoriesResult>()
+    const inspection = Promise.withResolvers<ForkPreviewResult>()
+    if (action === 'connect') view.repositories.mockReturnValueOnce(discovery.promise)
+    else view.preview.mockReturnValueOnce(inspection.promise)
+    const pending = action === 'connect' ? view.controller.connect() : view.controller.inspect()
+    view.controller.selectFile(PREVIEW.id, PREVIEW.files[0]!.path)
+    view.controller.reviewFile(PREVIEW.id, PREVIEW.files[0]!.path, true)
+    view.controller.review(true)
+    expect(view.controller.store.getSnapshot()).toMatchObject({ activeFile: null, reviewedFiles: [], reviewed: false })
+    discovery.resolve(REPOSITORIES)
+    inspection.resolve({ ...PREVIEW, id: 'preview-2' as ForkPreviewId })
+    await pending
+    expect(view.controller.store.getSnapshot()).toMatchObject({ activeFile: null, reviewedFiles: [], reviewed: false })
+    expect(view.publish).not.toHaveBeenCalled()
+  })
+
+  it.each(['unknown', 'committed'] as const)('per-file review keeps retained %s receipts browseable without permitting new marks', async (effect) => {
+    const view = await prepared()
+    view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'network', effect })
+    view.controller.review(true)
+    await view.controller.publish()
+    view.controller.edit('branch', 'creator/another')
+    view.controller.close()
+    view.controller.open()
+    view.controller.selectFile('stale-preview' as ForkPreviewId, PREVIEW.files[0]!.path)
+    expect(view.controller.store.getSnapshot().activeFile).toBeNull()
+    view.controller.selectFile(PREVIEW.id, PREVIEW.files[0]!.path)
+    expect(view.controller.store.getSnapshot()).toMatchObject({ activeFile: PREVIEW.files[0]!.path, reviewedFiles: [], reviewed: false })
+    view.controller.reviewFile(PREVIEW.id, PREVIEW.files[0]!.path, true)
+    view.controller.review(true)
+    expect(view.controller.store.getSnapshot()).toMatchObject({ reviewedFiles: [], reviewed: false })
+    await view.controller.retry()
+    expect(view.publish.mock.calls).toEqual([[PREVIEW.id, true], [PREVIEW.id, true]])
+    expect(view.controller.store.getSnapshot().operation?.status).toBe('saved')
+  })
+
+  it('per-file review cannot revoke an already approved pending operation', async () => {
+    const view = await prepared()
+    const pending = Promise.withResolvers<ForkPublishResult>()
+    view.publish.mockReturnValueOnce(pending.promise)
+    view.controller.review(true)
+    const publication = view.controller.publish()
+    view.controller.reviewFile(PREVIEW.id, PREVIEW.files[0]!.path, false)
+    view.controller.review(false)
+    expect(view.controller.store.getSnapshot()).toMatchObject({ reviewedFiles: [PREVIEW.files[0]!.path], reviewed: true })
+    view.controller.close()
+    expect(view.controller.store.getSnapshot()).toMatchObject({ activeFile: null, reviewedFiles: [], reviewed: false })
+    pending.resolve(SAVED)
+    await publication
+    expect(view.publish).toHaveBeenCalledExactlyOnceWith(PREVIEW.id, true)
+    expect(view.controller.store.getSnapshot().operation?.status).toBe('saved')
+  })
+
   it('makes no requests until explicit discovery and keeps only the authorized repository choices', async () => {
     const { controller, repositories, preview, publish } = bench()
     controller.open()
@@ -234,6 +562,7 @@ describe('Creator fork publication', () => {
     view.controller.edit('repository', PREVIEW.repository)
     view.controller.edit('branch', PREVIEW.branch)
     await view.controller.inspect()
+    reviewEveryFile(view.controller)
     view.controller.review(true)
     const pending = Promise.withResolvers<ForkPublishResult>()
     view.publish.mockReturnValueOnce(pending.promise)

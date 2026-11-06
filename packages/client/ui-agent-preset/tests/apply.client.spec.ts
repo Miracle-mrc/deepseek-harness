@@ -480,6 +480,7 @@ describe('ui-agent-preset apply', () => {
       const publication: Partial<ForkPublishOverlayInjected> | undefined = publishEntry?.inject?.()
       if (publication?.hooks === undefined || publication.connect === undefined || publication.edit === undefined
         || publication.inspect === undefined || publication.review === undefined || publication.publish === undefined
+        || publication.selectFile === undefined || publication.reviewFile === undefined
         || publication.retry === undefined || publication.close === undefined || publication.dismissNotice === undefined
         || overlay.openPublish === undefined) throw new Error('expected fork-publication actions')
       overlay.openPublish()
@@ -494,7 +495,8 @@ describe('ui-agent-preset apply', () => {
       type PreviewResponse = Awaited<ReturnType<typeof ctx.remote.creatorFork.preview>>
       const preview = vi.fn(async (): Promise<PreviewResponse> => ({ ok: true, value: {
         status: 'ready' as const, id: 'preview-1' as ForkPreviewId, account: 'alice', repository: 'alice/harness',
-        branch: 'my-changes', upstream: 'deepseek-ai/deepseek-harness', base: 'main', head: null, files: [],
+        branch: 'my-changes', upstream: 'deepseek-ai/deepseek-harness', base: 'main', head: null,
+        files: [{ path: 'creator-exports/saved/cordis.patch.yml', before: null, after: '[]\n' }],
       } }))
       type PublishResponse = Awaited<ReturnType<typeof ctx.remote.creatorFork.publish>>
       const publish = vi.fn(async (): Promise<PublishResponse> => ({ ok: false, error: new RemoteError('gateway/internal', 'disconnected', {}) }))
@@ -504,6 +506,15 @@ describe('ui-agent-preset apply', () => {
       publication.edit('repository', 'alice/harness')
       publication.edit('branch', 'my-changes')
       await publication.inspect()
+      publication.review(true)
+      await publication.publish()
+      expect(publish).not.toHaveBeenCalled()
+      const receipt = publication.hooks.forkPublish.getSnapshot().preview
+      if (receipt === null) throw new Error('expected publication preview')
+      for (const file of receipt.files) {
+        publication.selectFile(receipt.id, file.path)
+        publication.reviewFile(receipt.id, file.path, true)
+      }
       publication.review(true)
       await publication.publish()
       expect(publish).toHaveBeenCalledExactlyOnceWith('preview-1', true)

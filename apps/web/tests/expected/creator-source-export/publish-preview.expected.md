@@ -27,6 +27,9 @@
   - region "Files to change (11)":
     - heading "Files to change (11)" [level=3]
     - paragraph: Only the selected file’s exact text is shown. Open escaped text to inspect whitespace and line endings.
+    - status: "Files reviewed: 0/11"
+    - paragraph: Inspect each file and check its privacy box. After every file is checked, separately authorize the save; navigation never checks files for you.
+    - paragraph: Previews can expire during review. For large exports, use the local download to review offline and publish manually.
     - text: Search files
     - searchbox "Search files"
     - text: "Matching files: 11 1–11 of 11 Files"
@@ -62,7 +65,10 @@
         - text: export const greeting = "Created for my fork"
         - 'button "After: exact text with escaped line endings" [expanded]': Exact text with escaped line endings
         - text: "\"export const greeting = \\\"Created for my fork\\\"\\n\""
-  - checkbox "I checked every file for private information and authorize this commit and pull request"
+    - checkbox "I checked this file for private information"
+    - text: I checked this file for private information
+    - button "Next unreviewed file"
+  - checkbox "I checked every file for private information and authorize this commit and pull request" [disabled]
   - text: I checked every file for private information and authorize this commit and pull request
   - button "Close"
   - button "Load my GitHub forks"

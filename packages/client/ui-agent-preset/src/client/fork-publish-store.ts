@@ -25,6 +25,8 @@ export interface ForkPublishState {
   phase: 'idle' | 'discovering' | 'previewing' | 'ready' | 'blocked'
   repositories: ReadyForkRepositories | null
   preview: ReadyForkPreview | null
+  activeFile: string | null
+  reviewedFiles: readonly string[]
   reviewed: boolean
   failure: ForkFailure | null
   operation: ForkPublicationOperation | null
@@ -44,7 +46,7 @@ export class ForkPublishController {
   /** Registration-private source bound to the overlay by the renderer. */
   readonly store: SnapshotStore<ForkPublishState> = createSnapshotStore({
     open: false, repository: '', branch: '', phase: 'idle', repositories: null, preview: null,
-    reviewed: false, failure: null, operation: null, notice: null,
+    activeFile: null, reviewedFiles: [], reviewed: false, failure: null, operation: null, notice: null,
   })
   private revision = 0
   private noticeSeq = 0
@@ -58,7 +60,7 @@ export class ForkPublishController {
   private set(patch: Partial<ForkPublishState>): void { this.store.set({ ...this.store.getSnapshot(), ...patch }) }
   private invalidate(): void {
     this.revision++
-    this.set({ phase: 'idle', preview: null, reviewed: false, failure: null })
+    this.set({ phase: 'idle', preview: null, activeFile: null, reviewedFiles: [], reviewed: false, failure: null })
   }
   private unresolved(): boolean {
     const operation = this.store.getSnapshot().operation
@@ -102,7 +104,8 @@ export class ForkPublishController {
     const before = this.store.getSnapshot()
     if (this.disposed || !before.open || this.reading() || this.unresolved()) return
     const revision = ++this.revision
-    this.set({ phase: 'discovering', repositories: null, preview: null, reviewed: false, failure: null })
+    this.set({ phase: 'discovering', repositories: null, preview: null, activeFile: null,
+      reviewedFiles: [], reviewed: false, failure: null })
     try {
       const result = await this.actions.repositories()
       // oxlint-disable-next-line typescript/no-unnecessary-condition -- dispose() can run during the await.
@@ -136,7 +139,8 @@ export class ForkPublishController {
       return
     }
     const revision = ++this.revision
-    this.set({ phase: 'previewing', preview: null, reviewed: false, failure: null, operation: null })
+    this.set({ phase: 'previewing', preview: null, activeFile: null, reviewedFiles: [],
+      reviewed: false, failure: null, operation: null })
     try {
       const result = await this.actions.preview({ repository: state.repository, branch: state.branch })
       // oxlint-disable-next-line typescript/no-unnecessary-condition -- dispose() can run during the await.
@@ -150,13 +154,44 @@ export class ForkPublishController {
     }
   }
   /**
-   * Acknowledge only a current preview that has not already been submitted.
+   * Select exact text from the displayed receipt without crediting a privacy review.
+   * @param id Receipt displayed by the caller; stale callbacks cannot change another receipt.
+   * @param path A file in that receipt, or null to clear the selection.
+   */
+  selectFile(id: ForkPreviewId, path: string | null): void {
+    const state = this.store.getSnapshot()
+    const preview = state.preview ?? state.operation?.preview
+    if (this.disposed || !state.open || preview?.id !== id
+      || (path !== null && !preview.files.some(file => file.path === path))) return
+    this.set({ activeFile: path })
+  }
+  /**
+   * Record an explicit privacy acknowledgement only for the selected file in the unsubmitted receipt.
+   * Changing an individual acknowledgement revokes the separate final authorization.
+   * @param id Receipt whose exact text the caller displayed.
+   * @param path Selected file being acknowledged.
+   * @param reviewed Whether the person checked this file for private information.
+   */
+  reviewFile(id: ForkPreviewId, path: string, reviewed: boolean): void {
+    const state = this.store.getSnapshot()
+    if (this.disposed || !state.open || state.operation !== null || state.preview?.id !== id
+      || state.activeFile !== path || !state.preview.files.some(file => file.path === path)
+      || state.reviewedFiles.includes(path) === reviewed) return
+    this.set({ reviewedFiles: reviewed ? [...state.reviewedFiles, path] : state.reviewedFiles.filter(file => file !== path),
+      reviewed: false })
+  }
+  private completeReview(state: ForkPublishState): boolean {
+    const reviewed = new Set(state.reviewedFiles)
+    return state.preview !== null && state.preview.files.length > 0 && state.preview.files.every(file => reviewed.has(file.path))
+  }
+  /**
+   * Authorize only a current, unsubmitted receipt with every individual file explicitly acknowledged.
    * @param reviewed Whether the person reviewed every displayed write.
    */
   review(reviewed: boolean): void {
     const state = this.store.getSnapshot()
-    if (this.disposed || state.operation !== null) return
-    this.set({ reviewed: state.preview !== null && reviewed })
+    if (this.disposed || !state.open || state.operation !== null) return
+    this.set({ reviewed: reviewed && this.completeReview(state) })
   }
   /**
    * Submit only the reviewed receipt; source text and destination fields never travel in this call.
@@ -164,7 +199,8 @@ export class ForkPublishController {
    */
   async publish(): Promise<void> {
     const state = this.store.getSnapshot()
-    if (this.disposed || !state.open || !state.reviewed || state.preview === null || state.operation !== null) return
+    if (this.disposed || !state.open || !state.reviewed || state.preview === null || state.operation !== null
+      || !this.completeReview(state)) return
     await this.submit(state.preview)
   }
   /**
@@ -177,6 +213,8 @@ export class ForkPublishController {
     await this.submit(state.operation.preview)
   }
   private async submit(preview: ReadyForkPreview): Promise<void> {
+    const operation = this.store.getSnapshot().operation
+    const previous = operation?.status === 'blocked' ? operation.failure : null
     this.set({ operation: { status: 'publishing', preview } })
     let result: ForkPublishResult
     try { result = await this.actions.publish(preview.id, true) }
@@ -186,6 +224,11 @@ export class ForkPublishController {
     }
     if (this.disposed) return
     if (result.status === 'blocked') {
+      // A failed retry cannot undo a known commit; a missing or uninspected receipt cannot establish earlier absence.
+      if (previous?.effect === 'committed' || (previous?.effect === 'unknown' && result.effect === 'none'
+        && ['stale-preview', 'unavailable', 'timeout'].includes(result.code))) {
+        result = { ...result, effect: previous.effect }
+      }
       this.set({ operation: { status: 'blocked', preview, failure: result }, notice: { seq: ++this.noticeSeq, kind: 'failed' } })
       return
     }

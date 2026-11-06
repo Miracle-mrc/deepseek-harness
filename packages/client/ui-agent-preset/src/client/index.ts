@@ -25,7 +25,7 @@ import { WeakMapWithValues } from '@deepseek-ai/dsh-util-values'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the ctx.remote merge and the forwarded-event key face
 // (the settings invalidation rides the allowlist) into this program.
-import type {} from '@deepseek-ai/dsh-api-remotes/client'
+import type { ForkPreviewId } from '@deepseek-ai/dsh-api-remotes/client'
 // Type-only: pulls the settings shell's SlotMap merge (the 'settings.section' entry).
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
@@ -183,6 +183,8 @@ export function apply(ctx: ClientContext): void {
         hooks: { forkPublish: forkPublish.store }, close: () => { forkPublish.close() }, connect: () => forkPublish.connect(),
         edit: (field: 'repository' | 'branch', value: string) => { forkPublish.edit(field, value) },
         inspect: () => forkPublish.inspect(), review: (reviewed: boolean) => { forkPublish.review(reviewed) },
+        selectFile: (id: ForkPreviewId, path: string | null) => { forkPublish.selectFile(id, path) },
+        reviewFile: (id: ForkPreviewId, path: string, reviewed: boolean) => { forkPublish.reviewFile(id, path, reviewed) },
         publish: () => forkPublish.publish(), retry: () => forkPublish.retry(), dismissNotice: () => { forkPublish.dismissNotice() },
       }),
     }, ForkPublishOverlay))

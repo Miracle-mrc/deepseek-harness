@@ -1,7 +1,7 @@
 /** Bounded file navigation and explicitly selected, byte-exact source inspection. */
 import { memo, useId, useMemo, useState, type ReactNode } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
-import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Checkbox, Input } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReadyForkPreview } from './fork-publish-store.ts'
 import css from './ForkPublish.module.css'
 
@@ -60,15 +60,33 @@ const FileDetails = memo(function FileDetails({ file, t }: { readonly file: Prev
 })
 
 /**
- * Mount only an explicitly selected file; navigation never changes the publication receipt or acknowledgement.
- * @param props Immutable receipt and localized copy. The owner keys this view by receipt ID.
- * @returns A searchable, paginated file selector and at most one file's exact source and optional escaped text.
+ * Mount only selected text and require a separate, explicit acknowledgement for each file.
+ * @param props Receipt, controller-owned selection and review progress, explicit actions, and localized copy.
+ * @returns Bounded navigation, at most one file's text, and receipt-scoped individual review controls.
  */
-export function ForkFilePreview({ preview, t }: { readonly preview: ReadyForkPreview; readonly t: Translate }): ReactNode {
+export function ForkFilePreview({ preview, selectedPath, reviewedFiles, canReview, onSelect, onReview, t }: {
+  readonly preview: ReadyForkPreview
+  readonly selectedPath: string | null
+  readonly reviewedFiles: readonly string[]
+  readonly canReview: boolean
+  readonly onSelect: (path: string | null) => void
+  readonly onReview: (path: string, reviewed: boolean) => void
+  readonly t: Translate
+}): ReactNode {
   const [query, setQuery] = useState('')
   const [page, setPage] = useState(0)
-  const [selectedPath, setSelectedPath] = useState('')
   const id = useId()
+  const reviewed = useMemo(() => new Set(reviewedFiles), [reviewedFiles])
+  const nextUnreviewed = useMemo(() => {
+    const current = preview.files.findIndex(file => file.path === selectedPath)
+    let first: { readonly file: PreviewFile; readonly index: number } | null = null
+    for (const [index, file] of preview.files.entries()) {
+      if (reviewed.has(file.path)) continue
+      if (index > current) return { file, index }
+      first ??= { file, index }
+    }
+    return first
+  }, [preview.files, selectedPath, reviewed])
   const matching = useMemo(() => {
     const filter = query.trim().toLowerCase()
     return filter === '' ? preview.files : preview.files.filter(file => file.path.toLowerCase().includes(filter))
@@ -78,15 +96,23 @@ export function ForkFilePreview({ preview, t }: { readonly preview: ReadyForkPre
   const selected = visible.find(file => file.path === selectedPath)
   const changePage = (next: number): void => {
     setPage(next)
-    setSelectedPath('')
+    onSelect(null)
   }
-  return <section className={css.preview} aria-labelledby={`${id}-heading`}>
+  return <section className={css.preview} aria-labelledby={`${id}-heading`}
+    aria-describedby={canReview ? `${id}-review-hint` : undefined}>
     <h3 id={`${id}-heading`}>{t('forkPublishFiles', { count: String(preview.files.length) })}</h3>
     <p className={css.hint}>{t('forkPublishExactText')}</p>
+    {canReview ? <>
+      <p className={css.hint} role="status">{t('forkPublishReviewProgress', {
+        count: String(reviewed.size), total: String(preview.files.length),
+      })}</p>
+      <p id={`${id}-review-hint`} className={css.hint}>{t('forkPublishReviewHint')}</p>
+      <p className={css.hint}>{t('forkPublishReviewExpiry')}</p>
+    </> : null}
     <label className={css.field}>
       <span>{t('forkPublishSearchFiles')}</span>
       <Input type="search" value={query} autoComplete="off" aria-describedby={`${id}-count`}
-        onChange={(event) => { setQuery(event.target.value); setPage(0); setSelectedPath('') }} />
+        onChange={(event) => { setQuery(event.target.value); setPage(0); onSelect(null) }} />
     </label>
     <div id={`${id}-count`} className={css.fileCount} aria-live="polite">
       <span>{t('forkPublishMatchingFiles', { count: String(matching.length) })}</span>
@@ -95,8 +121,8 @@ export function ForkFilePreview({ preview, t }: { readonly preview: ReadyForkPre
     </div>
     <label className={css.field}>
       <span>{t('forkPublishFileList')}</span>
-      <select size={8} className={css.fileList} value={selectedPath} aria-describedby={`${id}-count`}
-        aria-controls={`${id}-detail`} onChange={(event) => { setSelectedPath(event.target.value) }}>
+      <select size={8} className={css.fileList} value={selectedPath ?? ''} aria-describedby={`${id}-count`}
+        aria-controls={`${id}-detail`} onChange={(event) => { onSelect(event.target.value || null) }}>
         <option value="">{t('forkPublishChooseFile')}</option>
         {visible.map(file => <option key={file.path} value={file.path}>
           {t('forkPublishFileOption', { name: file.path.slice(file.path.lastIndexOf('/') + 1),
@@ -116,5 +142,15 @@ export function ForkFilePreview({ preview, t }: { readonly preview: ReadyForkPre
       {selected === undefined ? <p className={css.hint}>{t('forkPublishSelectFile')}</p>
         : <FileDetails key={selected.path} file={selected} t={t} />}
     </div>
+    {canReview ? <>
+      {selected === undefined ? null : <Checkbox checked={reviewed.has(selected.path)}
+        label={t('forkPublishFileReviewed')}
+        onChange={(checked) => { onReview(selected.path, checked) }} />}
+      <Button variant="outline" disabled={nextUnreviewed === null} onClick={nextUnreviewed === null ? undefined : () => {
+        setQuery('')
+        setPage(Math.floor(nextUnreviewed.index / FILES_PER_PAGE))
+        onSelect(nextUnreviewed.file.path)
+      }}>{t('forkPublishNextUnreviewed')}</Button>
+    </> : null}
   </section>
 }
