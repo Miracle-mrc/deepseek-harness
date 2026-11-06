@@ -1,0 +1,4 @@
+# Keep the recorded settlement notice in its own parent turn.
+- insert:
+    - id: subagent-parent-idle-fence
+      name: '../../../packages/test-support/session-snapshot/tests/fixtures/subagent-parent-idle-fence.ts'
