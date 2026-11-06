@@ -22,6 +22,8 @@ const COMMIT = z.object({ sha: OID, tree: z.object({ sha: OID }), message: z.str
 const TREE = z.object({
   truncated: z.literal(false), tree: z.array(z.object({ path: z.string(), mode: z.string(), type: z.string(), sha: OID })),
 })
+const COMPARISON = z.object({ status: z.enum(['ahead', 'behind', 'diverged', 'identical']),
+  base_commit: z.object({ sha: OID }), merge_base_commit: z.object({ sha: OID }) })
 const PULL = z.object({ number: z.number().int().positive(), state: z.enum(['open', 'closed']),
   head: z.object({ ref: z.string(), sha: OID, repo: z.object({ id: z.number() }) }),
   base: z.object({ ref: z.string(), repo: z.object({ id: z.number() }) }) })
@@ -55,7 +57,9 @@ interface Receipt {
   readonly repositoryId: number
   readonly upstreamId: number
   readonly sourceId: number
+  readonly baseCommit: ForkCommitId
   readonly parent: ForkCommitId
+  readonly additions: readonly { readonly path: string; readonly content: string }[]
   readonly expires: number
   readonly expectedLeaves: ReadonlyMap<string, string>
   attempted: boolean
@@ -89,6 +93,20 @@ function networkId(repo: z.infer<typeof REPO>): number {
 }
 function sameSlug(left: string, right: string): boolean { return left.toLowerCase() === right.toLowerCase() }
 function blobId(raw: Buffer): string { return createHash('sha1').update(`blob ${String(raw.length)}\0`).update(raw).digest('hex') }
+function leaves(tree: z.infer<typeof TREE>): Map<string, string> {
+  return new Map(tree.tree.filter(entry => entry.type !== 'tree')
+    .map(entry => [entry.path, `${entry.mode}:${entry.type}:${entry.sha}`]))
+}
+function destination(tree: z.infer<typeof TREE>, path: string): z.infer<typeof TREE>['tree'][number] | undefined {
+  for (const entry of tree.tree) {
+    const folded = entry.path.normalize('NFC').toLowerCase()
+    const target = path.normalize('NFC').toLowerCase()
+    if ((folded === target || target.startsWith(`${folded}/`))
+      && path.slice(0, entry.path.length) !== entry.path) refuse('unsafe-destination')
+    if (path.startsWith(`${entry.path}/`) && (entry.type !== 'tree' || entry.mode !== '040000')) refuse('unsafe-destination')
+  }
+  return tree.tree.find(entry => entry.path === path)
+}
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -154,6 +172,28 @@ export class CreatorFork extends TypertRemoteService {
     return decode(z.object({ commit: z.object({ sha: OID }) }),
       await this.get(`repos/${repository}/branches/${encodeURIComponent(branch)}`, signal)).commit.sha
   }
+  private async tree(repository: string, head: ForkCommitId, signal: AbortSignal): Promise<z.infer<typeof TREE>> {
+    const commit = await this.commit(repository, head, signal)
+    return decode(TREE, await this.get(`repos/${repository}/git/trees/${commit.tree.sha}?recursive=1`, signal))
+  }
+  private async text(
+    repository: string, entry: z.infer<typeof TREE>['tree'][number] | undefined, path: string,
+    signal: AbortSignal,
+  ): Promise<string | null> {
+    if (entry === undefined) return null
+    if (entry.type !== 'blob' || entry.mode !== '100644') refuse('unsafe-destination')
+    const blob = decode(z.object({ encoding: z.literal('base64'), size: z.number().int().min(0).max(1024 * 1024), content: z.string() }),
+      await this.get(`repos/${repository}/git/blobs/${entry.sha}`, signal))
+    const encoded = blob.content.replace(/\r?\n/g, '')
+    const raw = Buffer.from(encoded, 'base64')
+    if (raw.length !== blob.size || raw.toString('base64') !== encoded || blobId(raw) !== entry.sha) refuse('invalid-response')
+    let text: string
+    try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(raw) }
+    catch (_error) { refuse('unsupported-source') }
+    const issue = sourceTextIssue(text, path)
+    if (issue !== undefined) refuse(issue)
+    return text
+  }
   private async checked(repository: string, branch: string, signal: AbortSignal) {
     const user = decode(USER, await this.get('user', signal))
     const upstream = await this.repo(this.config.upstreamRepository, signal)
@@ -167,6 +207,20 @@ export class CreatorFork extends TypertRemoteService {
   private async head(repository: string, branch: string, signal: AbortSignal): Promise<ForkCommitId | null> {
     try { return decode(REF, await this.get(`repos/${repository}/git/ref/heads/${encodeURIComponent(branch)}`, signal)).object.sha }
     catch (error) { if (error instanceof ForkGithubError && error.code === 'not-found') return null; throw error }
+  }
+  private async pulls(receipt: Receipt, signal: AbortSignal): Promise<z.infer<typeof PULL>[]> {
+    const preview = receipt.preview
+    const query = `repos/${preview.repository}/pulls?state=all&base=${encodeURIComponent(preview.base)}&head=${encodeURIComponent(`${preview.account}:${preview.branch}`)}&per_page=100`
+    return decode(z.array(PULL), await this.get(query, signal))
+  }
+  private matches(receipt: Receipt, pull: z.infer<typeof PULL>): boolean {
+    return pull.head.repo.id === receipt.repositoryId && pull.head.ref === receipt.preview.branch
+      && pull.head.sha === receipt.commit && pull.base.repo.id === receipt.repositoryId && pull.base.ref === receipt.preview.base
+  }
+  private closed(receipt: Receipt, pull: z.infer<typeof PULL>): ForkFailure {
+    receipt.closed = true
+    return { ...failed(new Refusal('pull-request-closed'), 'committed'),
+      pullRequestUrl: `https://github.com/${receipt.preview.repository}/pull/${String(pull.number)}` }
   }
   private releaseReceipts(): void {
     for (const [id, receipt] of this.receipts) {
@@ -202,11 +256,12 @@ export class CreatorFork extends TypertRemoteService {
   }
 
   /**
-   * Capture safe local source and exact destination text, without uploading source or changing GitHub.
+   * Capture the complete default-relative PR diff and additional destination writes, without uploading source or changing GitHub.
    * A new preview releases successful and known-closed receipts; their IDs then become stale.
    * Saved files absent from the current capture are refused; publication never deletes them automatically.
+   * Existing destinations must descend from the current default and preserve every non-captured leaf.
    * @param request Authorized fork slug and a non-default branch; new branches start from the fork's reviewed default branch.
-   * @returns An opaque, expiring receipt and complete UTF-8 before/after text, or a refusal with no source content.
+   * @returns An expiring receipt for complete PR changes and destination writes, with exact UTF-8 text, or a refusal without source.
    */
   @Remote
   async preview(request: SourceExportRequest): Promise<ForkPreviewResult> {
@@ -219,70 +274,70 @@ export class CreatorFork extends TypertRemoteService {
       const base = await this.defaultHead(repo.full_name, repo.default_branch, signal)
       const head = await this.head(repo.full_name, source.branch, signal)
       const parent = head ?? base
-      const commit = await this.commit(repo.full_name, parent, signal)
-      const tree = decode(TREE, await this.get(`repos/${repo.full_name}/git/trees/${commit.tree.sha}?recursive=1`, signal))
+      if (head !== null && head !== base) {
+        const comparison = decode(COMPARISON, await this.get(`repos/${repo.full_name}/compare/${base}...${head}?per_page=1`, signal))
+        if (comparison.base_commit.sha !== base) refuse('invalid-response')
+        if (comparison.status !== 'ahead' || comparison.merge_base_commit.sha !== base) refuse('unsafe-destination')
+      }
+      const baseTree = await this.tree(repo.full_name, base, signal)
+      const tree = parent === base ? baseTree : await this.tree(repo.full_name, parent, signal)
       const capturedPaths = new Set(source.files.map(file => `${PREFIX}${file.path}`))
       if (tree.tree.some(entry => entry.type !== 'tree' && entry.path.startsWith(PREFIX) && !capturedPaths.has(entry.path))) {
         refuse('unsafe-destination')
       }
+      const baseLeaves = leaves(baseTree)
+      const expectedLeaves = leaves(tree)
+      for (const [path] of [...baseLeaves, ...expectedLeaves]) {
+        if (!capturedPaths.has(path) && baseLeaves.get(path) !== expectedLeaves.get(path)) refuse('unsafe-destination')
+      }
       const files: Preview['files'][number][] = []
-      const expectedLeaves = new Map(tree.tree.filter(entry => entry.type !== 'tree')
-        .map(entry => [entry.path, `${entry.mode}:${entry.type}:${entry.sha}`]))
+      const additions: { path: string; content: string }[] = []
       let bytes = 0
-      for (const file of source.files) {
-        const path = `${PREFIX}${file.path}`
-        for (const entry of tree.tree) {
-          const folded = entry.path.normalize('NFC').toLowerCase()
-          const destination = path.normalize('NFC').toLowerCase()
-          if ((folded === destination || destination.startsWith(`${folded}/`))
-            && path.slice(0, entry.path.length) !== entry.path) refuse('unsafe-destination')
-          if (path.startsWith(`${entry.path}/`) && (entry.type !== 'tree' || entry.mode !== '040000')) refuse('unsafe-destination')
+      let prChanges = 0
+      const addFile = (path: string, before: string | null, branchBefore: string | null, after: string): void => {
+        const write = branchBefore !== after
+        if (write) {
+          additions.push({ path, content: after })
         }
-        const existing = tree.tree.find(entry => entry.path === path)
-        let before: string | null = null
-        if (existing !== undefined) {
-          if (existing.type !== 'blob' || existing.mode !== '100644') refuse('unsafe-destination')
-          const blob = decode(z.object({ encoding: z.literal('base64'), size: z.number().int().min(0).max(1024 * 1024), content: z.string() }),
-            await this.get(`repos/${repo.full_name}/git/blobs/${existing.sha}`, signal))
-          const encoded = blob.content.replace(/\r?\n/g, '')
-          const raw = Buffer.from(encoded, 'base64')
-          if (raw.length !== blob.size || raw.toString('base64') !== encoded || blobId(raw) !== existing.sha) refuse('invalid-response')
-          try { before = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(raw) }
-          catch (_error) { refuse('unsupported-source') }
-          const issue = sourceTextIssue(before, path)
-          if (issue !== undefined) refuse(issue)
-        }
-        if (before === file.content) continue
-        const diff = { path, before, after: file.content }
+        const changed = before !== after
+        if (changed) prChanges++
+        const oid = blobId(Buffer.from(after))
+        expectedLeaves.set(path, `100644:blob:${oid}`)
+        if (!changed && !write) return
+        const diff = { path, before, after, ...write && branchBefore !== before ? { branchBefore } : {} }
         bytes += Buffer.byteLength(JSON.stringify(diff))
         if (bytes > MAX_PREVIEW_BYTES) refuse('too-large')
         files.push(diff)
-        const raw = Buffer.from(file.content)
-        const oid = blobId(raw)
-        expectedLeaves.set(path, `100644:blob:${oid}`)
       }
-      if (files.length === 0) refuse('no-changes')
+      for (const file of source.files) {
+        const path = `${PREFIX}${file.path}`
+        const before = await this.text(repo.full_name, destination(baseTree, path), path, signal)
+        const branchBefore = tree === baseTree ? before : await this.text(repo.full_name, destination(tree, path), path, signal)
+        addFile(path, before, branchBefore, file.content)
+      }
+      if (prChanges === 0) refuse('no-changes')
       if (await this.head(repo.full_name, source.branch, signal) !== head) refuse('conflict')
       const current = await this.checked(repo.full_name, source.branch, signal)
       if (current.user.id !== user.id) refuse('mixed-account')
       if (current.repo.id !== repo.id || current.upstream.id !== upstream.id || networkId(current.upstream) !== networkId(upstream)) refuse('wrong-fork')
       if (current.repo.default_branch !== repo.default_branch) refuse('conflict')
-      if (head === null && await this.defaultHead(repo.full_name, repo.default_branch, signal) !== base) refuse('conflict')
+      if (await this.defaultHead(repo.full_name, repo.default_branch, signal) !== base) refuse('conflict')
       const preview: Preview = { status: 'ready', id: randomUUID() as ForkPreviewId, account: user.login,
         repository: repo.full_name, branch: source.branch, upstream: upstream.full_name, base: repo.default_branch, head, files }
       if (Buffer.byteLength(JSON.stringify(preview)) > MAX_PREVIEW_BYTES) refuse('too-large')
       this.releaseReceipts()
       if (this.receipts.size >= this.config.maxPreviews) refuse('too-large')
       this.receipts.set(preview.id, { preview, accountId: user.id, repositoryId: repo.id, upstreamId: upstream.id,
-        sourceId: networkId(upstream), parent, expires: Date.now() + this.config.previewLifetimeMs, expectedLeaves, attempted: false,
+        sourceId: networkId(upstream), baseCommit: base, parent, additions,
+        expires: Date.now() + this.config.previewLifetimeMs, expectedLeaves, attempted: false,
         commit: null, preparedCommit: null, pending: null, saved: null, closed: false })
       return preview
     })
   }
 
   /**
-   * Commit only the retained preview after explicit confirmation, then create or reuse its open PR to the fork's reviewed default branch.
-   * A detected default-branch change refuses the receipt without changing its approved destination or hiding earlier remote effects.
+   * Apply only retained destination writes after explicit confirmation, reusing an existing commit when no write is needed.
+   * Create or reuse its PR to the reviewed default; detected default-name, base-commit or target-head changes stop new writes.
    * Repeated calls share an in-flight operation and reconcile lost responses. A closed PR is reported without recreating it.
    * An in-flight publication retains its receipt past the preview's expiry.
    * A failed PR retains the approved commit; unknown writes remain unknown until reconciliation,
@@ -316,6 +371,13 @@ export class CreatorFork extends TypertRemoteService {
       if (user.id !== receipt.accountId) refuse('mixed-account')
       if (repo.id !== receipt.repositoryId || upstream.id !== receipt.upstreamId || networkId(upstream) !== receipt.sourceId) refuse('wrong-fork')
       if (repo.default_branch !== preview.base) refuse('conflict')
+      if (await this.defaultHead(preview.repository, preview.base, signal) !== receipt.baseCommit) {
+        if (receipt.commit !== null) {
+          const closed = (await this.pulls(receipt, signal)).find(pull => pull.state === 'closed' && this.matches(receipt, pull))
+          if (closed !== undefined) return this.closed(receipt, closed)
+        }
+        refuse('conflict')
+      }
       const head = await this.head(preview.repository, preview.branch, signal)
       if (receipt.attempted && receipt.commit === null) {
         if (head !== preview.head && head !== null) {
@@ -333,13 +395,19 @@ export class CreatorFork extends TypertRemoteService {
         if (head !== receipt.commit) refuse('conflict')
       } else {
         if (head !== preview.head) refuse('conflict')
-        if (preview.head === null) {
-          if (await this.defaultHead(preview.repository, preview.base, signal) !== receipt.parent) refuse('conflict')
+        if (receipt.additions.length === 0) {
+          await this.recheck(receipt, signal)
+          receipt.attempted = true
+          receipt.commit = receipt.parent
+        } else if (preview.head === null) {
           if (receipt.preparedCommit === null) {
+            const parent = await this.commit(preview.repository, receipt.parent, signal)
+            await this.recheck(receipt, signal)
             const tree = decode(z.object({ sha: OID }), await this.github.request('POST', `repos/${preview.repository}/git/trees`, {
-              base_tree: (await this.commit(preview.repository, receipt.parent, signal)).tree.sha,
-              tree: preview.files.map(file => ({ path: file.path, mode: '100644', type: 'blob', content: file.after })),
+              base_tree: parent.tree.sha,
+              tree: receipt.additions.map(file => ({ path: file.path, mode: '100644', type: 'blob', content: file.content })),
             }, signal))
+            await this.recheck(receipt, signal)
             receipt.preparedCommit = decode(z.object({ sha: OID }), await this.github.request('POST', `repos/${preview.repository}/git/commits`, {
               message: this.message(receipt), tree: tree.sha, parents: [receipt.parent],
             }, signal)).sha
@@ -357,7 +425,7 @@ export class CreatorFork extends TypertRemoteService {
           const response = await this.github.request('POST', 'graphql', { query: MUTATION, variables: { input: {
             branch: { repositoryNameWithOwner: preview.repository, branchName: preview.branch },
             expectedHeadOid: preview.head, message: { headline: this.message(receipt) },
-            fileChanges: { additions: preview.files.map(file => ({ path: file.path, contents: Buffer.from(file.after).toString('base64') })) },
+            fileChanges: { additions: receipt.additions.map(file => ({ path: file.path, contents: Buffer.from(file.content).toString('base64') })) },
           } } }, signal)
           const rejection = z.object({ type: z.enum(['STALE_DATA', 'FORBIDDEN', 'NOT_FOUND', 'UNAUTHORIZED', 'UNPROCESSABLE']) })
           const rejected = z.object({
@@ -377,27 +445,21 @@ export class CreatorFork extends TypertRemoteService {
       }
       if (await this.head(preview.repository, preview.branch, signal) !== receipt.commit) refuse('conflict')
       await this.recheck(receipt, signal)
-      const query = `repos/${preview.repository}/pulls?state=all&base=${encodeURIComponent(preview.base)}&head=${encodeURIComponent(`${preview.account}:${preview.branch}`)}&per_page=100`
-      const pulls = decode(z.array(PULL), await this.get(query, signal))
+      const pulls = await this.pulls(receipt, signal)
       await this.recheck(receipt, signal)
-      const matches = (pull: z.infer<typeof PULL>): boolean => pull.head.repo.id === receipt.repositoryId
-        && pull.head.ref === preview.branch && pull.head.sha === receipt.commit
-        && pull.base.repo.id === receipt.repositoryId && pull.base.ref === preview.base
-      let pull = pulls.find(candidate => candidate.state === 'open' && matches(candidate)) ?? pulls.find(matches)
+      let pull = pulls.find(candidate => candidate.state === 'open' && this.matches(receipt, candidate))
+        ?? pulls.find(candidate => this.matches(receipt, candidate))
       if (pull === undefined) {
         if (pulls.length >= 100) refuse('too-large')
         pull = decode(PULL, await this.github.request('POST', `repos/${preview.repository}/pulls`, {
           title: 'Save Creator source', head: `${preview.account}:${preview.branch}`, head_repo: preview.repository.split('/')[1], base: preview.base,
           body: 'Reviewed Creator source export. Credentials and machine-local state are excluded.', maintainer_can_modify: false,
         }, signal))
-        if (!matches(pull)) refuse('invalid-response')
-        await this.recheck(receipt, signal)
+        if (!this.matches(receipt, pull)) refuse('invalid-response')
       }
+      await this.recheck(receipt, signal)
       const pullRequestUrl = `https://github.com/${preview.repository}/pull/${String(pull.number)}`
-      if (pull.state === 'closed') {
-        receipt.closed = true
-        return { ...failed(new Refusal('pull-request-closed'), 'committed'), pullRequestUrl }
-      }
+      if (pull.state === 'closed') return this.closed(receipt, pull)
       receipt.saved = { status: 'saved', repository: preview.repository, branch: preview.branch, commit: receipt.commit,
         pullRequestUrl }
       return receipt.saved
@@ -414,8 +476,9 @@ export class CreatorFork extends TypertRemoteService {
     if (user.id !== receipt.accountId) refuse('mixed-account')
     if (repo.id !== receipt.repositoryId || upstream.id !== receipt.upstreamId || networkId(upstream) !== receipt.sourceId) refuse('wrong-fork')
     if (repo.default_branch !== receipt.preview.base) refuse('conflict')
-    if (receipt.commit === null && receipt.preview.head === null
-      && await this.defaultHead(receipt.preview.repository, receipt.preview.base, signal) !== receipt.parent) refuse('conflict')
+    if (await this.defaultHead(receipt.preview.repository, receipt.preview.base, signal) !== receipt.baseCommit) refuse('conflict')
+    if (await this.head(receipt.preview.repository, receipt.preview.branch, signal)
+      !== (receipt.commit ?? receipt.preview.head)) refuse('conflict')
   }
   private message(receipt: Receipt): string { return `Save Creator source (${receipt.preview.id})` }
 }

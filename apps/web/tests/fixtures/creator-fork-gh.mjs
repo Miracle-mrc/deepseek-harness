@@ -16,14 +16,13 @@ const body = args.includes('--input') ? JSON.parse(readFileSync(0, 'utf8')) : un
 appendFileSync(join(root, 'calls.jsonl'), JSON.stringify({ method, path, body }) + '\n')
 
 const BASE = 'a'.repeat(40)
-const BASE_TREE = 'b'.repeat(40)
 const COMMIT = 'c'.repeat(40)
 const COMMIT_TREE = 'd'.repeat(40)
 const REPOSITORY = 'alice/harness'
 const UPSTREAM = 'deepseek-ai/deepseek-harness'
-const SOURCE = 'creator-exports/saved/bundles/0/index.ts'
 
 function save() { writeFileSync(statePath, JSON.stringify(state)) }
+function refresh() { Object.assign(state, JSON.parse(readFileSync(statePath, 'utf8'))) }
 function blobId(text) {
   const bytes = Buffer.from(text)
   return createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')
@@ -39,6 +38,30 @@ function pull() {
 function repository() {
   return { id: 2, full_name: REPOSITORY, owner: { id: 7, login: 'alice' }, default_branch: 'main',
     fork: true, permissions: { push: true }, source: { id: 1, full_name: UPSTREAM }, parent: { id: 1, full_name: UPSTREAM } }
+}
+function mergeFiles(parent, additions) {
+  const files = new Map(parent.map(file => [file.path, file]))
+  for (const file of additions) files.set(file.path, file)
+  return [...files.values()]
+}
+function retain(objects, sha, value) {
+  if (objects[sha] !== undefined && JSON.stringify(objects[sha]) !== JSON.stringify(value)) return false
+  objects[sha] = value
+  return true
+}
+function ancestors(head) {
+  const pending = [head]
+  const seen = new Set()
+  for (const sha of pending) {
+    if (seen.has(sha)) continue
+    seen.add(sha)
+    pending.push(...(state.commits[sha]?.parents ?? []))
+  }
+  return seen
+}
+async function releaseCommit() {
+  while (existsSync(join(root, 'hold-commit'))) await new Promise(resolve => setTimeout(resolve, 10))
+  refresh()
 }
 
 async function main() {
@@ -57,36 +80,79 @@ async function main() {
   if (method === 'GET' && path === `repos/${REPOSITORY}`) return reply(200, repository())
   if (method === 'GET' && path === `repos/${REPOSITORY}/branches/main`) return reply(200, { commit: { sha: BASE } })
   if (method === 'GET' && path === `repos/${REPOSITORY}/git/ref/heads/${encodeURIComponent(state.branch)}`) {
+    if (state.head === null) return reply(404, {})
     return reply(200, { object: { type: 'commit', sha: state.head } })
+  }
+  if (method === 'GET' && path.startsWith(`repos/${REPOSITORY}/compare/`)) {
+    const [base, head] = path.slice(`repos/${REPOSITORY}/compare/`.length).split('?')[0].split('...')
+    if (state.commits[base] === undefined || state.commits[head] === undefined) return reply(404, {})
+    const baseAncestors = ancestors(base)
+    const headAncestors = ancestors(head)
+    const mergeBase = [...headAncestors].find(sha => baseAncestors.has(sha))
+    if (mergeBase === undefined) return reply(404, {})
+    const status = base === head ? 'identical' : headAncestors.has(base) ? 'ahead' : baseAncestors.has(head) ? 'behind' : 'diverged'
+    return reply(200, { status, base_commit: { sha: base }, merge_base_commit: { sha: mergeBase } })
   }
   if (method === 'GET' && path.startsWith(`repos/${REPOSITORY}/git/commits/`)) {
     const sha = path.split('/').at(-1)
-    return reply(200, { sha, tree: { sha: sha === BASE ? BASE_TREE : COMMIT_TREE },
-      message: sha === BASE ? 'Existing work' : state.message, parents: sha === BASE ? [] : [{ sha: BASE }] })
+    const commit = state.commits[sha]
+    if (commit === undefined) return reply(404, {})
+    return reply(200, { sha, tree: { sha: commit.tree }, message: commit.message,
+      parents: commit.parents.map(parent => ({ sha: parent })) })
   }
   if (method === 'GET' && path.startsWith(`repos/${REPOSITORY}/git/trees/`)) {
-    const files = path.includes(BASE_TREE) ? [{ path: SOURCE, content: state.before }] : state.files
+    const sha = path.split('/').at(-1).split('?')[0]
+    const files = state.trees[sha]
+    if (files === undefined) return reply(404, {})
     return reply(200, { truncated: false, tree: files.map(file => ({
       path: file.path, mode: '100644', type: 'blob', sha: blobId(file.content),
     })) })
   }
   if (method === 'GET' && path.startsWith(`repos/${REPOSITORY}/git/blobs/`)) {
     const sha = path.split('/').at(-1)
-    const file = [{ content: state.before }, ...state.files].find(item => blobId(item.content) === sha)
+    const file = Object.values(state.trees).flat().find(item => blobId(item.content) === sha)
     if (file === undefined) return reply(404, {})
     const bytes = Buffer.from(file.content)
     return reply(200, { encoding: 'base64', size: bytes.length, content: bytes.toString('base64') })
+  }
+  if (method === 'POST' && path === `repos/${REPOSITORY}/git/trees`) {
+    await releaseCommit()
+    const parent = state.trees[body.base_tree]
+    if (parent === undefined || !Array.isArray(body.tree)
+      || body.tree.some(file => file.mode !== '100644' || file.type !== 'blob' || typeof file.content !== 'string')) return reply(422, {})
+    const files = mergeFiles(parent, body.tree.map(file => ({ path: file.path, content: file.content })))
+    if (!retain(state.trees, COMMIT_TREE, files)) return reply(409, {})
+    save()
+    return reply(201, { sha: COMMIT_TREE })
+  }
+  if (method === 'POST' && path === `repos/${REPOSITORY}/git/commits`) {
+    if (state.trees[body.tree] === undefined || body.parents?.length !== 1
+      || state.commits[body.parents[0]] === undefined || typeof body.message !== 'string') return reply(422, {})
+    if (!retain(state.commits, COMMIT, { tree: body.tree, parents: body.parents, message: body.message })) return reply(409, {})
+    save()
+    return reply(201, { sha: COMMIT })
+  }
+  if (method === 'POST' && path === `repos/${REPOSITORY}/git/refs`) {
+    await releaseCommit()
+    if (state.head !== null) return reply(409, {})
+    if (body.ref !== `refs/heads/${state.branch}` || state.commits[body.sha] === undefined) return reply(422, {})
+    state.head = body.sha
+    save()
+    return reply(201, { object: { type: 'commit', sha: state.head } })
   }
   if (method === 'POST' && path === 'graphql') {
     const input = body.variables.input
     if (input.branch?.repositoryNameWithOwner !== REPOSITORY || input.branch?.branchName !== state.branch
       || Object.keys(input.branch).sort().join(',') !== 'branchName,repositoryNameWithOwner'
       || Object.hasOwn(input, 'force') || input.fileChanges.deletions !== undefined) return reply(422, {})
-    if (input.expectedHeadOid !== state.head) return reply(409, {})
-    while (existsSync(join(root, 'hold-commit'))) await new Promise(resolve => setTimeout(resolve, 10))
+    await releaseCommit()
+    if (state.head === null || input.expectedHeadOid !== state.head) return reply(409, {})
+    const parent = state.head
+    const parentCommit = state.commits[parent]
+    const additions = input.fileChanges.additions.map(file => ({ path: file.path, content: Buffer.from(file.contents, 'base64').toString('utf8') }))
+    if (!retain(state.trees, COMMIT_TREE, mergeFiles(state.trees[parentCommit.tree], additions))
+      || !retain(state.commits, COMMIT, { tree: COMMIT_TREE, message: input.message.headline, parents: [parent] })) return reply(409, {})
     state.head = COMMIT
-    state.message = input.message.headline
-    state.files = input.fileChanges.additions.map(file => ({ path: file.path, content: Buffer.from(file.contents, 'base64').toString('utf8') }))
     save()
     return reply(200, { data: { createCommitOnBranch: { commit: { oid: COMMIT } } } })
   }

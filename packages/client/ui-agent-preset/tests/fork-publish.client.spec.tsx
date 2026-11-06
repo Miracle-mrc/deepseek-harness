@@ -49,6 +49,16 @@ const RECEIPT_LOCALES = [
     unknownOutcome: '先前的写入可能已到达 GitHub，其结果仍未知',
     committedOutcome: '先前已保存提交，此 Host 无法确认拉取请求' },
 ] as const
+const PR_REVIEW_LOCALES = [
+  { locale: 'en', copy: en, branchContext: 'Current branch before this save', branchUpdate: 'Branch update',
+    confirm: 'Confirm and open PR',
+    context: 'Before shows the reviewed default branch; After shows the proposed pull request. Additional branch text shows different content this save will replace.',
+    policy: 'GitHub may require signed or verified commits or other branch protection checks. Inspect the branch rules and pull request on GitHub before making further writes.' },
+  { locale: 'zh', copy: zh, branchContext: '本次保存前的当前分支', branchUpdate: '分支更新',
+    confirm: '确认并打开 PR',
+    context: '改动前显示已审查的默认分支，改动后显示拟议拉取请求的内容。额外的分支文本显示此次保存将替换的不同内容',
+    policy: 'GitHub 可能要求签名或已验证的提交，或其他分支保护检查。请先在 GitHub 检查分支规则和拉取请求，再进行后续写入' },
+] as const
 
 function overlay(copy = en) {
   const repositories = vi.fn(async (): Promise<ForkRepositoriesResult> => REPOSITORIES)
@@ -111,6 +121,153 @@ function reviewAllFiles(view: ReturnType<typeof overlay>, copy = en): void {
 }
 
 describe('direct fork publication dialog', () => {
+  it.each(PR_REVIEW_LOCALES)('requires every full-PR union path and resets that review for a new receipt in $locale', async ({ copy, context, branchUpdate }) => {
+    const view = overlay(copy)
+    const alreadyOnBranch = { ...PREVIEW.files[0]!, before: '// default branch\n', after: '// current export\n' }
+    const restoration = { path: 'customizations/bundles/0/restored.ts', before: '// reviewed default\n',
+      after: '// reviewed default\n', branchBefore: '// current branch differs\r\n' }
+    const preview = { ...PREVIEW, files: [alreadyOnBranch, restoration, PREVIEW.files[1]!] }
+    view.preview.mockResolvedValueOnce(preview)
+    await inspect(copy)
+    const dialog = screen.getByRole('dialog', { name: copy.forkPublishTitle })
+    const files = fileList(copy.forkPublishFileList)
+    const restorationOption = fileOptions(files).find(option => option.value === restoration.path)
+    expect(restorationOption?.textContent).toBe(`${branchUpdate} · restored.ts — ${restoration.path}`)
+    expect(within(dialog).getByText(context, { exact: true })).toBeTruthy()
+    expect(dialog.querySelectorAll('pre')).toHaveLength(0)
+    const progress = (count: number): string => makeTranslate(copy)('forkPublishReviewProgress', { count: String(count), total: '3' })
+    const acknowledgement = within(dialog).getByRole<HTMLInputElement>('checkbox', { name: copy.forkPublishReviewed })
+    const confirm = within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishConfirm })
+    expect(acknowledgement.disabled).toBe(true)
+    fireEvent.click(acknowledgement)
+    fireEvent.click(confirm)
+    expect(view.publish).not.toHaveBeenCalled()
+    for (const [index, file] of preview.files.entries()) {
+      fireEvent.change(files, { target: { value: file.path } })
+      expect(within(dialog).getByText(progress(index), { exact: true })).toBeTruthy()
+      expect(acknowledgement.disabled).toBe(true)
+      const fileReview = within(dialog).getByRole<HTMLInputElement>('checkbox', { name: copy.forkPublishFileReviewed })
+      expect(fileReview.checked).toBe(false)
+      fireEvent.click(fileReview)
+      expect(within(dialog).getByText(progress(index + 1), { exact: true })).toBeTruthy()
+      expect(acknowledgement.disabled).toBe(index + 1 !== preview.files.length)
+      expect(acknowledgement.checked).toBe(false)
+      expect(confirm.disabled).toBe(true)
+    }
+    fireEvent.click(acknowledgement)
+    expect(confirm.disabled).toBe(false)
+    const next = { ...preview, id: 'preview-union-reset' as ForkPreviewId }
+    view.preview.mockResolvedValueOnce(next)
+    fireEvent.click(within(dialog).getByRole('button', { name: copy.forkPublishInspect }))
+    const reset = await within(dialog).findByRole<HTMLInputElement>('checkbox', { name: copy.forkPublishReviewed })
+    expect(reset.disabled).toBe(true)
+    expect(reset.checked).toBe(false)
+    expect(within(dialog).getByText(progress(0), { exact: true })).toBeTruthy()
+    expect(fileList(copy.forkPublishFileList).value).toBe('')
+    expect(dialog.querySelectorAll('pre')).toHaveLength(0)
+    expect(view.controller.store.getSnapshot().preview?.id).toBe(next.id)
+    expect(view.publish).not.toHaveBeenCalled()
+  })
+
+  it.each(PR_REVIEW_LOCALES.flatMap(locale => ([
+    { kind: 'omitted', branchBefore: undefined }, { kind: 'absent', branchBefore: null },
+    { kind: 'empty', branchBefore: '' }, { kind: 'BOM and CRLF', branchBefore: '\uFEFFbranch 😀\r\n\told\r\n' },
+  ] as const).map(testCase => ({ ...locale, ...testCase }))))('mounts $kind branch context only for the selected file in $locale', async ({ copy, branchContext, branchBefore }) => {
+    const view = overlay(copy)
+    const file = { ...PREVIEW.files[0]!, before: '// reviewed default\n', after: '// proposed export\n',
+      ...branchBefore === undefined ? {} : { branchBefore } }
+    const preview = { ...PREVIEW, files: [file, PREVIEW.files[1]!] }
+    view.preview.mockResolvedValueOnce(preview)
+    await inspect(copy)
+    const dialog = screen.getByRole('dialog', { name: copy.forkPublishTitle })
+    const files = fileList(copy.forkPublishFileList)
+    expect(within(dialog).queryByRole('region', { name: branchContext })).toBeNull()
+    expect(dialog.querySelectorAll('pre')).toHaveLength(0)
+    fireEvent.change(files, { target: { value: file.path } })
+    expect(within(dialog).getByRole('region', { name: copy.forkPublishBefore }).querySelector('pre')?.textContent).toBe(file.before)
+    expect(within(dialog).getByRole('region', { name: copy.forkPublishAfter }).querySelector('pre')?.textContent).toBe(file.after)
+    if (branchBefore === undefined) {
+      expect(within(dialog).queryByRole('region', { name: branchContext })).toBeNull()
+      expect(dialog.querySelectorAll('pre')).toHaveLength(2)
+    } else {
+      const branch = within(dialog).getByRole('region', { name: branchContext })
+      if (branchBefore === null) {
+        expect(within(branch).getByText(copy.forkPublishAbsent, { exact: true })).toBeTruthy()
+        expect(branch.querySelectorAll('pre')).toHaveLength(0)
+        expect(within(branch).queryByRole('button')).toBeNull()
+      } else {
+        expect(branch.querySelector('pre')?.textContent).toBe(branchBefore)
+        const disclosure = within(branch).getByRole('button')
+        expect(disclosure.getAttribute('aria-expanded')).toBe('false')
+        const controlledId = disclosure.getAttribute('aria-controls')
+        if (controlledId === null) throw new Error('Branch text disclosure requires a controlled element')
+        expect(document.getElementById(controlledId)?.textContent).toBe('')
+        fireEvent.click(disclosure)
+        expect(disclosure.getAttribute('aria-expanded')).toBe('true')
+        expect([...branch.querySelectorAll('pre')].map(element => element.textContent)).toEqual([branchBefore, JSON.stringify(branchBefore)])
+      }
+    }
+    expect(within(dialog).getByRole<HTMLInputElement>('checkbox', { name: copy.forkPublishReviewed }).disabled).toBe(true)
+    fireEvent.change(files, { target: { value: PREVIEW.files[1]!.path } })
+    expect(within(dialog).queryByRole('region', { name: branchContext })).toBeNull()
+    expect([...dialog.querySelectorAll('pre')].map(element => element.textContent)).toEqual([PREVIEW.files[1]!.after])
+    fireEvent.change(files, { target: { value: file.path } })
+    if (typeof branchBefore === 'string') {
+      const branch = within(dialog).getByRole('region', { name: branchContext })
+      expect(within(branch).getByRole('button').getAttribute('aria-expanded')).toBe('false')
+      expect([...branch.querySelectorAll('pre')].map(element => element.textContent)).toEqual([branchBefore])
+    }
+    expect(view.publish).not.toHaveBeenCalled()
+  })
+
+  it.each(PR_REVIEW_LOCALES)('uses a neutral publication action when a reviewed PR can reuse its existing commit in $locale', async ({ copy, confirm }) => {
+    const view = overlay(copy)
+    await inspect(copy)
+    reviewAllFiles(view, copy)
+    fireEvent.click(screen.getByRole('checkbox', { name: copy.forkPublishReviewed }))
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: confirm }).disabled).toBe(false)
+    expect(view.publish).not.toHaveBeenCalled()
+  })
+
+  it.each(PR_REVIEW_LOCALES.flatMap(locale => (['permission-denied', 'conflict'] as const).flatMap(code =>
+    (['none', 'unknown', 'committed'] as const).map(effect => ({ ...locale, code, effect })))))('shows possible branch-policy guidance for $code with $effect effects in $locale', async ({ copy, policy, code, effect }) => {
+    const view = overlay(copy)
+    await inspect(copy)
+    view.publish.mockResolvedValueOnce({ status: 'blocked', code, effect })
+    reviewAllFiles(view, copy)
+    fireEvent.click(screen.getByRole('checkbox', { name: copy.forkPublishReviewed }))
+    fireEvent.click(screen.getByRole('button', { name: copy.forkPublishConfirm }))
+    const dialog = screen.getByRole('dialog', { name: copy.forkPublishTitle })
+    const alert = await within(dialog).findByRole('alert')
+    const retained = effect !== 'none'
+    expect(within(dialog).getByRole<HTMLSelectElement>('combobox', { name: copy.forkRepository }).disabled).toBe(retained)
+    expect(within(dialog).getByRole<HTMLInputElement>('textbox', { name: copy.forkBranch }).disabled).toBe(retained)
+    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishConnect }).disabled).toBe(retained)
+    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishInspect }).disabled).toBe(retained)
+    if (retained) expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishRetry }).disabled).toBe(false)
+    else expect(within(dialog).queryByRole('button', { name: copy.forkPublishRetry })).toBeNull()
+    expect(within(dialog).queryByRole('checkbox')).toBeNull()
+    expect(within(alert).getByText(policy, { exact: true })).toBeTruthy()
+    expect(view.publish).toHaveBeenCalledExactlyOnceWith(PREVIEW.id, true)
+  })
+
+  it.each(PR_REVIEW_LOCALES.flatMap(locale => (['permission-denied', 'conflict'] as const).map(code => ({ ...locale, code }))))(
+    'shows possible branch-policy guidance for a $code preview refusal in $locale', async ({ copy, policy, code }) => {
+      const view = overlay(copy)
+      view.preview.mockResolvedValueOnce({ status: 'blocked', code, effect: 'none' })
+      fireEvent.click(screen.getByRole('button', { name: copy.forkPublishConnect }))
+      const repository = await screen.findByRole('combobox', { name: copy.forkRepository })
+      fireEvent.change(repository, { target: { value: PREVIEW.repository } })
+      fireEvent.change(screen.getByRole('textbox', { name: copy.forkBranch }), { target: { value: PREVIEW.branch } })
+      fireEvent.click(screen.getByRole('button', { name: copy.forkPublishInspect }))
+      const alert = await screen.findByRole('alert')
+      expect(within(alert).getByText(policy, { exact: true })).toBeTruthy()
+      expect(screen.getByRole<HTMLSelectElement>('combobox', { name: copy.forkRepository }).disabled).toBe(false)
+      expect(screen.getByRole<HTMLInputElement>('textbox', { name: copy.forkBranch }).disabled).toBe(false)
+      expect(screen.queryByRole('button', { name: copy.forkPublishRetry })).toBeNull()
+      expect(view.publish).not.toHaveBeenCalled()
+    })
+
   it.each([
     ['en', en, 'Files', 'I checked this file for private information', 'Next unreviewed file'],
     ['zh', zh, '文件', '我已检查此文件是否含有私人信息', '下一个未检查的文件'],
@@ -176,9 +333,9 @@ describe('direct fork publication dialog', () => {
 
   it.each(['main', 'master', 'develop'].flatMap(base => [
     { locale: 'en', copy: en, base, newBranch: `New branch from the selected fork’s ${base}`,
-      intro: 'Load your authorized forks, choose a branch, and review every file. Confirmation creates a commit and opens a pull request to the selected fork’s default branch.' },
+      intro: 'Load your authorized forks, choose a branch, and review every file. Confirmation creates or reuses the reviewed commit and pull request to the selected fork’s default branch.' },
     { locale: 'zh', copy: zh, base, newBranch: `从所选 Fork 的 ${base} 创建新分支`,
-      intro: '加载已授权的 Fork，选择分支并检查每个文件。确认后将创建提交，并向所选 Fork 的默认分支打开拉取请求' },
+      intro: '加载已授权的 Fork，选择分支并检查每个文件。确认后将创建或复用已审查的提交，以及指向所选 Fork 默认分支的拉取请求' },
   ]))('shows the actual fork base $base in $locale before confirming a new branch', async ({ copy, base, newBranch, intro }) => {
     const view = overlay(copy)
     view.repositories.mockResolvedValueOnce({ ...REPOSITORIES,

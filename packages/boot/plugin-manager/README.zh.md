@@ -87,15 +87,27 @@ pnpm 11 拦下依赖脚本时，失败的安装在 `pendingBuilds` 里报告 pro
 
 `ctx.creatorFork` 拥有用户触发的 `repositories`、`preview` 和显式确认的 `publish` 调用；Plugin Manager 挂载此独立服务时不联系 GitHub。身份验证由 Host 现有的 `gh` 凭据存储提供。子进程使用经过清理且非交互的环境；token、请求正文和 CLI 诊断信息不会进入远程结果或日志。Liveshare 查看者不能调用这些方法。
 
-发现仓库及每次发布都会核实不可变的账号和仓库 ID、fork 网络、写入权限与实际默认分支。预览在 Host 上保留精确的有界捕获结果，将写入映射到 `creator-exports/saved/` 下，并返回完整的 UTF-8 修改前后文本及不透明回执。已有目标链接、子模块、大小写别名、疑似秘密、二进制文本、变化的分支头和超大结果均被拒绝。新分支从所选 fork 的实际默认分支开始；已有分支保留其历史。预览将该默认分支记录为同一 fork 中的 PR 目标。检测到默认分支变化后会停止后续依赖操作。显示的目标路径之外的文件不会被修改。
+Host 在不透明回执中保留捕获的字节、所选 fork 身份、实际默认分支名称及提交 OID，以及目标分支头。写入限定在 `creator-exports/saved/` 下；PR（Pull Request）指向同一 fork 中已审查的默认分支。不安全路径、链接、子模块、大小写别名、疑似秘密、二进制文本、变化的分支头及超大结果均被拒绝。
 
-保留子树 `creator-exports/saved/` 下的每个已有文件都必须包含在本次导出中。该目录下的其他文件会阻止预览；DSH 不会自动删除它们。请检查并移除目标位置的这些文件，然后重新预览。新分支也可能继承相同文件。
+已有目标必须等于已审查的默认提交，或是其后代。两个完整文件树的比较会拒绝捕获范围之外非目录条目的任何差异，包括新增或删除路径、类型或模式变化，以及对象 OID 不同。落后、分叉或无关的历史均被拒绝。已有提交仍保留在分支中；文件审查覆盖最终 PR 差异，不涵盖历史提交内容中的私人信息。
 
-发布要求 `confirmed: true` 和保留的回执。已有分支使用 `createCommitOnBranch.expectedHeadOid`；新引用仅在完整提交准备好后独占创建。并发调用共享同一操作。显式重试会核实操作标记、预期父提交和精确文件树，并复用匹配的已有 PR。PR 创建失败会保留已批准的提交；分支写入结果未知时会持续显示，直到核实。匹配的 PR 已关闭或合并时，返回 `pull-request-closed` 及其安全链接，不创建替代请求；请先查看原 PR，只有重新打开后才重试。`ForkFailure.effect` 表示分支或 PR 的影响：`none`、`unknown` 或 `committed`；已确认的准备过程可能留下不可达的 Git 对象。自动删除分支或强制回退可能抹除并发工作，因此绝不尝试。PR 不会被合并。
+预览包含最终 PR 文件改动与目标写入的全部路径并集。`before` 是已审查默认提交中的精确文本；`after` 是捕获的源码。仅当写入将替换与 `before` 不同的分支文本时，才提供可选的 `branchBefore`；`null` 表示该版本中不存在文件。这也包含恢复后与默认分支相同的写入。最终没有 PR 改动的保存会被拒绝。[管理记录](../../../docs/subsystems/boot.zh.md)定义响应字段；Client 要求逐一勾选每个显示的文件，再单独进行最终授权。
 
-默认分支冲突的影响为 `unknown` 或 `committed` 时，对话框会保留已批准回执，并锁定目标修改和新预览。请在 GitHub 上检查分支和 PR，然后恢复已审查的默认分支设置并重试该回执，或在 GitHub 上手动完成操作。重试不会自动更改 PR 目标。
+保留子树 `creator-exports/saved/` 下的每个已有文件都必须属于本次捕获；额外文件会阻止预览，且不会被自动删除。新分支可能从默认分支继承过期文件。仅在目标分支删除这些文件，仍会产生被禁止的捕获范围外非目录条目差异，因此这种状态可能需要手动通过 GitHub 发布。
 
-DSH 通过独立的 GitHub 请求读取默认分支元数据并写入引用。[`expectedHeadOid`](https://docs.github.com/en/graphql/reference/commits#createcommitonbranchinput) 仅原子核实分支头，不保护默认分支设置。若最后一次检查后并发修改了设置，已有目标分支变为默认分支后，写入仍可能成功。检测到变化时会保留 `committed` 或 `unknown` 影响，不回退或自动更改目标；两次检查之间的短暂变化可能无法被发现。
+发布要求 `confirmed: true` 和保留的回执。仅写入与目标分支不同的新增或更新内容。已有分支使用 `createCommitOnBranch.expectedHeadOid`；新分支从已审查的默认提交开始，其引用仅在完整提交准备好后独占创建。已有分支头已包含捕获结果时，确认会复用它，不创建空提交，并在处理 PR 前保留其回执。PR 不会被合并。
+
+每次准备对象、引用、提交或 PR 的修改请求前，服务都会重新核实账号与仓库 ID、fork 网络、访问权限、默认分支名称及 OID，以及目标分支头；处理 PR 后也会检查。并发调用共享同一操作。显式重试通过标记、唯一预期父提交及精确文件树核实响应丢失的新建提交，然后创建或复用匹配的 PR。提交已知时，即使默认分支头已推进，只读查询仍可报告其匹配的已关闭或已合并 PR；该查询不进行新写入，也不会创建替代 PR。
+
+`ForkFailure.effect` 以 `none`、`unknown` 或 `committed` 报告分支或 PR 的影响；已确认的准备过程可能留下不可达的 Git 对象。PR 失败保留已批准提交。重试失败不会抹去已知提交，回执丢失也不能证明先前没有写入。结果未知或仍待处理的已提交状态会锁定目标修改与新预览。先解决所示问题再重试同一回执，或在 GitHub 检查原分支及 PR 并手动完成。重试不会更改已批准目标；不会自动删除分支或强制回退。
+
+默认分支元数据检查与引用写入使用独立的 GitHub 请求。[`expectedHeadOid`](https://docs.github.com/en/graphql/reference/commits#createcommitonbranchinput) 仅原子核实分支头，不保护默认分支设置。所有者可以在最后一次检查后、提交写入前，将已有目标设为默认分支。检测到变化时保留 `committed` 或 `unknown` 影响；两次检查之间的短暂变化可能无法被发现。新分支的独占创建不会覆盖已有默认分支。
+
+[创建 PR](https://docs.github.com/en/rest/pulls/pulls#create-a-pull-request)使用分支名称，不会以分支头 OID 为条件固定提交。因此，并发改动可能在创建期间改变 PR，检查通过后 PR 仍可变化。选择新分支、避免并发改动并在 GitHub 审查最终 PR，可以降低风险；这些措施不会使元数据检查与发布成为原子操作。
+
+此流程未向准备新分支所用的 [REST 提交接口](https://docs.github.com/en/rest/git/commits#create-a-commit)提供 PGP 签名，也不保证创建已签名或已验证的提交。[GraphQL 提交操作](https://docs.github.com/en/graphql/reference/commits#createcommitonbranch)仅在支持时自动签名。这两条路径不保证具有相同的签名行为。
+
+[仓库规则](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets)、签名要求、创建限制、状态检查、路径限制或 PR 策略都可能拒绝写入或阻止合并。固定且经过清理的错误不会包含 GitHub 诊断信息；请检查分支规则及 PR 以确定实际原因，必要时使用已批准的手动签名 Git 流程。不要为完成此流程而削弱保护、申请更广权限或绕过策略。在没有已授权的一次性目标仓库时，经过身份验证的发布及特定签名或规则集的兼容性仍未验证。
 
 Plugin Manager 的可选 `fork` 配置默认使用 `ghCommand: gh`、`upstreamRepository: deepseek-ai/deepseek-harness`、`timeoutMs: 20000`、`operationTimeoutMs: 120000`、`outputBytes: 16777216`、`previewLifetimeMs: 900000` 和 `maxPreviews: 4`。`upstreamRepository` 用于核实允许的 fork 网络；分支和 PR 的目标属于所选 fork。回执内存有界；未提交回执会过期，所有回执在卸载时丢弃。开始新预览时会移除已完成的回执，包括已确认关闭或合并的 PR；旧 ID 随后返回 `stale-preview`。正在进行的提交不会过期或被移除。结果未明的提交持续保留直到卸载，避免静默遗忘。用户流程和重启恢复见 [Creator 指南](../../../docs/user/develop/practice/dynamic-cordis.zh.md#save-to-my-fork)。
 

@@ -933,13 +933,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: '@Remote async preview(request: SourceExportRequest): Promise<ForkPreviewResult>',
-        description: 'Capture safe local source and exact destination text, without uploading source or changing GitHub. A new preview releases successful and known-closed receipts; their IDs then become stale. Saved files absent from the current capture are refused; publication never deletes them automatically.',
+        description: 'Capture the complete default-relative PR diff and additional destination writes, without uploading source or changing GitHub. A new preview releases successful and known-closed receipts; their IDs then become stale. Saved files absent from the current capture are refused; publication never deletes them automatically. Existing destinations must descend from the current default and preserve every non-captured leaf.',
         parameters: [{ name: 'request', description: 'Authorized fork slug and a non-default branch; new branches start from the fork\'s reviewed default branch.' }],
-        returns: 'An opaque, expiring receipt and complete UTF-8 before/after text, or a refusal with no source content.',
+        returns: 'An expiring receipt for complete PR changes and destination writes, with exact UTF-8 text, or a refusal without source.',
       },
       {
         signature: '@Remote async publish(id: ForkPreviewId, confirmed: boolean): Promise<ForkPublishResult>',
-        description: 'Commit only the retained preview after explicit confirmation, then create or reuse its open PR to the fork\'s reviewed default branch. A detected default-branch change refuses the receipt without changing its approved destination or hiding earlier remote effects. Repeated calls share an in-flight operation and reconcile lost responses. A closed PR is reported without recreating it. An in-flight publication retains its receipt past the preview\'s expiry. A failed PR retains the approved commit; unknown writes remain unknown until reconciliation, with no forced rollback or branch deletion.',
+        description: 'Apply only retained destination writes after explicit confirmation, reusing an existing commit when no write is needed. Create or reuse its PR to the reviewed default; detected default-name, base-commit or target-head changes stop new writes. Repeated calls share an in-flight operation and reconcile lost responses. A closed PR is reported without recreating it. An in-flight publication retains its receipt past the preview\'s expiry. A failed PR retains the approved commit; unknown writes remain unknown until reconciliation, with no forced rollback or branch deletion.',
         parameters: [{ name: 'id', description: 'Receipt from preview; source text and destinations cannot be replaced by this call.' }, { name: 'confirmed', description: 'The person\'s explicit acknowledgement of the displayed diff and destinations.' }],
         returns: 'Confirmed commit and PR, or a sanitized refusal stating absent, unknown, or committed remote effects.',
       },
@@ -6518,7 +6518,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ForkFileDiff',
-    declaration: 'export interface ForkFileDiff {\n    readonly path: string;\n    readonly before: string | null;\n    readonly after: string;\n}',
+    declaration: 'export interface ForkFileDiff {\n    readonly path: string;\n    readonly before: string | null;\n    readonly after: string;\n    readonly branchBefore?: string | null;\n}',
   },
   {
     name: 'ForkIssueCode',

@@ -129,6 +129,43 @@ it.each([
   expect(processHooks.run).toHaveBeenCalledTimes(1)
 })
 
+it.each(([
+  { status: 403, code: 'permission-denied' },
+  { status: 422, code: 'conflict' },
+  { status: 409, code: 'conflict' },
+] as const).flatMap(result => [
+  { policy: 'GH013', message: 'GH013: Repository rule violations found for refs/heads/creator/test.' },
+  { policy: 'signed commits', message: 'Commits must have verified signatures.' },
+  { policy: 'branch protection', message: 'Protected branch update failed for refs/heads/creator/test.' },
+].map(policy => ({ ...result, ...policy }))))(
+  'keeps a fixed HTTP $status failure for $policy without exposing its diagnostics or retrying the mutation',
+  async ({ status, code, message }) => {
+    const serverBody = {
+      message,
+      errors: [{ resource: 'Reference', code: 'custom', message: 'sensitive-policy-rule' }],
+      details: { token: 'sensitive-policy-token', signature: 'sensitive-policy-signature' },
+    }
+    processHooks.run.mockResolvedValueOnce({
+      ...response(JSON.stringify(serverBody), status),
+      stderr: `${message}\nAuthorization: Bearer sensitive-policy-stderr`,
+    }).mockResolvedValueOnce(response('{"sha":"unexpected-retry"}', 201))
+
+    const error = await failure(new ForkGithub(config).request('POST', 'repos/person/fork/git/refs', {
+      ref: 'refs/heads/creator/test', sha: 'a'.repeat(40),
+    }, signal()), code)
+
+    expect(error.message).toBe(`GitHub request failed (${code})`)
+    const exposed = `${String(error)} ${JSON.stringify(error)} ${error.stack ?? ''}`
+    expect(exposed).not.toContain(message)
+    expect(exposed).not.toContain('sensitive-policy')
+    expect(exposed).not.toContain('GH013')
+    expect(processHooks.run).toHaveBeenCalledTimes(1)
+    expect(invocation().args).toEqual([
+      'api', '--hostname', 'github.com', '--method', 'POST', 'repos/person/fork/git/refs', '--include', '--input', '-',
+    ])
+  },
+)
+
 it.each([
   '{"id":7}', 'HTTP/2.0 200 OK\r\n\r\n{', 'HTTP/2.0 200 OK\r\nHeader: missing body delimiter',
   'HTTP/2.0 999 Unknown\r\n\r\n{}', 'sensitive-value\nHTTP/2.0 401 response\n\n{}',

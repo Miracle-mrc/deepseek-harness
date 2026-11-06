@@ -38,14 +38,17 @@ export type ForkRepositoriesResult = ForkFailure | {
   readonly repositories: readonly ForkRepository[]
 }
 
-/** Exact UTF-8 before/after text at one complete repository destination. */
+/** Exact UTF-8 PR comparison and any additional destination text that an approved write replaces. */
 export interface ForkFileDiff {
   readonly path: string
+  /** Text at the reviewed default commit; null means the file is absent there. */
   readonly before: string | null
   readonly after: string
+  /** Additional pre-write branch text, or null for absence; omitted when no additional write context needs review. */
+  readonly branchBefore?: string | null
 }
 
-/** Immutable proposed writes in the selected fork; an absent head starts from its reviewed default branch. */
+/** Immutable union of proposed PR changes and destination writes; an absent head starts from the reviewed default. */
 export type ForkPreviewResult = ForkFailure | {
   readonly status: 'ready'
   readonly id: ForkPreviewId
@@ -54,7 +57,7 @@ export type ForkPreviewResult = ForkFailure | {
   readonly branch: string
   /** Repository used only to verify fork eligibility; the PR targets repository. */
   readonly upstream: string
-  /** Selected fork's default branch at preview time; publication refuses detected later name changes. */
+  /** Reviewed default-branch name; publication also retains and rechecks its immutable commit on the Host. */
   readonly base: string
   readonly head: ForkCommitId | null
   readonly files: readonly ForkFileDiff[]

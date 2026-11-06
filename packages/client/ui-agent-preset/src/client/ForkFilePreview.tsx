@@ -7,12 +7,13 @@ import css from './ForkPublish.module.css'
 
 type Translate = PropsLocale<'settings.agentPreset'>['t']
 type PreviewFile = ReadyForkPreview['files'][number]
-type TextSide = 'forkPublishBefore' | 'forkPublishAfter'
+type TextSide = 'forkPublishBefore' | 'forkPublishAfter' | 'forkPublishBranchBefore'
 
 /** Fixed navigation density; source content is never included in an option. */
 const FILES_PER_PAGE = 50
 
-function statusKey(file: PreviewFile): 'forkPublishFileCreated' | 'forkPublishFileModified' {
+function statusKey(file: PreviewFile): 'forkPublishFileCreated' | 'forkPublishFileModified' | 'forkPublishFileBranchUpdate' {
+  if (file.before === file.after) return 'forkPublishFileBranchUpdate'
   return file.before === null ? 'forkPublishFileCreated' : 'forkPublishFileModified'
 }
 
@@ -52,6 +53,11 @@ const FileDetails = memo(function FileDetails({ file, t }: { readonly file: Prev
       {file.before === null ? <p className={css.hint}>{t('forkPublishAbsent')}</p>
         : <ExactText value={file.before} side="forkPublishBefore" t={t} />}
     </section>
+    {file.branchBefore === undefined ? null : <section aria-label={t('forkPublishBranchBefore')}>
+      <h5>{t('forkPublishBranchBefore')}</h5>
+      {file.branchBefore === null ? <p className={css.hint}>{t('forkPublishAbsent')}</p>
+        : <ExactText value={file.branchBefore} side="forkPublishBranchBefore" t={t} />}
+    </section>}
     <section aria-label={t('forkPublishAfter')}>
       <h5>{t('forkPublishAfter')}</h5>
       <ExactText value={file.after} side="forkPublishAfter" t={t} />
@@ -102,6 +108,7 @@ export function ForkFilePreview({ preview, selectedPath, reviewedFiles, canRevie
     aria-describedby={canReview ? `${id}-review-hint` : undefined}>
     <h3 id={`${id}-heading`}>{t('forkPublishFiles', { count: String(preview.files.length) })}</h3>
     <p className={css.hint}>{t('forkPublishExactText')}</p>
+    <p className={css.hint}>{t('forkPublishPrContext')}</p>
     {canReview ? <>
       <p className={css.hint} role="status">{t('forkPublishReviewProgress', {
         count: String(reviewed.size), total: String(preview.files.length),

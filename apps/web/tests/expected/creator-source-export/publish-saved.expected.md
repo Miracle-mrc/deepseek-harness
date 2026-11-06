@@ -1,7 +1,7 @@
 - dialog "Save to my GitHub fork":
   - heading "Save to my GitHub fork" [level=2]
   - button "Close"
-  - paragraph: Load your authorized forks, choose a branch, and review every file. Confirmation creates a commit and opens a pull request to the selected fork’s default branch.
+  - paragraph: Load your authorized forks, choose a branch, and review every file. Confirmation creates or reuses the reviewed commit and pull request to the selected fork’s default branch.
   - text: Fork repository
   - combobox "Fork repository":
     - option "Choose an authorized fork"
@@ -22,11 +22,12 @@
   - term: Pull request destination
   - definition: alice/harness:main
   - term: Destination head
-  - definition: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  - paragraph: This branch keeps earlier commits, which may also appear in the pull request. Choose a new branch to include only this save.
-  - region "Files to change (11)":
-    - heading "Files to change (11)" [level=3]
+  - definition: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  - paragraph: Earlier commits remain outside this file review, and an existing branch could become the default during a save. For stricter protection, choose a new branch and avoid concurrent changes.
+  - region "Files to review (11)":
+    - heading "Files to review (11)" [level=3]
     - paragraph: Only the selected file’s exact text is shown. Open escaped text to inspect whitespace and line endings.
+    - paragraph: Before shows the reviewed default branch; After shows the proposed pull request. Additional branch text shows different content this save will replace.
     - text: Search files
     - searchbox "Search files"
     - text: "Matching files: 11 1–11 of 11 Files"
@@ -55,6 +56,13 @@
         - text: export const greeting = "Created for my fork"
         - 'button "Before: exact text with escaped line endings" [expanded]': Exact text with escaped line endings
         - text: "\"export const greeting = \\\"Created for my fork\\\"\""
+      - region "Current branch before this save":
+        - heading "Current branch before this save" [level=5]
+        - paragraph: 51 UTF-8 bytes · 1 LF characters
+        - paragraph: "Lines: 2"
+        - text: export const greeting = "Earlier branch work";
+        - 'button "Current branch before this save: exact text with escaped line endings" [expanded]': Exact text with escaped line endings
+        - text: "\" export const greeting = \\\"Earlier branch work\\\";\\r\\n\""
       - region "After":
         - heading "After" [level=5]
         - paragraph: 46 UTF-8 bytes · 1 LF characters
@@ -62,7 +70,7 @@
         - text: export const greeting = "Created for my fork"
         - 'button "After: exact text with escaped line endings" [expanded]': Exact text with escaped line endings
         - text: "\"export const greeting = \\\"Created for my fork\\\"\\n\""
-  - status: Saved commit cccccccccccccccccccccccccccccccccccccccc.
+  - status: Pull request ready for commit cccccccccccccccccccccccccccccccccccccccc.
   - link "Open pull request":
     - /url: https://github.com/alice/harness/pull/17
   - button "Close"

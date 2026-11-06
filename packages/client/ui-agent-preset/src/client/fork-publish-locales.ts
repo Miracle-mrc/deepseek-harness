@@ -2,15 +2,19 @@
 
 /** English publication copy, also the explicit fallback for other supported locales. */
 export const forkPublishEn = {
+  forkPublishPrContext: 'Before shows the reviewed default branch; After shows the proposed pull request. Additional branch text shows different content this save will replace.',
+  forkPublishBranchBefore: 'Current branch before this save',
+  forkPublishFileBranchUpdate: 'Branch update',
+  forkPublishPolicyHint: 'GitHub may require signed or verified commits or other branch protection checks. Inspect the branch rules and pull request on GitHub before making further writes.',
   forkPublishLaunch: 'Save directly to GitHub',
   forkPublishTitle: 'Save to my GitHub fork',
-  forkPublishIntro: 'Load your authorized forks, choose a branch, and review every file. Confirmation creates a commit and opens a pull request to the selected fork’s default branch.',
+  forkPublishIntro: 'Load your authorized forks, choose a branch, and review every file. Confirmation creates or reuses the reviewed commit and pull request to the selected fork’s default branch.',
   forkPublishConnect: 'Load my GitHub forks',
   forkPublishChooseRepository: 'Choose an authorized fork',
   forkPublishEmpty: 'No writable forks were found for this GitHub account.',
   forkPublishBranchHint: 'Choose a branch other than the fork’s default branch, main, or master.',
   forkPublishInspect: 'Preview changes',
-  forkPublishConfirm: 'Confirm commit and open PR',
+  forkPublishConfirm: 'Confirm and open PR',
   forkPublishRetry: 'Retry this save',
   forkPublishReviewed: 'I checked every file for private information and authorize this commit and pull request',
   forkPublishAccount: 'GitHub account',
@@ -18,8 +22,8 @@ export const forkPublishEn = {
   forkPublishBase: 'Pull request destination',
   forkPublishHead: 'Destination head',
   forkPublishNewBranch: 'New branch from the selected fork’s {base}',
-  forkPublishBranchHistory: 'This branch keeps earlier commits, which may also appear in the pull request. Choose a new branch to include only this save.',
-  forkPublishFiles: 'Files to change ({count})',
+  forkPublishBranchHistory: 'Earlier commits remain outside this file review, and an existing branch could become the default during a save. For stricter protection, choose a new branch and avoid concurrent changes.',
+  forkPublishFiles: 'Files to review ({count})',
   forkPublishFileList: 'Files',
   forkPublishSearchFiles: 'Search files',
   forkPublishChooseFile: 'Choose a file',
@@ -41,7 +45,7 @@ export const forkPublishEn = {
   forkPublishNextUnreviewed: 'Next unreviewed file',
   forkPublishBefore: 'Before',
   forkPublishAfter: 'After',
-  forkPublishAbsent: 'This file does not exist at the destination.',
+  forkPublishAbsent: 'This file does not exist in this version.',
   forkPublishTextMetrics: '{bytes} UTF-8 bytes · {newlines} LF characters',
   forkPublishExactText: 'Only the selected file’s exact text is shown. Open escaped text to inspect whitespace and line endings.',
   forkPublishEscapedText: 'Exact text with escaped line endings',
@@ -52,10 +56,10 @@ export const forkPublishEn = {
   forkPublishNoEffects: 'The destination branch and pull request were not changed. Correct the problem and preview again.',
   forkPublishUnknown: 'The save may have reached GitHub. Retry this same save to check its outcome before starting another.',
   forkPublishCommitted: 'The commit was saved, but the pull request could not be confirmed. Resolve the reported problem before retrying this same save.',
-  forkPublishSaved: 'Saved commit {commit}.',
+  forkPublishSaved: 'Pull request ready for commit {commit}.',
   forkPublishOpenPr: 'Open pull request',
   forkPublishOpenFailed: 'The pull request is ready. Open it using the link below.',
-  forkPublishSavedToast: 'Saved your files and created a pull request.',
+  forkPublishSavedToast: 'Your reviewed pull request is ready.',
   forkPublishFailedToast: 'The save needs attention. Reopen the GitHub save dialog to check its status.',
   forkPublishAuthRequired: 'Sign in to GitHub on this host, then retry this action.',
   forkPublishPermissionDenied: 'This GitHub account cannot write to the selected fork. Choose an authorized fork.',
@@ -71,8 +75,8 @@ export const forkPublishEn = {
   forkPublishLostReceipt: 'The approved save receipt is no longer available on this host. Inspect the original account, fork, branch and pull request on GitHub and finish manually before starting another save.',
   forkPublishLostUnknown: 'An earlier write may have reached GitHub; its outcome is still unknown.',
   forkPublishLostCommitted: 'A commit was saved earlier; this host cannot confirm the pull request.',
-  forkPublishNoChanges: 'The selected branch already contains these files.',
-  forkPublishUnsafeDestination: 'The destination has unsafe paths or saved files absent from this export. Review and remove those items in the destination, then preview again.',
+  forkPublishNoChanges: 'These files make no changes relative to the fork’s reviewed default branch.',
+  forkPublishUnsafeDestination: 'This branch has unreviewed changes, unsafe paths, stale export files, or incompatible history. Choose a new branch or resolve the differences on GitHub, then preview again.',
   forkPublishPullRequestClosed: 'Review the closed or merged pull request on GitHub; this save will not create another PR. Edit the destination or preview a new save, or retry this request after reopening it.',
   forkPublishTooLarge: 'This save exceeds a limit. Reduce the files or finish earlier saves, then retry. For a saved commit, review the fork in GitHub.',
 }
@@ -82,15 +86,19 @@ export type ForkPublishKey = keyof typeof forkPublishEn
 
 /** Simplified Chinese publication copy. */
 export const forkPublishZh: Record<ForkPublishKey, string> = {
+  forkPublishPrContext: '改动前显示已审查的默认分支，改动后显示拟议拉取请求的内容。额外的分支文本显示此次保存将替换的不同内容',
+  forkPublishBranchBefore: '本次保存前的当前分支',
+  forkPublishFileBranchUpdate: '分支更新',
+  forkPublishPolicyHint: 'GitHub 可能要求签名或已验证的提交，或其他分支保护检查。请先在 GitHub 检查分支规则和拉取请求，再进行后续写入',
   forkPublishLaunch: '直接保存到 GitHub',
   forkPublishTitle: '保存到我的 GitHub Fork',
-  forkPublishIntro: '加载已授权的 Fork，选择分支并检查每个文件。确认后将创建提交，并向所选 Fork 的默认分支打开拉取请求',
+  forkPublishIntro: '加载已授权的 Fork，选择分支并检查每个文件。确认后将创建或复用已审查的提交，以及指向所选 Fork 默认分支的拉取请求',
   forkPublishConnect: '加载我的 GitHub Fork',
   forkPublishChooseRepository: '选择已授权的 Fork',
   forkPublishEmpty: '未找到此 GitHub 账号可写入的 Fork',
   forkPublishBranchHint: '请选择 Fork 默认分支、main 和 master 以外的分支',
   forkPublishInspect: '预览改动',
-  forkPublishConfirm: '确认提交并打开 PR',
+  forkPublishConfirm: '确认并打开 PR',
   forkPublishRetry: '重试此次保存',
   forkPublishReviewed: '我已检查每个文件是否含有私人信息，并授权此次提交和拉取请求',
   forkPublishAccount: 'GitHub 账号',
@@ -98,8 +106,8 @@ export const forkPublishZh: Record<ForkPublishKey, string> = {
   forkPublishBase: '拉取请求目标',
   forkPublishHead: '目标提交',
   forkPublishNewBranch: '从所选 Fork 的 {base} 创建新分支',
-  forkPublishBranchHistory: '此分支保留先前的提交，拉取请求可能包含这些改动。若只需此次保存，请选择新分支',
-  forkPublishFiles: '待改动文件（{count}）',
+  forkPublishBranchHistory: '先前的提交不在此次文件审查范围内，现有分支也可能在保存期间变为默认分支。若要获得更严格的保护，请选择新分支并避免并发改动',
+  forkPublishFiles: '待审查文件（{count}）',
   forkPublishFileList: '文件',
   forkPublishSearchFiles: '搜索文件',
   forkPublishChooseFile: '选择文件',
@@ -121,7 +129,7 @@ export const forkPublishZh: Record<ForkPublishKey, string> = {
   forkPublishNextUnreviewed: '下一个未检查的文件',
   forkPublishBefore: '改动前',
   forkPublishAfter: '改动后',
-  forkPublishAbsent: '目标位置尚不存在此文件',
+  forkPublishAbsent: '此版本中不存在该文件',
   forkPublishTextMetrics: '{bytes} 个 UTF-8 字节 · {newlines} 个 LF 换行符',
   forkPublishExactText: '仅显示所选文件的精确文本。打开转义文本可检查空白和换行符',
   forkPublishEscapedText: '带有转义行尾的精确文本',
@@ -132,10 +140,10 @@ export const forkPublishZh: Record<ForkPublishKey, string> = {
   forkPublishNoEffects: '目标分支和拉取请求未被改动，请修正问题并重新预览',
   forkPublishUnknown: '保存可能已到达 GitHub，请重试此次保存以确认结果，再开始其他保存',
   forkPublishCommitted: '提交已保存，但无法确认拉取请求。请先处理所示问题，再重试此次保存',
-  forkPublishSaved: '已保存提交 {commit}',
+  forkPublishSaved: '提交 {commit} 的拉取请求已就绪',
   forkPublishOpenPr: '打开拉取请求',
   forkPublishOpenFailed: '拉取请求已就绪，请使用下方链接打开',
-  forkPublishSavedToast: '已保存文件并创建拉取请求',
+  forkPublishSavedToast: '已检查内容的拉取请求已就绪',
   forkPublishFailedToast: '保存需要处理，请重新打开 GitHub 保存对话框查看状态',
   forkPublishAuthRequired: '请在此 Host 上登录 GitHub，然后重试此操作',
   forkPublishPermissionDenied: '此 GitHub 账号无法写入所选 Fork，请选择已授权的 Fork',
@@ -151,14 +159,18 @@ export const forkPublishZh: Record<ForkPublishKey, string> = {
   forkPublishLostReceipt: '此 Host 上已无法使用已批准保存的回执。请在 GitHub 检查原账号、Fork、分支和拉取请求，并手动完成此次保存，再开始新的保存',
   forkPublishLostUnknown: '先前的写入可能已到达 GitHub，其结果仍未知',
   forkPublishLostCommitted: '先前已保存提交，此 Host 无法确认拉取请求',
-  forkPublishNoChanges: '所选分支已包含这些文件',
-  forkPublishUnsafeDestination: '目标位置有不安全的路径，或保存了本次导出未包含的文件。请检查并移除目标位置的这些内容，然后重新预览',
+  forkPublishNoChanges: '这些文件相对于已审查的 Fork 默认分支没有改动',
+  forkPublishUnsafeDestination: '此分支存在未审查的改动、不安全的路径、过期的导出文件或不兼容的历史。请选择新分支，或先在 GitHub 解决差异，再重新预览',
   forkPublishPullRequestClosed: '请在 GitHub 上查看已关闭或已合并的拉取请求，此次保存不会新建 PR。你可以修改目标或预览新的保存，也可以重新打开原请求后再重试',
   forkPublishTooLarge: '此次保存超出限制。请减少文件或完成先前的保存后重试；如果提交已保存，请在 GitHub 上查看此 fork',
 }
 
 /** Explicit English publication fallback for Japanese. */
 export const forkPublishJa: Record<ForkPublishKey, string> = {
+  forkPublishPrContext: forkPublishEn.forkPublishPrContext,
+  forkPublishBranchBefore: forkPublishEn.forkPublishBranchBefore,
+  forkPublishFileBranchUpdate: forkPublishEn.forkPublishFileBranchUpdate,
+  forkPublishPolicyHint: forkPublishEn.forkPublishPolicyHint,
   forkPublishLaunch: forkPublishEn.forkPublishLaunch,
   forkPublishTitle: forkPublishEn.forkPublishTitle,
   forkPublishIntro: forkPublishEn.forkPublishIntro,
@@ -238,6 +250,10 @@ export const forkPublishJa: Record<ForkPublishKey, string> = {
 /* jscpd:ignore-start */
 /** Explicit English publication fallback for Spanish. */
 export const forkPublishEs: Record<ForkPublishKey, string> = {
+  forkPublishPrContext: forkPublishEn.forkPublishPrContext,
+  forkPublishBranchBefore: forkPublishEn.forkPublishBranchBefore,
+  forkPublishFileBranchUpdate: forkPublishEn.forkPublishFileBranchUpdate,
+  forkPublishPolicyHint: forkPublishEn.forkPublishPolicyHint,
   forkPublishLaunch: forkPublishEn.forkPublishLaunch,
   forkPublishTitle: forkPublishEn.forkPublishTitle,
   forkPublishIntro: forkPublishEn.forkPublishIntro,
@@ -315,6 +331,10 @@ export const forkPublishEs: Record<ForkPublishKey, string> = {
 
 /** Explicit English publication fallback for French. */
 export const forkPublishFr: Record<ForkPublishKey, string> = {
+  forkPublishPrContext: forkPublishEn.forkPublishPrContext,
+  forkPublishBranchBefore: forkPublishEn.forkPublishBranchBefore,
+  forkPublishFileBranchUpdate: forkPublishEn.forkPublishFileBranchUpdate,
+  forkPublishPolicyHint: forkPublishEn.forkPublishPolicyHint,
   forkPublishLaunch: forkPublishEn.forkPublishLaunch,
   forkPublishTitle: forkPublishEn.forkPublishTitle,
   forkPublishIntro: forkPublishEn.forkPublishIntro,
@@ -392,6 +412,10 @@ export const forkPublishFr: Record<ForkPublishKey, string> = {
 
 /** Explicit English publication fallback for German. */
 export const forkPublishDe: Record<ForkPublishKey, string> = {
+  forkPublishPrContext: forkPublishEn.forkPublishPrContext,
+  forkPublishBranchBefore: forkPublishEn.forkPublishBranchBefore,
+  forkPublishFileBranchUpdate: forkPublishEn.forkPublishFileBranchUpdate,
+  forkPublishPolicyHint: forkPublishEn.forkPublishPolicyHint,
   forkPublishLaunch: forkPublishEn.forkPublishLaunch,
   forkPublishTitle: forkPublishEn.forkPublishTitle,
   forkPublishIntro: forkPublishEn.forkPublishIntro,
@@ -469,6 +493,10 @@ export const forkPublishDe: Record<ForkPublishKey, string> = {
 
 /** Explicit English publication fallback for Russian. */
 export const forkPublishRu: Record<ForkPublishKey, string> = {
+  forkPublishPrContext: forkPublishEn.forkPublishPrContext,
+  forkPublishBranchBefore: forkPublishEn.forkPublishBranchBefore,
+  forkPublishFileBranchUpdate: forkPublishEn.forkPublishFileBranchUpdate,
+  forkPublishPolicyHint: forkPublishEn.forkPublishPolicyHint,
   forkPublishLaunch: forkPublishEn.forkPublishLaunch,
   forkPublishTitle: forkPublishEn.forkPublishTitle,
   forkPublishIntro: forkPublishEn.forkPublishIntro,
@@ -546,6 +574,10 @@ export const forkPublishRu: Record<ForkPublishKey, string> = {
 
 /** Explicit English publication fallback for Portuguese. */
 export const forkPublishPt: Record<ForkPublishKey, string> = {
+  forkPublishPrContext: forkPublishEn.forkPublishPrContext,
+  forkPublishBranchBefore: forkPublishEn.forkPublishBranchBefore,
+  forkPublishFileBranchUpdate: forkPublishEn.forkPublishFileBranchUpdate,
+  forkPublishPolicyHint: forkPublishEn.forkPublishPolicyHint,
   forkPublishLaunch: forkPublishEn.forkPublishLaunch,
   forkPublishTitle: forkPublishEn.forkPublishTitle,
   forkPublishIntro: forkPublishEn.forkPublishIntro,

@@ -53,6 +53,9 @@ function operationIssueKey(failure: ForkFailure): AgentPresetSettingsKey {
   }
   return ISSUE_KEYS[failure.code]
 }
+function needsPolicyHint(failure: ForkFailure): boolean {
+  return failure.code === 'permission-denied' || failure.code === 'conflict'
+}
 
 /**
  * Render authorized choices and on-demand exact file review before explicit commit and PR confirmation.
@@ -130,9 +133,13 @@ export function ForkPublishOverlay({
         {preview === undefined || preview.head === null ? null : <p className={css.hint}>{t('forkPublishBranchHistory')}</p>}
         {busy ? <div className={css.loading} role="status"><StateDot state="ongoing" /><span>{t(progress)}</span></div> : null}
         {publishing ? <p className={css.hint}>{t('forkPublishClosingHint')}</p> : null}
-        {state.failure === null ? null : <p id={`${id}-failure`} className={css.error} role="alert">{t(ISSUE_KEYS[state.failure.code])}</p>}
+        {state.failure === null ? null : <section id={`${id}-failure`} className={css.failure} role="alert">
+          <p className={css.error}>{t(ISSUE_KEYS[state.failure.code])}</p>
+          {needsPolicyHint(state.failure) ? <p className={css.hint}>{t('forkPublishPolicyHint')}</p> : null}
+        </section>}
         {operation?.status !== 'blocked' ? null : <section className={css.failure} role="alert">
           <p>{t(operationIssueKey(operation.failure))}</p>
+          {needsPolicyHint(operation.failure) ? <p className={css.hint}>{t('forkPublishPolicyHint')}</p> : null}
           {operation.failure.code === 'pull-request-closed' ? null : <p>{t(lostReceipt
             ? operation.failure.effect === 'committed' ? 'forkPublishLostCommitted' : 'forkPublishLostUnknown'
             : operation.failure.effect === 'unknown' ? 'forkPublishUnknown'

@@ -15,19 +15,53 @@ const EXPECTED = fileURLToPath(new URL('./expected/creator-source-export', impor
 const MODE = webSnapshotMode()
 const ORIGINAL_SOURCE = 'export const greeting = "Created for my fork"\n'
 const PUBLISH_SOURCE_PATH = 'creator-exports/saved/bundles/0/index.ts'
+const PUBLISH_EXISTING_PATH = 'creator-exports/saved/bundles/0/cordis.patch.yml'
+const GITHUB_BASE = 'a'.repeat(40)
+const GITHUB_BASE_TREE = 'b'.repeat(40)
+const GITHUB_COMMIT = 'c'.repeat(40)
+const GITHUB_COMMIT_TREE = 'd'.repeat(40)
+const GITHUB_PREVIOUS = 'e'.repeat(40)
+const GITHUB_PREVIOUS_TREE = 'f'.repeat(40)
+const PRESERVED_FILE = { path: 'README.md', content: 'Public repository file preserved by the save.\n' }
+const BRANCH_BEFORE_SOURCE = '\uFEFFexport const greeting = "Earlier branch work";\r\n'
 const FILE_REVIEW_LABEL = 'I checked this file for private information'
 const PUBLICATION_REVIEW_LABEL = 'I checked every file for private information and authorize this commit and pull request'
 type PublicationFile = Extract<ForkPreviewResult, { status: 'ready' }>['files'][number]
 type GithubCall = { method: string; path: string; body?: Record<string, unknown> }
+type GithubFixtureFile = { path: string; content: string }
+type GithubFixtureCommit = { tree: string; message: string; parents: string[] }
+type GithubFixtureState = {
+  head: string | null
+  branch: string
+  commits: Record<string, GithubFixtureCommit>
+  trees: Record<string, GithubFixtureFile[]>
+  failPr: boolean
+  pr: boolean
+}
 
-async function preparePublicationGithub(transport: string, before: string, failPr: boolean): Promise<string> {
+async function preparePublicationGithub(
+  transport: string, before: string, failPr: boolean,
+  destination: { kind: 'base' | 'new' } | { kind: 'descendant'; branchBefore: string } = { kind: 'base' },
+): Promise<string> {
   const gh = join(transport, 'gh.mjs')
   await copyFile(fileURLToPath(new URL('./fixtures/creator-fork-gh.mjs', import.meta.url)), gh)
   await chmod(gh, 0o700)
   await writeFile(join(transport, 'calls.jsonl'), '')
-  await writeFile(join(transport, 'state.json'), JSON.stringify({
-    head: 'a'.repeat(40), branch: 'creator/saved', before, files: [], failPr, pr: false,
-  }))
+  const baseFiles = [{ path: PUBLISH_SOURCE_PATH, content: before }, PRESERVED_FILE]
+  const state: GithubFixtureState = {
+    head: destination.kind === 'new' ? null : GITHUB_BASE, branch: 'creator/saved', failPr, pr: false,
+    commits: { [GITHUB_BASE]: { tree: GITHUB_BASE_TREE, message: 'Default branch work', parents: [] } },
+    trees: { [GITHUB_BASE_TREE]: baseFiles },
+  }
+  if (destination.kind === 'descendant') {
+    state.head = GITHUB_PREVIOUS
+    state.commits[GITHUB_PREVIOUS] = { tree: GITHUB_PREVIOUS_TREE, message: 'Earlier export work', parents: [GITHUB_BASE] }
+    state.trees[GITHUB_PREVIOUS_TREE] = [
+      { path: PUBLISH_SOURCE_PATH, content: destination.branchBefore }, PRESERVED_FILE,
+      { path: PUBLISH_EXISTING_PATH, content: '[]\n' },
+    ]
+  }
+  await writeFile(join(transport, 'state.json'), JSON.stringify(state))
   return gh
 }
 
@@ -38,10 +72,15 @@ async function readGithubCalls(transport: string): Promise<GithubCall[]> {
 
 async function expectSelectedPublicationText(dialog: Locator, file: PublicationFile): Promise<void> {
   await dialog.getByRole('heading', { name: file.path, exact: true }).waitFor()
-  await expect.poll(() => dialog.locator('pre').allTextContents()).toEqual(file.before === null ? [file.after] : [file.before, file.after])
+  await expect.poll(() => dialog.locator('pre').allTextContents()).toEqual(publicationText(file))
 }
 
-async function showPublicationEscapedText(dialog: Locator, side: 'Before' | 'After', content: string): Promise<string> {
+function publicationText(file: PublicationFile, escaped = false): string[] {
+  const values = [file.before, ...file.branchBefore === undefined ? [] : [file.branchBefore], file.after]
+  return values.flatMap(value => value === null ? [] : escaped ? [value, JSON.stringify(value)] : [value])
+}
+
+async function showPublicationEscapedText(dialog: Locator, side: 'Before' | 'Current branch before this save' | 'After', content: string): Promise<string> {
   const button = dialog.getByRole('button', { name: `${side}: exact text with escaped line endings`, exact: true })
   expect(await button.getAttribute('aria-expanded')).toBe('false')
   const controlledId = await button.getAttribute('aria-controls')
@@ -65,7 +104,7 @@ async function reviewPublicationFiles(
   const search = dialog.getByRole('searchbox', { name: 'Search files', exact: true })
   const files = dialog.getByRole('listbox', { name: 'Files', exact: true })
   const acknowledgement = dialog.getByRole('checkbox', { name: PUBLICATION_REVIEW_LABEL, exact: true })
-  const confirm = dialog.getByRole('button', { name: 'Confirm commit and open PR', exact: true })
+  const confirm = dialog.getByRole('button', { name: 'Confirm and open PR', exact: true })
   for (const file of captured) {
     await search.fill(file.path)
     await files.selectOption(file.path)
@@ -208,10 +247,10 @@ it.each([
   }
 })
 
-it.each([
-  { name: 'Chromium', engine: chromium },
-  { name: 'WebKit', engine: webkit },
-])('$name explicitly reviews and publishes Creator sources, then retries an incomplete PR on mobile', async ({ engine }) => {
+it.each((['descendant', 'new'] as const).flatMap(kind => [
+  { name: 'Chromium', engine: chromium, kind },
+  { name: 'WebKit', engine: webkit, kind },
+]))('$name explicitly reviews and publishes Creator sources, then retries an incomplete PR on mobile ($kind branch)', async ({ engine, kind }) => {
   const fixture = await mkdtemp(join(tmpdir(), 'dsh-source-publish-web-'))
   const source = join(fixture, 'bundle')
   const transport = join(fixture, 'github')
@@ -226,7 +265,9 @@ it.each([
     }) + '\n')
     await writeFile(join(source, 'cordis.patch.yml'), '[]\n')
     await writeFile(join(source, 'index.ts'), ORIGINAL_SOURCE)
-    const gh = await preparePublicationGithub(transport, ORIGINAL_SOURCE.slice(0, -1), true)
+    const gh = await preparePublicationGithub(transport, ORIGINAL_SOURCE.slice(0, -1), true,
+      kind === 'descendant' ? { kind, branchBefore: BRANCH_BEFORE_SOURCE } : { kind })
+    const initialState = JSON.parse(await readFile(join(transport, 'state.json'), 'utf8')) as GithubFixtureState
     const overlay = join(fixture, 'fork.patch.yml')
     await writeFile(overlay, `- id: plugin-manager\n  config: ${JSON.stringify({ fork: { ghCommand: gh, timeoutMs: 60_000 } })}\n`)
     scaffold = await launchWebScaffold({
@@ -238,10 +279,10 @@ it.each([
     // The product opens the confirmed URL; browser traffic to that external page remains inside this fixture.
     await page.context().route('https://github.com/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: '<title>Fixture pull request</title>' }))
     const tripwire = watchConsole(page)
-    onTestFailed(() => saveFailureShot(page, `web-e2e-creator-source-publish-${engine.name()}`))
+    onTestFailed(() => saveFailureShot(page, `web-e2e-creator-source-publish-${kind}-${engine.name()}`))
     const workspaceCwd = scaffold.workspaceCwd
     const compareAria = async (filename: string): Promise<void> => {
-      if (engine !== chromium) return
+      if (engine !== chromium || kind === 'new') return
       await compareOrRefreshGolden(join(EXPECTED, filename), await captureStableAria(page, '[role="dialog"]', workspaceCwd), MODE)
     }
     const calls = (): Promise<GithubCall[]> => readGithubCalls(transport)
@@ -283,12 +324,38 @@ it.each([
     const captured = envelope.result.value
     if (captured.status !== 'ready') throw new Error(`Publication preview was blocked: ${captured.code}`)
     expect(captured.files).toHaveLength(11)
+    expect(new Set(captured.files.map(file => file.path)).size).toBe(captured.files.length)
     expect(captured.base).toBe('main')
+    expect(captured.head).toBe(kind === 'descendant' ? GITHUB_PREVIOUS : null)
     expect(await dialog.getByText('alice/harness:main', { exact: true }).count()).toBe(1)
+    expect(await dialog.getByText('Before shows the reviewed default branch; After shows the proposed pull request. Additional branch text shows different content this save will replace.', { exact: true }).count()).toBe(1)
     const sourcePath = PUBLISH_SOURCE_PATH
     expect(captured.files.find(file => file.path === sourcePath)).toEqual({
       path: sourcePath, before: ORIGINAL_SOURCE.slice(0, -1), after: ORIGINAL_SOURCE,
+      ...kind === 'descendant' ? { branchBefore: BRANCH_BEFORE_SOURCE } : {},
     })
+    const previousExport = captured.files.find(file => file.path === PUBLISH_EXISTING_PATH)
+    if (previousExport === undefined) throw new Error('The full PR omitted the already-exported file')
+    expect(previousExport).toEqual({
+      path: PUBLISH_EXISTING_PATH, before: null, after: '[]\n',
+    })
+    expect((await calls()).filter(call => call.path.startsWith('repos/alice/harness/compare/'))).toEqual(kind === 'descendant'
+      ? [{ method: 'GET', path: `repos/alice/harness/compare/${GITHUB_BASE}...${GITHUB_PREVIOUS}?per_page=1` }] : [])
+    const initialTarget = initialState.head === null ? initialState.commits[GITHUB_BASE] : initialState.commits[initialState.head]
+    if (initialTarget === undefined) throw new Error('The fixture target commit is missing')
+    const initialFiles = initialState.trees[initialTarget.tree]
+    if (initialFiles === undefined) throw new Error('The fixture target tree is missing')
+    const targetFiles = new Map(initialFiles.map(file => [file.path, file.content]))
+    const initialBaseFiles = initialState.trees[GITHUB_BASE_TREE]
+    if (initialBaseFiles === undefined) throw new Error('The fixture default tree is missing')
+    const baseFiles = new Map(initialBaseFiles.map(file => [file.path, file.content]))
+    for (const file of captured.files) {
+      expect(file.before).toBe(baseFiles.get(file.path) ?? null)
+      const branchBefore = targetFiles.get(file.path) ?? null
+      expect(file.branchBefore).toBe(branchBefore !== file.after && branchBefore !== file.before ? branchBefore : undefined)
+    }
+    const plannedWrites = captured.files.filter(file => (targetFiles.get(file.path) ?? null) !== file.after)
+    expect(plannedWrites).toHaveLength(captured.files.length - (kind === 'descendant' ? 1 : 0))
     const files = dialog.getByRole('listbox', { name: 'Files', exact: true })
     const acknowledgement = dialog.getByRole('checkbox', { name: PUBLICATION_REVIEW_LABEL, exact: true })
     await files.waitFor()
@@ -304,18 +371,18 @@ it.each([
       await files.selectOption(path)
       await expectSelectedPublicationText(dialog, selected)
       if (selected.before !== null) await showPublicationEscapedText(dialog, 'Before', selected.before)
+      if (typeof selected.branchBefore === 'string') await showPublicationEscapedText(dialog, 'Current branch before this save', selected.branchBefore)
       await showPublicationEscapedText(dialog, 'After', selected.after)
-      expect(await dialog.locator('pre').allTextContents()).toEqual(selected.before === null
-        ? [selected.after, JSON.stringify(selected.after)]
-        : [selected.before, JSON.stringify(selected.before), selected.after, JSON.stringify(selected.after)])
+      expect(await dialog.locator('pre').allTextContents()).toEqual(publicationText(selected, true))
     }
     const selectedSource = captured.files.find(file => file.path === sourcePath)
     if (selectedSource === undefined || selectedSource.before === null) throw new Error('The source fixture is missing its Before text')
     await files.selectOption(sourcePath)
     await expectSelectedPublicationText(dialog, selectedSource)
     await showPublicationEscapedText(dialog, 'Before', selectedSource.before)
+    if (typeof selectedSource.branchBefore === 'string') await showPublicationEscapedText(dialog, 'Current branch before this save', selectedSource.branchBefore)
     await showPublicationEscapedText(dialog, 'After', selectedSource.after)
-    const confirm = dialog.getByRole('button', { name: 'Confirm commit and open PR', exact: true })
+    const confirm = dialog.getByRole('button', { name: 'Confirm and open PR', exact: true })
     expect(await confirm.isEnabled()).toBe(false)
     expect(apiCalls.filter(path => path.endsWith('/publish'))).toEqual([])
     expect((await calls()).filter(call => call.method !== 'GET')).toEqual([])
@@ -354,18 +421,22 @@ it.each([
     expect(await files.inputValue()).toBe(nextFile.path)
     expect(await dialog.getByRole('checkbox', { name: FILE_REVIEW_LABEL, exact: true }).isChecked()).toBe(false)
     await expectPublicationReviewProgress(dialog, 1, captured.files.length)
-    await reviewPublicationFiles(dialog, captured.files, [selectedSource.path])
+    const reviewOrder = kind === 'descendant'
+      ? [...captured.files.filter(file => file.path !== previousExport.path), previousExport] : captured.files
+    await reviewPublicationFiles(dialog, reviewOrder, [selectedSource.path])
     expect(await nextUnreviewed.isEnabled()).toBe(false)
     await dialog.getByRole('searchbox', { name: 'Search files', exact: true }).fill('')
     await files.selectOption(sourcePath)
     await expectSelectedPublicationText(dialog, selectedSource)
     await showPublicationEscapedText(dialog, 'Before', selectedSource.before)
+    if (typeof selectedSource.branchBefore === 'string') await showPublicationEscapedText(dialog, 'Current branch before this save', selectedSource.branchBefore)
     await showPublicationEscapedText(dialog, 'After', selectedSource.after)
     await writeFile(join(transport, 'hold-commit'), '')
     await acknowledgement.check()
     await confirm.click()
     await dialog.getByText('Saving the reviewed files', { exact: true }).waitFor()
-    await expect.poll(async () => (await calls()).filter(call => call.path === 'graphql').length).toBe(1)
+    const mutationPath = kind === 'descendant' ? 'graphql' : 'repos/alice/harness/git/trees'
+    await expect.poll(async () => (await calls()).filter(call => call.path === mutationPath).length).toBe(1)
     expect(await repository.isEnabled()).toBe(false)
     expect(await branch.isEnabled()).toBe(false)
     await compareAria('publish-pending.expected.md')
@@ -380,17 +451,45 @@ it.each([
     expect(await link.getAttribute('rel')).toBe('noopener noreferrer')
     const recorded = await calls()
     const writes = recorded.filter(call => call.method !== 'GET')
-    expect(writes.map(call => call.path)).toEqual(['graphql', 'repos/alice/harness/pulls', 'repos/alice/harness/pulls'])
+    expect(writes.map(call => call.path)).toEqual(kind === 'descendant'
+      ? ['graphql', 'repos/alice/harness/pulls', 'repos/alice/harness/pulls']
+      : ['repos/alice/harness/git/trees', 'repos/alice/harness/git/commits', 'repos/alice/harness/git/refs',
+        'repos/alice/harness/pulls', 'repos/alice/harness/pulls'])
+    expect(writes.every(call => call.method === 'POST')).toBe(true)
     expect(recorded.filter(call => call.path.startsWith('repos/deepseek-ai/deepseek-harness')))
       .toEqual(recorded.filter(call => call.method === 'GET' && call.path === 'repos/deepseek-ai/deepseek-harness'))
-    const committed = writes[0]?.body as { variables: { input: {
-      branch: { repositoryNameWithOwner: string; branchName: string }
-      expectedHeadOid: string
-      fileChanges: { additions: { path: string; contents: string }[] }
-    } } }
-    expect(committed.variables.input.branch).toEqual({ repositoryNameWithOwner: 'alice/harness', branchName: 'creator/saved' })
-    expect(committed.variables.input.expectedHeadOid).toBe('a'.repeat(40))
-    expect(committed.variables.input.fileChanges.additions).toEqual(captured.files.map(file => ({ path: file.path, contents: Buffer.from(file.after).toString('base64') })))
+    if (kind === 'descendant') {
+      const committed = writes[0]?.body as { variables: { input: {
+        branch: { repositoryNameWithOwner: string; branchName: string }
+        expectedHeadOid: string
+        fileChanges: { additions: { path: string; contents: string }[] }
+      } } }
+      expect(committed.variables.input.branch).toEqual({ repositoryNameWithOwner: 'alice/harness', branchName: 'creator/saved' })
+      expect(committed.variables.input.expectedHeadOid).toBe(GITHUB_PREVIOUS)
+      expect(committed.variables.input.fileChanges.additions).toEqual(plannedWrites.map(file => ({ path: file.path, contents: Buffer.from(file.after).toString('base64') })))
+    } else {
+      expect(writes[0]?.body).toEqual({ base_tree: GITHUB_BASE_TREE,
+        tree: plannedWrites.map(file => ({ path: file.path, mode: '100644', type: 'blob', content: file.after })) })
+      expect(writes[1]?.body).toEqual({ message: `Save Creator source (${captured.id})`, tree: GITHUB_COMMIT_TREE, parents: [GITHUB_BASE] })
+      expect(writes[2]?.body).toEqual({ ref: 'refs/heads/creator/saved', sha: GITHUB_COMMIT })
+      expect(recorded.filter(call => call.path === 'graphql')).toEqual([])
+    }
+    const finalState = JSON.parse(await readFile(join(transport, 'state.json'), 'utf8')) as GithubFixtureState
+    expect(finalState.head).toBe(GITHUB_COMMIT)
+    expect(finalState.commits[GITHUB_BASE]).toEqual(initialState.commits[GITHUB_BASE])
+    expect(finalState.trees[GITHUB_BASE_TREE]).toEqual(initialState.trees[GITHUB_BASE_TREE])
+    if (kind === 'descendant') {
+      expect(finalState.commits[GITHUB_PREVIOUS]).toEqual(initialState.commits[GITHUB_PREVIOUS])
+      expect(finalState.trees[GITHUB_PREVIOUS_TREE]).toEqual(initialState.trees[GITHUB_PREVIOUS_TREE])
+    }
+    expect(finalState.commits[GITHUB_COMMIT]).toEqual({ tree: GITHUB_COMMIT_TREE,
+      message: `Save Creator source (${captured.id})`, parents: [kind === 'descendant' ? GITHUB_PREVIOUS : GITHUB_BASE] })
+    const finalTree = finalState.trees[GITHUB_COMMIT_TREE]
+    if (finalTree === undefined) throw new Error('The published fixture tree is missing')
+    const finalFiles = [...finalTree].sort((left, right) => left.path.localeCompare(right.path))
+    const expectedFiles = [...captured.files.map(file => ({ path: file.path, content: file.after })), PRESERVED_FILE]
+      .sort((left, right) => left.path.localeCompare(right.path))
+    expect(finalFiles).toEqual(expectedFiles)
     await compareAria('publish-saved.expected.md')
     expect(scaffold.ctx.agentPresets.defaultId).toBe('standard')
     expect(tripwire.pageErrors).toEqual([])
@@ -502,7 +601,7 @@ it.each([
     const previous = dialog.getByRole('button', { name: 'Previous files', exact: true })
     const next = dialog.getByRole('button', { name: 'Next files', exact: true })
     const acknowledgement = dialog.getByRole('checkbox', { name: PUBLICATION_REVIEW_LABEL, exact: true })
-    const confirm = dialog.getByRole('button', { name: 'Confirm commit and open PR', exact: true })
+    const confirm = dialog.getByRole('button', { name: 'Confirm and open PR', exact: true })
     const fileValues = (): Promise<string[]> => files.locator('option').evaluateAll(options => options
       .map(option => option.getAttribute('value') ?? '').filter(value => value !== ''))
     expect(await files.evaluate(element => element.tagName)).toBe('SELECT')
