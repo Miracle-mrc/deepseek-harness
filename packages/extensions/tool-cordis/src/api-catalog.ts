@@ -938,9 +938,15 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'An expiring receipt for complete PR changes and destination writes, with exact UTF-8 text, or a refusal without source.',
       },
       {
+        signature: '@Remote async extendReview(id: ForkPreviewId): Promise<ForkReviewResult>',
+        description: 'Extend an unsubmitted review after revalidating its account and unchanged GitHub destination. An expired receipt can be extended only while still retained. Captured text and the receipt ID never change.',
+        parameters: [{ name: 'id', description: 'Existing unsubmitted receipt; attempted publications retain their separate retry flow.' }],
+        returns: 'The same receipt ID with a fresh configured lifetime, or a sanitized refusal without writes.',
+      },
+      {
         signature: '@Remote async publish(id: ForkPreviewId, confirmed: boolean): Promise<ForkPublishResult>',
         description: 'Apply only retained destination writes after explicit confirmation, reusing an existing commit when no write is needed. Create or reuse its PR to the reviewed default; detected default-name, base-commit or target-head changes stop new writes. Repeated calls share an in-flight operation and reconcile lost responses. A closed PR is reported without recreating it. An in-flight publication retains its receipt past the preview\'s expiry. A failed PR retains the approved commit; unknown writes remain unknown until reconciliation, with no forced rollback or branch deletion.',
-        parameters: [{ name: 'id', description: 'Receipt from preview; source text and destinations cannot be replaced by this call.' }, { name: 'confirmed', description: 'The person\'s explicit acknowledgement of the displayed diff and destinations.' }],
+        parameters: [{ name: 'id', description: 'Receipt from preview; source text and destinations cannot be replaced by this call.' }, { name: 'confirmed', description: 'Caller attestation of the person\'s authorization of these exact files and destinations; trusted Host code can supply it directly.' }],
         returns: 'Confirmed commit and PR, or a sanitized refusal stating absent, unknown, or committed remote effects.',
       },
     ],
@@ -6543,6 +6549,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ForkRepository',
     declaration: 'export interface ForkRepository {\n    readonly repository: string;\n    readonly defaultBranch: string;\n}',
+  },
+  {
+    name: 'ForkReviewResult',
+    declaration: 'export type ForkReviewResult = ForkFailure | {\n    readonly status: \'ready\';\n    readonly id: ForkPreviewId;\n};',
   },
   {
     name: 'FrequencyTooHighError',

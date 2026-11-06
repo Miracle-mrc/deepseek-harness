@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { bindSnapshotSelector, makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import type {
-  ForkCommitId, ForkPreviewId, ForkPreviewResult, ForkPublishResult, ForkRepositoriesResult,
+  ForkCommitId, ForkPreviewId, ForkPreviewResult, ForkPublishResult, ForkRepositoriesResult, ForkReviewResult,
 } from '@deepseek-ai/dsh-api-remotes/client'
 import { ForkPublishOverlay } from '../src/client/ForkPublish.tsx'
 import { ForkPublishController } from '../src/client/fork-publish-store.ts'
@@ -59,28 +59,38 @@ const PR_REVIEW_LOCALES = [
     context: '改动前显示已审查的默认分支，改动后显示拟议拉取请求的内容。额外的分支文本显示此次保存将替换的不同内容',
     policy: 'GitHub 可能要求签名或已验证的提交，或其他分支保护检查。请先在 GitHub 检查分支规则和拉取请求，再进行后续写入' },
 ] as const
+const REVIEW_EXTENSION_LOCALES = [
+  { locale: 'en', copy: en, extend: 'Extend review', extending: 'Extending review',
+    guidance: 'Previews can expire. Extend review rechecks the destination while preserving these exact files and individual checks; authorize the save again after it succeeds.',
+    success: 'Review time extended. Your file checks are kept; confirm again before saving.' },
+  { locale: 'zh', copy: zh, extend: '延长检查时间', extending: '正在延长检查时间',
+    guidance: '预览可能过期。延长检查时间会重新检查目标，并保留这些精确文件和逐文件检查结果；成功后请重新授权保存',
+    success: '已延长检查时间，并保留逐文件检查结果；保存前请重新确认' },
+] as const
 
 function overlay(copy = en) {
   const repositories = vi.fn(async (): Promise<ForkRepositoriesResult> => REPOSITORIES)
   const preview = vi.fn(async (): Promise<ForkPreviewResult> => PREVIEW)
+  const extendReview = vi.fn(async (id: ForkPreviewId): Promise<ForkReviewResult> => ({ status: 'ready', id }))
   const publish = vi.fn(async (_id: ForkPreviewId, _confirmed: boolean): Promise<ForkPublishResult> => ({
     status: 'saved', repository: PREVIEW.repository, branch: PREVIEW.branch, commit: 'saved-commit' as ForkCommitId,
     pullRequestUrl: 'https://github.com/alice/harness/pull/1',
   }))
   const openPullRequest = vi.fn()
-  const controller = new ForkPublishController({ repositories, preview, publish, openPullRequest })
+  const controller = new ForkPublishController({ repositories, preview, extendReview, publish, openPullRequest })
   controller.open()
   const props: ComponentProps<typeof ForkPublishOverlay> = {
     t: makeTranslate(copy), useForkPublish: bindSnapshotSelector(controller.store),
     close: () => { controller.close() }, connect: () => controller.connect(),
     edit: (field, value) => { controller.edit(field, value) }, inspect: () => controller.inspect(),
+    extendReview: () => controller.extendReview(),
     selectFile: (id, path) => { controller.selectFile(id, path) },
     reviewFile: (id, path, value) => { controller.reviewFile(id, path, value) },
     review: (value) => { controller.review(value) }, publish: () => controller.publish(), retry: () => controller.retry(),
     dismissNotice: () => { controller.dismissNotice() },
   }
   render(<ForkPublishOverlay {...props} />)
-  return { controller, repositories, preview, publish, openPullRequest }
+  return { controller, repositories, preview, extendReview, publish, openPullRequest }
 }
 
 async function inspect(copy = en) {
@@ -121,6 +131,216 @@ function reviewAllFiles(view: ReturnType<typeof overlay>, copy = en): void {
 }
 
 describe('direct fork publication dialog', () => {
+  it.each(REVIEW_EXTENSION_LOCALES)('keeps 51-file progress and revokes final consent during review extension in $locale', async ({ copy, extend, extending, guidance, success }) => {
+    const view = overlay(copy)
+    const files = Array.from({ length: 51 }, (_, index) => ({
+      path: `customizations/bundles/0/file-${String(index).padStart(4, '0')}.ts`, before: null,
+      after: `\uFEFFexport const value = ${index}\r\n`,
+    }))
+    const preview = { ...PREVIEW, files }
+    view.preview.mockResolvedValueOnce(preview)
+    const pending = Promise.withResolvers<ForkReviewResult>()
+    view.extendReview.mockReturnValueOnce(pending.promise)
+    await inspect(copy)
+    const dialog = screen.getByRole('dialog', { name: copy.forkPublishTitle })
+    const extension = within(dialog).getByRole<HTMLButtonElement>('button', { name: extend })
+    expect(within(dialog).getByText(guidance, { exact: true })).toBeTruthy()
+    reviewAllFiles(view, copy)
+    const progress = makeTranslate(copy)('forkPublishReviewProgress', { count: '51', total: '51' })
+    const selected = view.controller.store.getSnapshot().activeFile
+    const source = within(dialog).getByRole('region', { name: copy.forkPublishAfter }).querySelector('pre')
+    expect(source?.textContent).toBe('\uFEFFexport const value = 50\r\n')
+    const acknowledgement = within(dialog).getByRole<HTMLInputElement>('checkbox', { name: copy.forkPublishReviewed })
+    const confirm = within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishConfirm })
+    fireEvent.click(acknowledgement)
+    expect(confirm.disabled).toBe(false)
+    fireEvent.click(extension)
+    expect(view.extendReview).toHaveBeenCalledExactlyOnceWith(preview.id)
+    expect(within(dialog).getByText(extending, { exact: true }).closest('[role="status"]')).not.toBeNull()
+    expect(extension.disabled).toBe(true)
+    expect(within(dialog).getByRole<HTMLSelectElement>('combobox', { name: copy.forkRepository }).disabled).toBe(true)
+    expect(within(dialog).getByRole<HTMLInputElement>('textbox', { name: copy.forkBranch }).disabled).toBe(true)
+    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishConnect }).disabled).toBe(true)
+    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishInspect }).disabled).toBe(true)
+    expect(acknowledgement.disabled).toBe(true)
+    expect(acknowledgement.checked).toBe(false)
+    expect(confirm.disabled).toBe(true)
+    expect(within(dialog).getByText(progress, { exact: true })).toBeTruthy()
+    expect(within(dialog).getByRole('region', { name: copy.forkPublishAfter }).querySelector('pre')).toBe(source)
+    expect(view.controller.store.getSnapshot().activeFile).toBe(selected)
+    expect(view.publish).not.toHaveBeenCalled()
+    await act(async () => { pending.resolve({ status: 'ready', id: preview.id }); await pending.promise })
+    await screen.findByText(success, { exact: true })
+    expect(view.controller.store.getSnapshot().preview).toBe(preview)
+    expect(view.controller.store.getSnapshot().reviewedFiles).toHaveLength(51)
+    expect(within(dialog).getByText(progress, { exact: true })).toBeTruthy()
+    expect(within(dialog).getByRole('region', { name: copy.forkPublishAfter }).querySelector('pre')).toBe(source)
+    expect(acknowledgement.disabled).toBe(false)
+    expect(acknowledgement.checked).toBe(false)
+    expect(confirm.disabled).toBe(true)
+    expect(extension.disabled).toBe(false)
+    expect(within(dialog).getByText(copy.forkPublishPublicWarning, { exact: true })).toBeTruthy()
+    fireEvent.click(acknowledgement)
+    expect(confirm.disabled).toBe(false)
+    expect(view.preview).toHaveBeenCalledTimes(1)
+    expect(view.publish).not.toHaveBeenCalled()
+  })
+
+  it.each(REVIEW_EXTENSION_LOCALES)('requires successful review extension after a no-effect failure in $locale', async ({ copy, extend, success }) => {
+    const view = overlay(copy)
+    view.extendReview.mockResolvedValueOnce({ status: 'blocked', code: 'conflict', effect: 'none' })
+    await inspect(copy)
+    reviewAllFiles(view, copy)
+    fireEvent.click(screen.getByRole('checkbox', { name: copy.forkPublishReviewed }))
+    const selected = view.controller.store.getSnapshot().activeFile
+    fireEvent.click(screen.getByRole('button', { name: extend }))
+    await screen.findByText(copy.forkPublishConflict, { exact: true })
+    const acknowledgement = screen.getByRole<HTMLInputElement>('checkbox', { name: copy.forkPublishReviewed })
+    const confirm = screen.getByRole<HTMLButtonElement>('button', { name: copy.forkPublishConfirm })
+    expect(view.controller.store.getSnapshot().phase).toBe('blocked')
+    expect(view.controller.store.getSnapshot().preview).toBe(PREVIEW)
+    expect(view.controller.store.getSnapshot().activeFile).toBe(selected)
+    expect(view.controller.store.getSnapshot().reviewedFiles).toHaveLength(PREVIEW.files.length)
+    expect(acknowledgement.disabled).toBe(true)
+    expect(acknowledgement.checked).toBe(false)
+    expect(confirm.disabled).toBe(true)
+    fireEvent.click(acknowledgement)
+    expect(view.controller.store.getSnapshot().reviewed).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: extend }))
+    await screen.findByText(success, { exact: true })
+    expect(view.extendReview.mock.calls).toEqual([[PREVIEW.id], [PREVIEW.id]])
+    expect(acknowledgement.disabled).toBe(false)
+    expect(acknowledgement.checked).toBe(false)
+    expect(confirm.disabled).toBe(true)
+    expect(view.publish).not.toHaveBeenCalled()
+  })
+
+  it.each(REVIEW_EXTENSION_LOCALES)('recovers a stale no-effect save through explicit review extension in $locale', async ({ copy, extend, success }) => {
+    const view = overlay(copy)
+    view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'stale-preview', effect: 'none' })
+    await inspect(copy)
+    reviewAllFiles(view, copy)
+    fireEvent.click(screen.getByRole('checkbox', { name: copy.forkPublishReviewed }))
+    fireEvent.click(screen.getByRole('button', { name: copy.forkPublishConfirm }))
+    await screen.findByText(copy.forkPublishNoEffects, { exact: true })
+    expect(screen.getByText(copy.forkPublishStalePreview, { exact: true }).textContent).toContain(extend)
+    expect(screen.queryByRole('checkbox', { name: copy.forkPublishReviewed })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: extend }))
+    await screen.findByText(success, { exact: true })
+    expect(view.extendReview).toHaveBeenCalledExactlyOnceWith(PREVIEW.id)
+    expect(view.controller.store.getSnapshot().operation).toBeNull()
+    expect(view.controller.store.getSnapshot().preview).toBe(PREVIEW)
+    expect(view.controller.store.getSnapshot().reviewedFiles).toHaveLength(PREVIEW.files.length)
+    const acknowledgement = screen.getByRole<HTMLInputElement>('checkbox', { name: copy.forkPublishReviewed })
+    expect(acknowledgement.checked).toBe(false)
+    expect(acknowledgement.disabled).toBe(false)
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: copy.forkPublishConfirm }).disabled).toBe(true)
+    expect(view.publish).toHaveBeenCalledExactlyOnceWith(PREVIEW.id, true)
+    expect(view.preview).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(REVIEW_EXTENSION_LOCALES.flatMap(locale => [51, 2000].map(count => ({ ...locale, count }))))('resumes the last of $count files and permits explicit review extension in $locale', async ({ copy, extend, success, count }) => {
+    const view = overlay(copy)
+    const files = Array.from({ length: count }, (_, index) => ({
+      path: `customizations/bundles/0/file-${String(index).padStart(4, '0')}.ts`, before: null,
+      after: `\uFEFFfile ${index}\r\n`,
+    }))
+    const preview = { ...PREVIEW, files }
+    view.preview.mockResolvedValueOnce(preview)
+    await inspect(copy)
+    const dialog = screen.getByRole('dialog', { name: copy.forkPublishTitle })
+    expect(dialog.querySelectorAll('pre')).toHaveLength(0)
+    expect(fileOptions(fileList(copy.forkPublishFileList))).toHaveLength(50)
+    const name = `file-${String(count - 1).padStart(4, '0')}.ts`
+    const path = `customizations/bundles/0/${name}`
+    fireEvent.change(within(dialog).getByRole('searchbox', { name: copy.forkPublishSearchFiles }), { target: { value: name } })
+    fireEvent.change(fileList(copy.forkPublishFileList), { target: { value: path } })
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: copy.forkPublishFileReviewed }))
+    const [close] = within(dialog).getAllByRole('button', { name: copy.close })
+    if (close === undefined) throw new Error('Close control is missing')
+    fireEvent.click(close)
+    expect(screen.queryByRole('dialog', { name: copy.forkPublishTitle })).toBeNull()
+    expect(view.extendReview).not.toHaveBeenCalled()
+    act(() => { view.controller.open() })
+    const resumed = screen.getByRole('dialog', { name: copy.forkPublishTitle })
+    expect(fileList(copy.forkPublishFileList).value).toBe(path)
+    expect([...resumed.querySelectorAll('pre')].map(node => node.textContent)).toEqual([`\uFEFFfile ${count - 1}\r\n`])
+    expect(fileList(copy.forkPublishFileList).options.length).toBeLessThanOrEqual(51)
+    expect(within(resumed).getByRole<HTMLInputElement>('checkbox', { name: copy.forkPublishFileReviewed }).checked).toBe(true)
+    expect(within(resumed).getByText(makeTranslate(copy)('forkPublishReviewProgress', { count: '1', total: String(count) }), { exact: true })).toBeTruthy()
+    expect(view.controller.store.getSnapshot().preview).toBe(preview)
+    expect(view.extendReview).not.toHaveBeenCalled()
+    fireEvent.click(within(resumed).getByRole('button', { name: extend }))
+    await screen.findByText(success, { exact: true })
+    expect(view.controller.store.getSnapshot().activeFile).toBe(path)
+    expect(view.controller.store.getSnapshot().reviewedFiles).toEqual([path])
+    expect([...resumed.querySelectorAll('pre')].map(node => node.textContent)).toEqual([`\uFEFFfile ${count - 1}\r\n`])
+    expect(within(resumed).getByRole<HTMLInputElement>('checkbox', { name: copy.forkPublishReviewed }).disabled).toBe(true)
+    expect(view.preview).toHaveBeenCalledTimes(1)
+    expect(view.publish).not.toHaveBeenCalled()
+  })
+
+  it.each(REVIEW_EXTENSION_LOCALES.flatMap(locale => (['publishing', 'unknown', 'committed', 'saved'] as const)
+    .map(status => ({ ...locale, status }))))('omits review extension during $status in $locale', async ({ copy, extend, status }) => {
+    const view = overlay(copy)
+    const pending = Promise.withResolvers<ForkPublishResult>()
+    if (status === 'publishing') view.publish.mockReturnValueOnce(pending.promise)
+    else if (status === 'unknown' || status === 'committed') {
+      view.publish.mockResolvedValueOnce({ status: 'blocked', code: 'network', effect: status })
+    }
+    try {
+      await inspect(copy)
+      reviewAllFiles(view, copy)
+      fireEvent.click(screen.getByRole('checkbox', { name: copy.forkPublishReviewed }))
+      fireEvent.click(screen.getByRole('button', { name: copy.forkPublishConfirm }))
+      await waitFor(() => {
+        expect(view.controller.store.getSnapshot().operation?.status).toBe(status === 'publishing' || status === 'saved' ? status : 'blocked')
+      })
+      expect(screen.queryByRole('button', { name: extend })).toBeNull()
+      expect(view.extendReview).not.toHaveBeenCalled()
+    } finally {
+      if (status === 'publishing') await act(async () => {
+        pending.resolve({ status: 'blocked', code: 'network', effect: 'unknown' })
+        await pending.promise
+      })
+    }
+  })
+
+  it.each(REVIEW_EXTENSION_LOCALES)('omits review extension before a preview in $locale', ({ copy, extend }) => {
+    const view = overlay(copy)
+    expect(screen.queryByRole('button', { name: extend })).toBeNull()
+    expect(view.extendReview).not.toHaveBeenCalled()
+    expect(view.repositories).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { locale: 'en', copy: en,
+      warning: 'If this fork is public, saved source and retained branch history will be publicly accessible. Check them for private information before confirming.' },
+    { locale: 'zh', copy: zh,
+      warning: '如果此 Fork 为公开仓库，保存的源文件和保留的分支历史均可被公开访问。确认前请检查其中是否含有私人信息' },
+  ])('warns about public fork source and history before final consent in $locale', async ({ copy, warning }) => {
+    const view = overlay(copy)
+    await inspect(copy)
+    const dialog = screen.getByRole('dialog', { name: copy.forkPublishTitle })
+    const notice = within(dialog).getByText(warning, { exact: true })
+    const acknowledgement = within(dialog).getByRole<HTMLInputElement>('checkbox', { name: copy.forkPublishReviewed })
+    const confirm = within(dialog).getByRole<HTMLButtonElement>('button', { name: copy.forkPublishConfirm })
+    expect(notice.compareDocumentPosition(acknowledgement) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(view.controller.store.getSnapshot().reviewedFiles).toEqual([])
+    expect(acknowledgement.disabled).toBe(true)
+    expect(acknowledgement.checked).toBe(false)
+    expect(confirm.disabled).toBe(true)
+    reviewAllFiles(view, copy)
+    expect(within(dialog).getByText(warning, { exact: true })).toBe(notice)
+    expect(acknowledgement.disabled).toBe(false)
+    expect(acknowledgement.checked).toBe(false)
+    expect(confirm.disabled).toBe(true)
+    fireEvent.click(acknowledgement)
+    expect(confirm.disabled).toBe(false)
+    expect(within(dialog).getByText(warning, { exact: true })).toBe(notice)
+    expect(view.publish).not.toHaveBeenCalled()
+  })
+
   it.each(PR_REVIEW_LOCALES)('requires every full-PR union path and resets that review for a new receipt in $locale', async ({ copy, context, branchUpdate }) => {
     const view = overlay(copy)
     const alreadyOnBranch = { ...PREVIEW.files[0]!, before: '// default branch\n', after: '// current export\n' }

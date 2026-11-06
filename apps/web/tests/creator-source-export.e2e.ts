@@ -3,9 +3,10 @@ import { chmod, copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:f
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { chromium, webkit, type Browser, type Locator } from 'playwright'
+import { setTimeout as delay } from 'node:timers/promises'
+import { chromium, webkit, type Browser, type Locator, type Page } from 'playwright'
 import { expect, it, onTestFailed } from 'vitest'
-import type { ForkPreviewResult, SourceExportResult } from '@deepseek-ai/dsh-plugin-manager'
+import type { ForkPreviewId, ForkPreviewResult, SourceExportResult } from '@deepseek-ai/dsh-plugin-manager'
 import {
   captureStableAria, compareOrRefreshGolden, launchWebScaffold, watchConsole, webSnapshotMode, type WebScaffold,
 } from './scaffold.ts'
@@ -26,6 +27,8 @@ const PRESERVED_FILE = { path: 'README.md', content: 'Public repository file pre
 const BRANCH_BEFORE_SOURCE = '\uFEFFexport const greeting = "Earlier branch work";\r\n'
 const FILE_REVIEW_LABEL = 'I checked this file for private information'
 const PUBLICATION_REVIEW_LABEL = 'I checked every file for private information and authorize this commit and pull request'
+const PUBLIC_FORK_WARNING = 'If this fork is public, saved source and retained branch history will be publicly accessible. Check them for private information before confirming.'
+const REVIEW_LIFETIME_MS = 10_000
 type PublicationFile = Extract<ForkPreviewResult, { status: 'ready' }>['files'][number]
 type GithubCall = { method: string; path: string; body?: Record<string, unknown> }
 type GithubFixtureFile = { path: string; content: string }
@@ -68,6 +71,23 @@ async function preparePublicationGithub(
 async function readGithubCalls(transport: string): Promise<GithubCall[]> {
   return (await readFile(join(transport, 'calls.jsonl'), 'utf8')).split('\n')
     .filter(Boolean).map(line => JSON.parse(line) as GithubCall)
+}
+
+async function extendPublicationReview(page: Page, dialog: Locator, id: ForkPreviewId): Promise<number> {
+  const [response] = await Promise.all([
+    page.waitForResponse('**/api/creatorFork/extendReview'),
+    dialog.getByRole('button', { name: 'Extend review', exact: true }).click(),
+  ])
+  expect(response.ok()).toBe(true)
+  const result: unknown = await response.json()
+  expect(result).toMatchObject({ result: { ok: true, value: { status: 'ready', id } } })
+  await page.getByText('Review time extended. Your file checks are kept; confirm again before saving.', { exact: true }).waitFor()
+  return Date.now()
+}
+
+async function waitForReviewExpiry(observed: number): Promise<void> {
+  // The receipt deadline predates the acknowledged response; this tests real expiry with the shorter fixture lifetime.
+  await delay(Math.max(0, observed + REVIEW_LIFETIME_MS + 1000 - Date.now()))
 }
 
 async function expectSelectedPublicationText(dialog: Locator, file: PublicationFile): Promise<void> {
@@ -269,7 +289,8 @@ it.each((['descendant', 'new'] as const).flatMap(kind => [
       kind === 'descendant' ? { kind, branchBefore: BRANCH_BEFORE_SOURCE } : { kind })
     const initialState = JSON.parse(await readFile(join(transport, 'state.json'), 'utf8')) as GithubFixtureState
     const overlay = join(fixture, 'fork.patch.yml')
-    await writeFile(overlay, `- id: plugin-manager\n  config: ${JSON.stringify({ fork: { ghCommand: gh, timeoutMs: 60_000 } })}\n`)
+    const fork = { ghCommand: gh, timeoutMs: 60_000, operationTimeoutMs: 120_000, previewLifetimeMs: REVIEW_LIFETIME_MS }
+    await writeFile(overlay, `- id: plugin-manager\n  config: ${JSON.stringify({ fork })}\n`)
     scaffold = await launchWebScaffold({
       extraOverlayPath: [fileURLToPath(new URL('./pin-browse-picker.overlay.yml', import.meta.url)), overlay],
       profile: { packages: [{ dir: source, enabled: true }] }, agentPresets: { default: 'standard' },
@@ -358,6 +379,7 @@ it.each((['descendant', 'new'] as const).flatMap(kind => [
     expect(plannedWrites).toHaveLength(captured.files.length - (kind === 'descendant' ? 1 : 0))
     const files = dialog.getByRole('listbox', { name: 'Files', exact: true })
     const acknowledgement = dialog.getByRole('checkbox', { name: PUBLICATION_REVIEW_LABEL, exact: true })
+    expect(await dialog.getByText(PUBLIC_FORK_WARNING, { exact: true }).count()).toBe(1)
     await files.waitFor()
     await expectPublicationReviewProgress(dialog, 0, captured.files.length)
     expect(await acknowledgement.isEnabled()).toBe(false)
@@ -411,6 +433,13 @@ it.each((['descendant', 'new'] as const).flatMap(kind => [
     await page.keyboard.press('Space')
     expect(await selectedReview.isChecked()).toBe(true)
     await expectPublicationReviewProgress(dialog, 1, captured.files.length)
+    const extendedAt = await extendPublicationReview(page, dialog, captured.id)
+    await expectPublicationReviewProgress(dialog, 1, captured.files.length)
+    expect(await dialog.locator('pre').allTextContents()).toEqual(publicationText(selectedSource, true))
+    expect(await selectedReview.isChecked()).toBe(true)
+    expect(await acknowledgement.isChecked()).toBe(false)
+    expect(apiCalls.filter(path => path.endsWith('/preview'))).toHaveLength(1)
+    expect((await calls()).filter(call => call.method !== 'GET')).toEqual([])
     expect(await acknowledgement.isEnabled()).toBe(false)
     expect(await confirm.isEnabled()).toBe(false)
     const nextUnreviewed = dialog.getByRole('button', { name: 'Next unreviewed file', exact: true })
@@ -431,12 +460,26 @@ it.each((['descendant', 'new'] as const).flatMap(kind => [
     await showPublicationEscapedText(dialog, 'Before', selectedSource.before)
     if (typeof selectedSource.branchBefore === 'string') await showPublicationEscapedText(dialog, 'Current branch before this save', selectedSource.branchBefore)
     await showPublicationEscapedText(dialog, 'After', selectedSource.after)
+    await waitForReviewExpiry(extendedAt)
+    const expiredResponse = page.waitForResponse('**/api/creatorFork/publish')
+    await acknowledgement.check()
+    await confirm.click()
+    const expiredEnvelope: unknown = await (await expiredResponse).json()
+    expect(expiredEnvelope).toMatchObject({ result: { ok: true, value: {
+      status: 'blocked', code: 'stale-preview', effect: 'none',
+    } } })
+    expect((await calls()).filter(call => call.method !== 'GET')).toEqual([])
+    await extendPublicationReview(page, dialog, captured.id)
+    await expectPublicationReviewProgress(dialog, captured.files.length, captured.files.length)
+    expect(await acknowledgement.isChecked()).toBe(false)
+    expect(await confirm.isEnabled()).toBe(false)
     await writeFile(join(transport, 'hold-commit'), '')
     await acknowledgement.check()
     await confirm.click()
     await dialog.getByText('Saving the reviewed files', { exact: true }).waitFor()
     const mutationPath = kind === 'descendant' ? 'graphql' : 'repos/alice/harness/git/trees'
-    await expect.poll(async () => (await calls()).filter(call => call.path === mutationPath).length).toBe(1)
+    await expect.poll(async () => (await calls()).filter(call => call.path === mutationPath).length,
+      { timeout: fork.operationTimeoutMs }).toBe(1)
     expect(await repository.isEnabled()).toBe(false)
     expect(await branch.isEnabled()).toBe(false)
     await compareAria('publish-pending.expected.md')
@@ -539,7 +582,9 @@ it.each([
     }
     const gh = await preparePublicationGithub(transport, before, false)
     const overlay = join(fixture, 'fork.patch.yml')
-    await writeFile(overlay, `- id: plugin-manager\n  config: ${JSON.stringify({ fork: { ghCommand: gh, timeoutMs: 60_000 } })}\n`)
+    await writeFile(overlay, `- id: plugin-manager\n  config: ${JSON.stringify({ fork: {
+      ghCommand: gh, timeoutMs: 60_000, previewLifetimeMs: REVIEW_LIFETIME_MS,
+    } })}\n`)
     scaffold = await launchWebScaffold({
       extraOverlayPath: [fileURLToPath(new URL('./pin-browse-picker.overlay.yml', import.meta.url)), overlay],
       profile: { packages: [{ dir: source, enabled: true }] }, agentPresets: { default: 'standard' },
@@ -581,6 +626,7 @@ it.each([
     expect(envelope.result.ok).toBe(true)
     const captured = envelope.result.value
     if (captured.status !== 'ready') throw new Error(`Large publication preview was blocked: ${captured.code}`)
+    const capturedAt = Date.now()
     expect(captured.files).toHaveLength(fileCount)
     expect(Buffer.byteLength(JSON.stringify(captured))).toBeLessThan(10 * 1024 * 1024)
     expect(captured.files.every(file => Buffer.byteLength(file.after) <= 1024 * 1024)).toBe(true)
@@ -832,6 +878,33 @@ it.each([
     expect(apiCalls).toEqual(capturedApiCalls)
     expect(apiCalls.filter(path => path.endsWith('/publish'))).toEqual([])
     expect((await readGithubCalls(transport)).filter(call => call.method !== 'GET')).toEqual([])
+    await search.fill(last.path)
+    await files.selectOption(last.path)
+    await expectSelectedPublicationText(dialog, last)
+    await dialog.getByRole('button', { name: 'Close', exact: true }).last().click()
+    await dialog.waitFor({ state: 'detached' })
+    await menuTrigger.click()
+    await entry.click()
+    const resumedLocal = page.getByRole('dialog', { name: 'Save to My Fork', exact: true })
+    await resumedLocal.getByRole('button', { name: 'Save directly to GitHub', exact: true }).click()
+    await dialog.waitFor()
+    expect(await search.inputValue()).toBe('')
+    expect(await files.inputValue()).toBe(last.path)
+    expect(await files.locator('option').count()).toBeLessThanOrEqual(51)
+    await expectSelectedPublicationText(dialog, last)
+    await expectPublicationReviewProgress(dialog, fileCount === 51 ? fileCount : 1, fileCount)
+    expect(await selectedReview.isChecked()).toBe(fileCount === 51)
+    expect(await acknowledgement.isChecked()).toBe(false)
+    expect(await confirm.isEnabled()).toBe(false)
+    expect(apiCalls).toEqual(capturedApiCalls)
+    await waitForReviewExpiry(capturedAt)
+    await extendPublicationReview(page, dialog, captured.id)
+    await expectPublicationReviewProgress(dialog, fileCount === 51 ? fileCount : 1, fileCount)
+    expect(await selectedReview.isChecked()).toBe(fileCount === 51)
+    await expectSelectedPublicationText(dialog, last)
+    expect(await acknowledgement.isChecked()).toBe(false)
+    expect(await confirm.isEnabled()).toBe(false)
+    expect((await readGithubCalls(transport)).slice(capturedCalls.length).every(call => call.method === 'GET')).toBe(true)
     if (fileCount === 51) {
       const refreshResponse = page.waitForResponse('**/api/creatorFork/preview')
       await dialog.getByRole('button', { name: 'Preview changes', exact: true }).click()
@@ -848,7 +921,8 @@ it.each([
       expect(await acknowledgement.isEnabled()).toBe(false)
       expect(await confirm.isEnabled()).toBe(false)
     }
-    const settledApiCalls = fileCount === 51 ? [...capturedApiCalls, '/api/creatorFork/preview'] : capturedApiCalls
+    const settledApiCalls = [...capturedApiCalls, '/api/creatorFork/extendReview',
+      ...fileCount === 51 ? ['/api/creatorFork/preview'] : []]
     expect(apiCalls).toEqual(settledApiCalls)
     expect(apiCalls.filter(path => path.endsWith('/publish'))).toEqual([])
     expect((await readGithubCalls(transport)).filter(call => call.method !== 'GET')).toEqual([])

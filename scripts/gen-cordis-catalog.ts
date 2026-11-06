@@ -332,6 +332,7 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   ForkPreviewId: 'boot.md',
   ForkPreviewResult: 'boot.md',
   ForkPublishResult: 'boot.md',
+  ForkReviewResult: 'boot.md',
   InstallBundleOptions: 'boot.md',
   PluginEntryId: 'boot.md',
   BundleRowInfo: 'boot.md',

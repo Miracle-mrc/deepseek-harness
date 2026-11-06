@@ -18,6 +18,7 @@ export interface ForkPublishOverlayInjected {
   connect: () => Promise<void>
   edit: (field: 'repository' | 'branch', value: string) => void
   inspect: () => Promise<void>
+  extendReview: () => Promise<void>
   selectFile: (id: ForkPreviewId, path: string | null) => void
   reviewFile: (id: ForkPreviewId, path: string, reviewed: boolean) => void
   review: (reviewed: boolean) => void
@@ -42,6 +43,9 @@ const ISSUE_KEYS = {
   'unsafe-destination': 'forkPublishUnsafeDestination',
   'pull-request-closed': 'forkPublishPullRequestClosed',
 } satisfies Record<ForkIssueCode, AgentPresetSettingsKey>
+const NOTICE_KEYS = {
+  saved: 'forkPublishSavedToast', failed: 'forkPublishFailedToast', 'review-extended': 'forkPublishReviewExtendedToast',
+} satisfies Record<NonNullable<ForkPublishState['notice']>['kind'], AgentPresetSettingsKey>
 
 function operationIssueKey(failure: ForkFailure): AgentPresetSettingsKey {
   if (failure.effect !== 'none') {
@@ -63,7 +67,7 @@ function needsPolicyHint(failure: ForkFailure): boolean {
  * @returns The review dialog and outcome Toast, including after the dialog closes.
  */
 export function ForkPublishOverlay({
-  useForkPublish, close, connect, edit, inspect, selectFile, reviewFile, review, publish, retry, dismissNotice, t,
+  useForkPublish, close, connect, edit, inspect, extendReview, selectFile, reviewFile, review, publish, retry, dismissNotice, t,
 }: ForkPublishOverlayProps): ReactNode {
   const state = useForkPublish(value => value)
   const id = useId()
@@ -71,7 +75,7 @@ export function ForkPublishOverlay({
   const publishing = operation?.status === 'publishing'
   const uncertain = operation?.status === 'blocked' && (operation.failure.effect === 'unknown'
     || (operation.failure.effect === 'committed' && operation.failure.code !== 'pull-request-closed'))
-  const busy = state.phase === 'discovering' || state.phase === 'previewing' || publishing
+  const busy = state.phase === 'discovering' || state.phase === 'previewing' || state.phase === 'extending' || publishing
   const locked = busy || uncertain
   const preview = state.preview ?? operation?.preview
   const completeReview = state.preview !== null && state.preview.files.length > 0
@@ -83,7 +87,10 @@ export function ForkPublishOverlay({
     && operation.failure.effect !== 'none'
   const canRetry = operation?.status === 'blocked' && !lostReceipt && (operation.failure.effect !== 'none'
     || ['network', 'timeout', 'unavailable'].includes(operation.failure.code))
-  const progress = publishing ? 'forkPublishSaving' : state.phase === 'discovering' ? 'forkPublishDiscovering' : 'forkPublishPreviewing'
+  const canExtend = state.preview !== null && (operation === null
+    || (operation.status === 'blocked' && operation.failure.effect === 'none'))
+  const progress = publishing ? 'forkPublishSaving' : state.phase === 'discovering' ? 'forkPublishDiscovering'
+    : state.phase === 'extending' ? 'forkPublishExtendingReview' : 'forkPublishPreviewing'
   return <>
     <Modal open={state.open} onClose={close} title={t('forkPublishTitle')} closeLabel={t('close')}
       description={t('forkPublishIntro')} className={css.dialog as string} contentClassName={css.content as string}
@@ -93,9 +100,11 @@ export function ForkPublishOverlay({
         <Button variant={preview === undefined ? 'primary' : 'outline'}
           disabled={locked || state.repositories === null || state.repository === '' || state.branch.trim() === ''}
           onClick={() => { void inspect() }}>{t('forkPublishInspect')}</Button>
+        {canExtend ? <Button variant="outline" disabled={busy}
+          onClick={() => { void extendReview() }}>{t('forkPublishExtendReview')}</Button> : null}
         {canRetry ? <Button variant="primary" disabled={busy} onClick={() => { void retry() }}>{t('forkPublishRetry')}</Button> : null}
         {state.preview === null || operation !== null ? null : <Button variant="primary"
-          disabled={!state.reviewed || !completeReview || busy}
+          disabled={!state.reviewed || !completeReview || busy || state.phase !== 'ready'}
           onClick={() => { void publish() }}>{t('forkPublishConfirm')}</Button>}
       </div>}>
       <div className={css.form}>
@@ -151,8 +160,9 @@ export function ForkPublishOverlay({
           selectedPath={state.activeFile} reviewedFiles={state.reviewedFiles} canReview={operation === null}
           onSelect={(path) => { selectFile(preview.id, path) }}
           onReview={(path, checked) => { reviewFile(preview.id, path, checked) }} />}
+        {preview === undefined ? null : <p className={css.hint} role="note">{t('forkPublishPublicWarning')}</p>}
         {state.preview === null || operation !== null ? null : <Checkbox checked={state.reviewed}
-          disabled={!completeReview} onChange={review} label={t('forkPublishReviewed')} />}
+          disabled={!completeReview || state.phase !== 'ready'} onChange={review} label={t('forkPublishReviewed')} />}
         {operation?.status !== 'saved' ? null : <section className={css.success}>
           <p role="status">{t('forkPublishSaved', { commit: operation.result.commit })}</p>
           {operation.openFailed ? <p>{t('forkPublishOpenFailed')}</p> : null}
@@ -161,8 +171,8 @@ export function ForkPublishOverlay({
       </div>
     </Modal>
     {state.notice === null ? null : <Toast key={state.notice.seq}
-      text={t(state.notice.kind === 'saved' ? 'forkPublishSavedToast' : 'forkPublishFailedToast')}
-      icon={state.notice.kind === 'saved' ? <IconCheckOutlineRegular /> : <IconWarningOutlineRegular />}
+      text={t(NOTICE_KEYS[state.notice.kind])}
+      icon={state.notice.kind === 'failed' ? <IconWarningOutlineRegular /> : <IconCheckOutlineRegular />}
       onDone={dismissNotice} />}
   </>
 }

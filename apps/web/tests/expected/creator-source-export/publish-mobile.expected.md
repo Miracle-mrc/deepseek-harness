@@ -30,7 +30,7 @@
     - paragraph: Before shows the reviewed default branch; After shows the proposed pull request. Additional branch text shows different content this save will replace.
     - status: "Files reviewed: 0/11"
     - paragraph: Inspect each file and check its privacy box. After every file is checked, separately authorize the save; navigation never checks files for you.
-    - paragraph: Previews can expire during review. For large exports, use the local download to review offline and publish manually.
+    - paragraph: Previews can expire. Extend review rechecks the destination while preserving these exact files and individual checks; authorize the save again after it succeeds.
     - text: Search files
     - searchbox "Search files"
     - text: "Matching files: 11 1–11 of 11 Files"
@@ -76,9 +76,11 @@
     - checkbox "I checked this file for private information"
     - text: I checked this file for private information
     - button "Next unreviewed file"
+  - note: If this fork is public, saved source and retained branch history will be publicly accessible. Check them for private information before confirming.
   - checkbox "I checked every file for private information and authorize this commit and pull request" [disabled]
   - text: I checked every file for private information and authorize this commit and pull request
   - button "Close"
   - button "Load my GitHub forks"
   - button "Preview changes"
+  - button "Extend review"
   - button "Confirm and open PR" [disabled]

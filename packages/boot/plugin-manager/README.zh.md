@@ -85,11 +85,15 @@ pnpm 11 拦下依赖脚本时，失败的安装在 `pendingBuilds` 里报告 pro
 <a id="direct-github-publication"></a>
 ### 直接发布到 GitHub
 
-`ctx.creatorFork` 拥有用户触发的 `repositories`、`preview` 和显式确认的 `publish` 调用；Plugin Manager 挂载此独立服务时不联系 GitHub。身份验证由 Host 现有的 `gh` 凭据存储提供。子进程使用经过清理且非交互的环境；token、请求正文和 CLI 诊断信息不会进入远程结果或日志。Liveshare 查看者不能调用这些方法。
+`ctx.creatorFork` 拥有用户触发的 `repositories`、`preview`、`extendReview` 和显式确认的 `publish` 调用；Plugin Manager 挂载此独立服务时不联系 GitHub。身份验证由 Host 现有的 `gh` 凭据存储提供。子进程使用经过清理且非交互的环境；token、请求正文和 CLI 诊断信息不会进入远程结果或日志。Liveshare 查看者不能调用这些方法。
+
+`CreatorFork` 拒绝非所有者的 Remote 调用。随产品提供的 Cordis 检查工具仅返回 API 文档，不能执行发布。已安装的 Host 插件与程序化动态 Host 包属于受信任代码，可直接传入 `confirmed`；[动态 Host 运行器](../../extensions/cordis-host-runner/README.zh.md)不是安全沙箱。内置 Client 强制逐文件检查与单独最终确认；Host 接受调用者的声明，而不证明人工已完成审查。这些控制不限制其他已能使用 GitHub 凭据的工具：[沙箱策略](../../sandbox/sandbox/README.zh.md#known-limitations-and-deferred-work)限制文件写入，并不普遍限制凭据读取或网络访问。
 
 Host 在不透明回执中保留捕获的字节、所选 fork 身份、实际默认分支名称及提交 OID，以及目标分支头。写入限定在 `creator-exports/saved/` 下；PR（Pull Request）指向同一 fork 中已审查的默认分支。不安全路径、链接、子模块、大小写别名、疑似秘密、二进制文本、变化的分支头及超大结果均被拒绝。
 
-已有目标必须等于已审查的默认提交，或是其后代。两个完整文件树的比较会拒绝捕获范围之外非目录条目的任何差异，包括新增或删除路径、类型或模式变化，以及对象 OID 不同。落后、分叉或无关的历史均被拒绝。已有提交仍保留在分支中；文件审查覆盖最终 PR 差异，不涵盖历史提交内容中的私人信息。
+已有目标必须等于已审查的默认提交，或是其后代。两个完整文件树的比较会拒绝捕获范围之外非目录条目的任何差异，包括新增或删除路径、类型或模式变化，以及对象 OID 不同。落后、分叉或无关的历史均被拒绝。
+
+已有提交仍保留在分支中。如果所选 fork 为公开仓库，上传的源码及可达的提交历史可能在 PR 创建或合并前公开，部分失败后也可能如此。文件审查覆盖最终 PR 差异及计划写入，不涵盖每个历史提交中的私人信息；请单独审查已有历史。
 
 预览包含最终 PR 文件改动与目标写入的全部路径并集。`before` 是已审查默认提交中的精确文本；`after` 是捕获的源码。仅当写入将替换与 `before` 不同的分支文本时，才提供可选的 `branchBefore`；`null` 表示该版本中不存在文件。这也包含恢复后与默认分支相同的写入。最终没有 PR 改动的保存会被拒绝。[管理记录](../../../docs/subsystems/boot.zh.md)定义响应字段；Client 要求逐一勾选每个显示的文件，再单独进行最终授权。
 
@@ -109,7 +113,9 @@ Host 在不透明回执中保留捕获的字节、所选 fork 身份、实际默
 
 [仓库规则](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets)、签名要求、创建限制、状态检查、路径限制或 PR 策略都可能拒绝写入或阻止合并。固定且经过清理的错误不会包含 GitHub 诊断信息；请检查分支规则及 PR 以确定实际原因，必要时使用已批准的手动签名 Git 流程。不要为完成此流程而削弱保护、申请更广权限或绕过策略。在没有已授权的一次性目标仓库时，经过身份验证的发布及特定签名或规则集的兼容性仍未验证。
 
-Plugin Manager 的可选 `fork` 配置默认使用 `ghCommand: gh`、`upstreamRepository: deepseek-ai/deepseek-harness`、`timeoutMs: 20000`、`operationTimeoutMs: 120000`、`outputBytes: 16777216`、`previewLifetimeMs: 900000` 和 `maxPreviews: 4`。`upstreamRepository` 用于核实允许的 fork 网络；分支和 PR 的目标属于所选 fork。回执内存有界；未提交回执会过期，所有回执在卸载时丢弃。开始新预览时会移除已完成的回执，包括已确认关闭或合并的 PR；旧 ID 随后返回 `stale-preview`。正在进行的提交不会过期或被移除。结果未明的提交持续保留直到卸载，避免静默遗忘。用户流程和重启恢复见 [Creator 指南](../../../docs/user/develop/practice/dynamic-cordis.zh.md#save-to-my-fork)。
+`extendReview(id)` 通过只读 GitHub 请求重新核实同一份仍保留且未提交回执的账号、fork 与网络身份、权限、固定的默认分支名称及 OID，以及目标分支头，再从完成时起授予新的配置有效期。已过期但仍保留的回执可以延长。延长保留回执 ID 与捕获文本，不重新捕获、上传或自动续期。Client 保留逐文件检查及选择，但撤销最终授权。正在提交或已尝试发布的回执不能延长；结果未知、已提交或已保存的状态保持原有恢复流程。
+
+Plugin Manager 的可选 `fork` 配置默认使用 `ghCommand: gh`、`upstreamRepository: deepseek-ai/deepseek-harness`、`timeoutMs: 20000`、`operationTimeoutMs: 120000`、`outputBytes: 16777216`、`previewLifetimeMs: 900000` 和 `maxPreviews: 4`。`upstreamRepository` 用于核实允许的 fork 网络；分支和 PR 的目标属于所选 fork。回执内存有界；准备其他预览时可能回收已过期的未提交回执，所有回执在卸载时丢弃。开始新预览时会移除已完成的回执，包括已确认关闭或合并的 PR；旧 ID 随后返回 `stale-preview`。正在进行的提交不会过期或被移除。结果未明的提交持续保留直到卸载，避免静默遗忘。回收或卸载后的回执不能延长；新预览须完整检查。用户流程及回执丢失后核实先前影响的方式见 [Creator 指南](../../../docs/user/develop/practice/dynamic-cordis.zh.md#save-to-my-fork)。
 
 <a id="version-compatibility-and-exemptions"></a>
 ### 版本兼容性与豁免

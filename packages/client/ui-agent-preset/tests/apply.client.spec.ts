@@ -479,7 +479,8 @@ describe('ui-agent-preset apply', () => {
       const publishEntry = slots.entries('shell.overlay').find(item => item.component === ForkPublishOverlay)
       const publication: Partial<ForkPublishOverlayInjected> | undefined = publishEntry?.inject?.()
       if (publication?.hooks === undefined || publication.connect === undefined || publication.edit === undefined
-        || publication.inspect === undefined || publication.review === undefined || publication.publish === undefined
+        || publication.inspect === undefined || publication.extendReview === undefined
+        || publication.review === undefined || publication.publish === undefined
         || publication.selectFile === undefined || publication.reviewFile === undefined
         || publication.retry === undefined || publication.close === undefined || publication.dismissNotice === undefined
         || overlay.openPublish === undefined) throw new Error('expected fork-publication actions')
@@ -500,7 +501,9 @@ describe('ui-agent-preset apply', () => {
       } }))
       type PublishResponse = Awaited<ReturnType<typeof ctx.remote.creatorFork.publish>>
       const publish = vi.fn(async (): Promise<PublishResponse> => ({ ok: false, error: new RemoteError('gateway/internal', 'disconnected', {}) }))
-      remote.provideNamespaces({ creatorFork: { repositories, preview, publish } })
+      type ReviewResponse = Awaited<ReturnType<typeof ctx.remote.creatorFork.extendReview>>
+      const extendReview = vi.fn(async (): Promise<ReviewResponse> => ({ ok: true, value: { status: 'ready', id: 'preview-1' as ForkPreviewId } }))
+      remote.provideNamespaces({ creatorFork: { repositories, preview, publish, extendReview } })
       expect(repositories).not.toHaveBeenCalled()
       await publication.connect()
       publication.edit('repository', 'alice/harness')
@@ -511,6 +514,12 @@ describe('ui-agent-preset apply', () => {
       expect(publish).not.toHaveBeenCalled()
       const receipt = publication.hooks.forkPublish.getSnapshot().preview
       if (receipt === null) throw new Error('expected publication preview')
+      extendReview.mockResolvedValueOnce({ ok: false, error: new RemoteError('gateway/internal', 'review disconnected', {}) })
+      await publication.extendReview()
+      expect(publication.hooks.forkPublish.getSnapshot().failure?.code).toBe('network')
+      await publication.extendReview()
+      expect(extendReview).toHaveBeenCalledWith(receipt.id)
+      expect(publication.hooks.forkPublish.getSnapshot()).toMatchObject({ preview: receipt, reviewed: false, phase: 'ready' })
       for (const file of receipt.files) {
         publication.selectFile(receipt.id, file.path)
         publication.reviewFile(receipt.id, file.path, true)

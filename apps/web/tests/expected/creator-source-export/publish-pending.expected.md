@@ -72,6 +72,7 @@
         - text: export const greeting = "Created for my fork"
         - 'button "After: exact text with escaped line endings" [expanded]': Exact text with escaped line endings
         - text: "\"export const greeting = \\\"Created for my fork\\\"\\n\""
+  - note: If this fork is public, saved source and retained branch history will be publicly accessible. Check them for private information before confirming.
   - button "Close"
   - button "Load my GitHub forks" [disabled]
   - button "Preview changes" [disabled]

@@ -9,7 +9,7 @@ import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { exportProfileSource, sourceTextIssue } from './source-export.ts'
 import { ForkGithub, ForkGithubError } from './fork-github.ts'
 import type { SourceExportRequest } from './types.ts'
-import type { ForkCommitId, ForkFailure, ForkIssueCode, ForkPreviewId, ForkPreviewResult, ForkPublishResult, ForkRepositoriesResult } from './fork-types.ts'
+import type { ForkCommitId, ForkFailure, ForkIssueCode, ForkPreviewId, ForkPreviewResult, ForkPublishResult, ForkRepositoriesResult, ForkReviewResult } from './fork-types.ts'
 
 const SLUG = /^[a-z0-9][a-z0-9_.-]*\/[a-z0-9][a-z0-9_.-]*$/i
 const OID = z.string().regex(/^[a-f0-9]{40}$/).transform(value => value as ForkCommitId)
@@ -60,7 +60,7 @@ interface Receipt {
   readonly baseCommit: ForkCommitId
   readonly parent: ForkCommitId
   readonly additions: readonly { readonly path: string; readonly content: string }[]
-  readonly expires: number
+  expires: number
   readonly expectedLeaves: ReadonlyMap<string, string>
   attempted: boolean
   commit: ForkCommitId | null
@@ -336,6 +336,26 @@ export class CreatorFork extends TypertRemoteService {
   }
 
   /**
+   * Extend an unsubmitted review after revalidating its account and unchanged GitHub destination.
+   * An expired receipt can be extended only while still retained. Captured text and the receipt ID never change.
+   * @param id Existing unsubmitted receipt; attempted publications retain their separate retry flow.
+   * @returns The same receipt ID with a fresh configured lifetime, or a sanitized refusal without writes.
+   */
+  @Remote
+  async extendReview(id: ForkPreviewId): Promise<ForkReviewResult> {
+    return this.operation(async (signal) => {
+      const receipt = this.receipts.get(id)
+      if (receipt === undefined) refuse('stale-preview')
+      const eligible = (): boolean => this.receipts.get(id) === receipt && !receipt.attempted && receipt.pending === null
+      if (!eligible()) refuse('stale-preview')
+      await this.recheck(receipt, signal)
+      if (!eligible()) refuse('stale-preview')
+      receipt.expires = Date.now() + this.config.previewLifetimeMs
+      return { status: 'ready', id } as const
+    })
+  }
+
+  /**
    * Apply only retained destination writes after explicit confirmation, reusing an existing commit when no write is needed.
    * Create or reuse its PR to the reviewed default; detected default-name, base-commit or target-head changes stop new writes.
    * Repeated calls share an in-flight operation and reconcile lost responses. A closed PR is reported without recreating it.
@@ -343,7 +363,8 @@ export class CreatorFork extends TypertRemoteService {
    * A failed PR retains the approved commit; unknown writes remain unknown until reconciliation,
    * with no forced rollback or branch deletion.
    * @param id Receipt from preview; source text and destinations cannot be replaced by this call.
-   * @param confirmed The person's explicit acknowledgement of the displayed diff and destinations.
+   * @param confirmed Caller attestation of the person's authorization of these exact files and destinations;
+   * trusted Host code can supply it directly.
    * @returns Confirmed commit and PR, or a sanitized refusal stating absent, unknown, or committed remote effects.
    */
   @Remote

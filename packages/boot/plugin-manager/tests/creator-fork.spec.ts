@@ -467,6 +467,171 @@ it('requires a known unexpired preview before any publication lookup', async () 
   expect(state.requests).toHaveLength(reads)
 })
 
+it.each([false, true])('long review extends the same expired receipt without recapturing source (existing=%s)', async (existing) => {
+  const { service, state, dir } = await fixture(existing, { config: { previewLifetimeMs: 100 } })
+  const now = vi.spyOn(Date, 'now').mockReturnValue(1000)
+  onTestFinished(() => { now.mockRestore() })
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  const captured = JSON.stringify(preview)
+  await writeFile(join(dir, 'cordis.patch.yml'), '- id: changed-after-review\n')
+  now.mockReturnValue(1101)
+  expect(await service.publish(preview.id, true)).toEqual({ status: 'blocked', code: 'stale-preview', effect: 'none' })
+  const reads = state.requests.length
+  expect(await service.extendReview(preview.id)).toEqual({ status: 'ready', id: preview.id })
+  expect(state.requests.slice(reads).every(request => request.method === 'GET')).toBe(true)
+  expect(JSON.stringify(preview)).toBe(captured)
+  now.mockReturnValue(1200)
+  expect((await service.publish(preview.id, true)).status).toBe('saved')
+  const written = state.requests.filter(request => request.method === 'POST').map(request => JSON.stringify(request.body)).join('\n')
+  expect(written).not.toContain('changed-after-review')
+  expect(state.commits.size).toBe(1)
+})
+
+it('long review can extend repeatedly while retaining the original preview id and text', async () => {
+  const { service, state } = await fixture(true, { config: { previewLifetimeMs: 100 } })
+  const now = vi.spyOn(Date, 'now').mockReturnValue(1000)
+  onTestFinished(() => { now.mockRestore() })
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  for (const time of [1090, 1180, 1270]) {
+    now.mockReturnValue(time)
+    expect(await service.extendReview(preview.id)).toEqual({ status: 'ready', id: preview.id })
+  }
+  expect(state.requests.every(request => request.method === 'GET')).toBe(true)
+  now.mockReturnValue(1369)
+  expect((await service.publish(preview.id, true)).status).toBe('saved')
+})
+
+it.each(['base', 'head', 'default', 'account', 'repository', 'network', 'permission'] as const)(
+  'long review refuses %s drift without refreshing an expired receipt', async (change) => {
+    const { service, state } = await fixture(true, { config: { previewLifetimeMs: 100 } })
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1000)
+    onTestFinished(() => { now.mockRestore() })
+    const preview = await service.preview(TARGET)
+    if (preview.status !== 'ready') throw new Error('preview refused')
+    if (change === 'base') state.baseHeads.set('main', OTHER)
+    else if (change === 'head') state.head = OTHER
+    else if (change === 'default') state.defaultBranch = 'develop'
+    else if (change === 'account') state.user = { id: 8, login: 'other-person' }
+    else if (change === 'repository') state.repositoryId = 9
+    else if (change === 'network') state.sourceId = 9
+    else state.writable = false
+    now.mockReturnValue(1101)
+    expect(await service.extendReview(preview.id)).toMatchObject({ status: 'blocked', effect: 'none' })
+    expect(await service.publish(preview.id, true)).toEqual({ status: 'blocked', code: 'stale-preview', effect: 'none' })
+    expect(state.requests.every(request => request.method === 'GET')).toBe(true)
+  },
+)
+
+it('long review refuses unknown receipts and non-owner extensions before contacting GitHub', async () => {
+  const { ctx, service, state } = await fixture()
+  expect(await service.extendReview('missing' as ForkPreviewId)).toEqual({ status: 'blocked', code: 'stale-preview', effect: 'none' })
+  const guest = remoteContext(ctx, { kind: 'creator-fork-test-guest' }).creatorFork
+  expect(await guest.extendReview('missing' as ForkPreviewId)).toEqual({ status: 'blocked', code: 'permission-denied', effect: 'none' })
+  expect(state.requests).toEqual([])
+})
+
+it.each(['unknown', 'committed', 'saved'] as const)('long review cannot replace a %s publication outcome', async (effect) => {
+  const { service, state } = await fixture(true)
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  if (effect === 'unknown') state.lostCommit = true
+  if (effect === 'committed') state.failPr = true
+  const publication = await service.publish(preview.id, true)
+  expect(publication.status).toBe(effect === 'saved' ? 'saved' : 'blocked')
+  const reads = state.requests.length
+  expect(await service.extendReview(preview.id)).toMatchObject({ status: 'blocked' })
+  expect(state.requests).toHaveLength(reads)
+  state.failPr = false
+  expect((await service.publish(preview.id, true)).status).toBe('saved')
+  expect(state.commits.size).toBe(1)
+})
+
+it('long review does not resurrect an expired receipt reclaimed during revalidation', async () => {
+  const { service, state } = await fixture(false, { config: { previewLifetimeMs: 100, maxPreviews: 1 } })
+  const now = vi.spyOn(Date, 'now').mockReturnValue(1000)
+  onTestFinished(() => { now.mockRestore() })
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  now.mockReturnValue(1101)
+  const entered = Promise.withResolvers<undefined>()
+  const release = Promise.withResolvers<undefined>()
+  onTestFinished(() => { release.resolve(undefined) })
+  let identities = 0
+  state.beforeRequest = async (request) => {
+    if (request.path === 'user' && ++identities === 1) { entered.resolve(undefined); await release.promise }
+  }
+  const extension = service.extendReview(preview.id)
+  await entered.promise
+  const replacement = await service.preview(TARGET).finally(() => { release.resolve(undefined) })
+  expect(replacement.status).toBe('ready')
+  expect(await extension).toEqual({ status: 'blocked', code: 'stale-preview', effect: 'none' })
+  expect(await service.publish(preview.id, true)).toEqual({ status: 'blocked', code: 'stale-preview', effect: 'none' })
+  expect(state.requests.every(request => request.method === 'GET')).toBe(true)
+})
+
+it('long review refuses renewal when publication starts during its read-only revalidation', async () => {
+  const { service, state } = await fixture(true)
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  const entered = Promise.withResolvers<undefined>()
+  const release = Promise.withResolvers<undefined>()
+  const mutation = Promise.withResolvers<undefined>()
+  const finish = Promise.withResolvers<undefined>()
+  onTestFinished(() => { release.resolve(undefined); finish.resolve(undefined) })
+  let identities = 0
+  state.beforeRequest = async (request) => {
+    if (request.path === 'user' && ++identities === 1) { entered.resolve(undefined); await release.promise }
+    if (request.path === 'graphql') { mutation.resolve(undefined); await finish.promise }
+  }
+  const extension = service.extendReview(preview.id)
+  await entered.promise
+  const publication = service.publish(preview.id, true)
+  await mutation.promise
+  release.resolve(undefined)
+  expect(await extension).toEqual({ status: 'blocked', code: 'stale-preview', effect: 'none' })
+  finish.resolve(undefined)
+  expect((await publication).status).toBe('saved')
+  expect(state.requests.filter(request => request.path === 'graphql')).toHaveLength(1)
+})
+
+it('long review cannot renew a publication still validating before its first write', async () => {
+  const { service, state } = await fixture(true)
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  const entered = Promise.withResolvers<undefined>()
+  const release = Promise.withResolvers<undefined>()
+  onTestFinished(() => { release.resolve(undefined) })
+  let identities = 0
+  state.beforeRequest = async (request) => {
+    if (request.path === 'user' && ++identities === 1) { entered.resolve(undefined); await release.promise }
+  }
+  const publication = service.publish(preview.id, true)
+  await entered.promise
+  const reads = state.requests.length
+  expect(await service.extendReview(preview.id)).toEqual({ status: 'blocked', code: 'stale-preview', effect: 'none' })
+  expect(state.requests).toHaveLength(reads)
+  release.resolve(undefined)
+  expect((await publication).status).toBe('saved')
+})
+
+it('long review retries a failed read without changing the expired receipt or publishing', async () => {
+  const { service, state } = await fixture(false, { config: { previewLifetimeMs: 100 } })
+  const now = vi.spyOn(Date, 'now').mockReturnValue(1000)
+  onTestFinished(() => { now.mockRestore() })
+  const preview = await service.preview(TARGET)
+  if (preview.status !== 'ready') throw new Error('preview refused')
+  now.mockReturnValue(1101)
+  state.beforeRequest = async () => { throw new ForkGithubError('network') }
+  expect(await service.extendReview(preview.id)).toEqual({ status: 'blocked', code: 'network', effect: 'none' })
+  expect(await service.publish(preview.id, true)).toEqual({ status: 'blocked', code: 'stale-preview', effect: 'none' })
+  state.beforeRequest = undefined
+  expect(await service.extendReview(preview.id)).toEqual({ status: 'ready', id: preview.id })
+  expect(state.requests.every(request => request.method === 'GET')).toBe(true)
+  expect((await service.publish(preview.id, true)).status).toBe('saved')
+})
+
 it('shares a pending publication after its unsubmitted preview lifetime expires', async () => {
   const { service, state } = await fixture(true, { config: { previewLifetimeMs: 100 } })
   const now = vi.spyOn(Date, 'now').mockReturnValue(1000)

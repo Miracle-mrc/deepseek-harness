@@ -148,6 +148,11 @@ export function apply(ctx: ClientContext): void {
         if (result === undefined || !result.ok) throw new Error('Creator fork preview is unavailable')
         return result.value
       },
+      extendReview: async (id) => {
+        const result = await forkRemote()?.extendReview(id)
+        if (result === undefined || !result.ok) throw new Error('Creator fork review extension is unavailable')
+        return result.value
+      },
       publish: async (id, confirmed) => {
         const result = await forkRemote()?.publish(id, confirmed)
         if (result === undefined || !result.ok) throw new Error('Creator fork publication outcome is unavailable')
@@ -183,6 +188,7 @@ export function apply(ctx: ClientContext): void {
         hooks: { forkPublish: forkPublish.store }, close: () => { forkPublish.close() }, connect: () => forkPublish.connect(),
         edit: (field: 'repository' | 'branch', value: string) => { forkPublish.edit(field, value) },
         inspect: () => forkPublish.inspect(), review: (reviewed: boolean) => { forkPublish.review(reviewed) },
+        extendReview: () => forkPublish.extendReview(),
         selectFile: (id: ForkPreviewId, path: string | null) => { forkPublish.selectFile(id, path) },
         reviewFile: (id: ForkPreviewId, path: string, reviewed: boolean) => { forkPublish.reviewFile(id, path, reviewed) },
         publish: () => forkPublish.publish(), retry: () => forkPublish.retry(), dismissNotice: () => { forkPublish.dismissNotice() },

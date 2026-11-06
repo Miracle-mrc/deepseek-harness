@@ -14,6 +14,8 @@
 
 每个 `ForkFileDiff.before` 是已审查默认提交中的精确文本，不存在时为 `null`；`after` 是捕获的源码。仅当实际写入将替换与 `before` 不同的分支文本时，才提供可选的 `branchBefore`，其中 `null` 表示该分支中不存在文件。`ForkPublishResult` 标识所选 fork 中已批准的提交及打开的 PR；确认可能复用已有提交。`ForkFailure` 携带经过清理的错误码及分支或 PR 的影响（`none`、`unknown` 或 `committed`）；匹配的 PR 已关闭时，可包含安全的 `pullRequestUrl`。[直接发布参考](../../packages/boot/plugin-manager/README.zh.md#direct-github-publication)说明历史关系检查、回执寿命、并发、签名及恢复。
 
+Host 重新核实并刷新仍保留回执的配置有效期后，`ForkReviewResult` 返回 `ready` 及同一个 `ForkPreviewId`；失败时返回 `ForkFailure`。它不携带源码字节或替代预览。
+
 `PluginEntryId` 标识一个 Loader 条目；调用方从 `listPlugins` 获取，不自行拼接 patch id。
 
 `PluginInfo` 包含模块标识、实际启停状态、fiber 阶段和可选的展示 `meta`，以及唯一的 `patchId` 或 `readOnlyReason`。
@@ -175,6 +177,14 @@ Owns bounded source receipts, GitHub identity checks, atomic branch writes, and 
 @Remote async preview(request: SourceExportRequest): Promise<ForkPreviewResult>
 
 /**
+ * Extend an unsubmitted review after revalidating its account and unchanged GitHub destination.
+ * An expired receipt can be extended only while still retained. Captured text and the receipt ID never change.
+ * @param id Existing unsubmitted receipt; attempted publications retain their separate retry flow.
+ * @returns The same receipt ID with a fresh configured lifetime, or a sanitized refusal without writes.
+ */
+@Remote async extendReview(id: ForkPreviewId): Promise<ForkReviewResult>
+
+/**
  * Apply only retained destination writes after explicit confirmation, reusing an existing commit when no write is needed.
  * Create or reuse its PR to the reviewed default; detected default-name, base-commit or target-head changes stop new writes.
  * Repeated calls share an in-flight operation and reconcile lost responses. A closed PR is reported without recreating it.
@@ -182,7 +192,8 @@ Owns bounded source receipts, GitHub identity checks, atomic branch writes, and 
  * A failed PR retains the approved commit; unknown writes remain unknown until reconciliation,
  * with no forced rollback or branch deletion.
  * @param id Receipt from preview; source text and destinations cannot be replaced by this call.
- * @param confirmed The person's explicit acknowledgement of the displayed diff and destinations.
+ * @param confirmed Caller attestation of the person's authorization of these exact files and destinations;
+ * trusted Host code can supply it directly.
  * @returns Confirmed commit and PR, or a sanitized refusal stating absent, unknown, or committed remote effects.
  */
 @Remote async publish(id: ForkPreviewId, confirmed: boolean): Promise<ForkPublishResult>

@@ -402,7 +402,7 @@ describe('viewer page startup contract', () => {
     const { decide, grants } = await fixture()
     const ownerOnly = ['account/watch', 'job/list', 'job/follow', 'settings/describe',
       'credentials/describe', 'pluginManager/listPlugins', 'pluginManager/exportSource',
-      'creatorFork/repositories', 'creatorFork/preview', 'creatorFork/publish', 'schedule/list'] as const
+      'creatorFork/repositories', 'creatorFork/preview', 'creatorFork/extendReview', 'creatorFork/publish', 'schedule/list'] as const
     for (const action of ownerOnly) expect(decide(action, GLOBAL)).toEqual(deny('liveshare/read-only'))
     const granted = new Set(grants().flatMap(grant => [...grant.actions]))
     for (const action of ownerOnly) expect(granted.has(action)).toBe(false)

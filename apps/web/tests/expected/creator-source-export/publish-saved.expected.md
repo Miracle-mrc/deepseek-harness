@@ -70,6 +70,7 @@
         - text: export const greeting = "Created for my fork"
         - 'button "After: exact text with escaped line endings" [expanded]': Exact text with escaped line endings
         - text: "\"export const greeting = \\\"Created for my fork\\\"\\n\""
+  - note: If this fork is public, saved source and retained branch history will be publicly accessible. Check them for private information before confirming.
   - status: Pull request ready for commit cccccccccccccccccccccccccccccccccccccccc.
   - link "Open pull request":
     - /url: https://github.com/alice/harness/pull/17

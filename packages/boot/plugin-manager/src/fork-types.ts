@@ -71,3 +71,9 @@ export type ForkPublishResult = ForkFailure | {
   readonly commit: ForkCommitId
   readonly pullRequestUrl: string
 }
+
+/** Revalidated review time for the same retained source; no source recapture or remote write. */
+export type ForkReviewResult = ForkFailure | {
+  readonly status: 'ready'
+  readonly id: ForkPreviewId
+}

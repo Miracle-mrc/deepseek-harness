@@ -40,7 +40,7 @@ export type {
   PluginUpdateProgress, PluginUpdateResult, PluginUpdateStep, PluginVersion, PluginVersionList, RegistryAttempt,
   ReadOnlyReason, Registry, RestartReason, SourceExportIssueCode, SourceExportRequest, SourceExportResult,
   ForkPreviewId, ForkCommitId, ForkIssueCode, ForkFailure, ForkRepository, ForkRepositoriesResult, ForkFileDiff,
-  ForkPreviewResult, ForkPublishResult,
+  ForkPreviewResult, ForkPublishResult, ForkReviewResult,
 } from '@deepseek-ai/dsh-plugin-manager/types'
 export type {} from '@deepseek-ai/dsh-plugin-manager/remote'
 export type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/remote'

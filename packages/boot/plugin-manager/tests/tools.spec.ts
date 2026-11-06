@@ -58,6 +58,20 @@ it.each(['read-only', 'workspace-write'] as const)('denies every management acti
   for (const method of Object.values(manager)) expect(method).not.toHaveBeenCalled()
 })
 
+it.each(['repositories', 'preview', 'publish', 'extendReview'])(
+  'does not expose Creator %s as a plugin management action even with full access', async (action) => {
+    const { ctx, call, manager } = await fixture()
+    const publication = vi.fn(() => { throw new Error('A management action invoked Creator publication') })
+    ctx.provide('creatorFork', { repositories: publication, preview: publication, publish: publication,
+      extendReview: publication })
+
+    const result = await call({ action, target: 'person/fork', id: 'unreviewed-receipt', confirmed: true })
+    expect(result.isError).toBe(true)
+    expect(publication).not.toHaveBeenCalled()
+    for (const method of Object.values(manager)) expect(method).not.toHaveBeenCalled()
+  },
+)
+
 it('preserves selected bundle load errors in the agent list result', async () => {
   const { manager, call } = await fixture()
   const bundles = [{

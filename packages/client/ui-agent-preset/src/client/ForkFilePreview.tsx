@@ -80,7 +80,8 @@ export function ForkFilePreview({ preview, selectedPath, reviewedFiles, canRevie
   readonly t: Translate
 }): ReactNode {
   const [query, setQuery] = useState('')
-  const [page, setPage] = useState(0)
+  const [page, setPage] = useState(() => Math.max(0,
+    Math.floor(preview.files.findIndex(file => file.path === selectedPath) / FILES_PER_PAGE)))
   const id = useId()
   const reviewed = useMemo(() => new Set(reviewedFiles), [reviewedFiles])
   const nextUnreviewed = useMemo(() => {
