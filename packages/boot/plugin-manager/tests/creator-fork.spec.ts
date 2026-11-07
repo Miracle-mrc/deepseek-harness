@@ -255,6 +255,90 @@ function seedCommit(
   return entries
 }
 
+it.each(['new', 'descendant'] as const)('dense destination lookup bounds remote path normalization for a %s branch', async (kind) => {
+  const { service, state } = await fixture(kind === 'descendant')
+  const remoteFiles = Array.from({ length: 256 }, (_, index) => ({
+    path: `repository-file-${String(index).padStart(4, '0')}.txt`, content: 'Public repository text\n',
+  }))
+  seedCommit(state, BASE, [], remoteFiles)
+  if (kind === 'descendant') {
+    seedCommit(state, OTHER, [BASE], remoteFiles)
+    state.head = OTHER
+  }
+  const remotePaths = new Set(remoteFiles.map(file => file.path))
+  // oxlint-disable-next-line typescript/unbound-method -- Invoked only with an explicit string receiver below.
+  const normalize = String.prototype.normalize
+  let remoteNormalizations = 0
+  const normalization = vi.spyOn(String.prototype, 'normalize').mockImplementation(function (this: string, form?: string) {
+    if (remotePaths.has(this)) remoteNormalizations++
+    return normalize.call(this, form)
+  })
+  onTestFinished(() => { normalization.mockRestore() })
+  try {
+    const preview = await service.preview(TARGET)
+    expect(preview.status).toBe('ready')
+    const readTrees = state.requests.filter(request => request.method === 'GET' && request.path.includes('/git/trees/'))
+    const readEntries = readTrees.reduce((count, request) => {
+      const oid = request.path.split('/git/trees/')[1]?.split('?')[0] ?? ''
+      return count + (state.trees.get(oid)?.length ?? 0)
+    }, 0)
+    expect(readEntries).toBeGreaterThanOrEqual(remoteFiles.length)
+    expect(remoteNormalizations).toBeLessThanOrEqual(2 * readEntries)
+    expect(state.requests.every(request => request.method === 'GET')).toBe(true)
+  } finally { normalization.mockRestore() }
+})
+
+it('dense destination lookup permits unrelated case and NFC aliases outside the captured export', async () => {
+  const { service, state } = await fixture()
+  state.tree = ['Readme.txt', 'readme.txt', 'README.txt', 'caf\u00e9.txt', 'cafe\u0301.txt'].map(path => ({
+    path, type: 'blob', mode: '100644', sha: BASE,
+  }))
+  expect((await service.preview(TARGET)).status).toBe('ready')
+  expect(state.requests.every(request => request.method === 'GET')).toBe(true)
+})
+
+it.each([false, true])('dense destination lookup refuses matching ancestor aliases in either order (aliasFirst=%s)', async (aliasFirst) => {
+  const { service, state } = await fixture()
+  const exact = { path: 'creator-exports', type: 'tree', mode: '040000', sha: BASE }
+  const alias = { ...exact, path: 'Creator-exports' }
+  state.tree = aliasFirst ? [alias, exact] : [exact, alias]
+  expect(await service.preview(TARGET)).toEqual({ status: 'blocked', code: 'unsafe-destination', effect: 'none' })
+  expect(state.requests.every(request => request.method === 'GET')).toBe(true)
+})
+
+it.each([
+  { type: 'blob', mode: '100644', unsafeFirst: false },
+  { type: 'blob', mode: '100644', unsafeFirst: true },
+  { type: 'tree', mode: '100755', unsafeFirst: false },
+  { type: 'tree', mode: '100755', unsafeFirst: true },
+])('dense destination lookup refuses every duplicate ancestor with $type:$mode (unsafeFirst=$unsafeFirst)', async ({ type, mode, unsafeFirst }) => {
+  const { service, state } = await fixture()
+  const exact = { path: 'creator-exports', type: 'tree', mode: '040000', sha: BASE }
+  const unsafe = { ...exact, type, mode }
+  state.tree = unsafeFirst ? [unsafe, exact] : [exact, unsafe]
+  expect(await service.preview(TARGET)).toEqual({ status: 'blocked', code: 'unsafe-destination', effect: 'none' })
+  expect(state.requests.every(request => request.method === 'GET')).toBe(true)
+})
+
+it.each([false, true])('dense destination lookup retains the first exact leaf for review (unsafeFirst=%s)', async (unsafeFirst) => {
+  const { service, state } = await fixture()
+  const firstText = 'Public first destination\n'
+  const secondText = 'Public later destination\n'
+  const first = { path: 'creator-exports/saved/.gitignore', type: 'blob', mode: unsafeFirst ? '100755' : '100644', sha: blobId(Buffer.from(firstText)) }
+  const second = { ...first, mode: unsafeFirst ? '100644' : '100755', sha: blobId(Buffer.from(secondText)) }
+  state.tree = [first, second]
+  state.blobs.set(first.sha, Buffer.from(firstText))
+  state.blobs.set(second.sha, Buffer.from(secondText))
+  const preview = await service.preview(TARGET)
+  if (unsafeFirst) expect(preview).toEqual({ status: 'blocked', code: 'unsafe-destination', effect: 'none' })
+  else {
+    expect(preview.status).toBe('ready')
+    if (preview.status !== 'ready') throw new Error('preview refused')
+    expect(preview.files.find(file => file.path === first.path)?.before).toBe(firstText)
+  }
+  expect(state.requests.every(request => request.method === 'GET')).toBe(true)
+})
+
 it('does no GitHub work at construction and lists only an authenticated writable fork after an explicit action', async () => {
   const { service, state } = await fixture()
   expect(state.requests).toEqual([])

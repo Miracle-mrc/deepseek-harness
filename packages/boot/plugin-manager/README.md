@@ -91,7 +91,7 @@ The browser downloads the exact preview it displays. Repository and branch value
 
 The Host retains the captured bytes, selected fork identity, actual default-branch name and commit OID, and destination head in an opaque receipt. Writes stay below `creator-exports/saved/`; the PR targets the reviewed default branch in the same fork. Unsafe paths, links, submodules, case aliases, suspected secrets, binary text, changed heads and oversized results are refused.
 
-An existing destination must equal or descend from the reviewed default commit. Comparing both complete trees rejects every non-captured leaf difference, including an added or deleted path, changed type or mode, or different object OID. Behind, diverged or unrelated histories are refused.
+An existing destination must equal or descend from the reviewed default commit. Comparing both complete trees rejects every non-captured leaf difference, including an added or deleted path, changed type or mode, or different object OID. Remote paths are indexed once per preview, preserving exact paths and normalized ancestor checks without rescanning the complete tree for every captured file. Behind, diverged or unrelated histories are refused.
 
 Existing commits remain in the branch. If the selected fork is public, uploaded source and reachable commit history can be public before a PR is opened or merged, including after a partial failure. File review covers the resulting PR diff and planned writes, not private information in every historical commit; review existing history separately.
 

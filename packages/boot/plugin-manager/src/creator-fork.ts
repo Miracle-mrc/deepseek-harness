@@ -97,15 +97,32 @@ function leaves(tree: z.infer<typeof TREE>): Map<string, string> {
   return new Map(tree.tree.filter(entry => entry.type !== 'tree')
     .map(entry => [entry.path, `${entry.mode}:${entry.type}:${entry.sha}`]))
 }
-function destination(tree: z.infer<typeof TREE>, path: string): z.infer<typeof TREE>['tree'][number] | undefined {
+/** Index each immutable tree once, retaining exact paths, ambiguous aliases, and every ancestor's safety. */
+function destinationIndex(tree: z.infer<typeof TREE>): (path: string) => z.infer<typeof TREE>['tree'][number] | undefined {
+  const entries = new Map<string, { first: z.infer<typeof TREE>['tree'][number]; aliased: boolean; unsafeAncestor: boolean }>()
   for (const entry of tree.tree) {
     const folded = entry.path.normalize('NFC').toLowerCase()
-    const target = path.normalize('NFC').toLowerCase()
-    if ((folded === target || target.startsWith(`${folded}/`))
-      && path.slice(0, entry.path.length) !== entry.path) refuse('unsafe-destination')
-    if (path.startsWith(`${entry.path}/`) && (entry.type !== 'tree' || entry.mode !== '040000')) refuse('unsafe-destination')
+    const unsafeAncestor = entry.type !== 'tree' || entry.mode !== '040000'
+    const prior = entries.get(folded)
+    if (prior === undefined) entries.set(folded, { first: entry, aliased: false, unsafeAncestor })
+    else {
+      prior.aliased ||= prior.first.path !== entry.path
+      prior.unsafeAncestor ||= unsafeAncestor
+    }
   }
-  return tree.tree.find(entry => entry.path === path)
+  return (path) => {
+    const target = path.normalize('NFC').toLowerCase()
+    let prefix = ''
+    for (const part of target.split('/')) {
+      prefix = prefix === '' ? part : `${prefix}/${part}`
+      const entry = entries.get(prefix)
+      if (entry === undefined) continue
+      if (entry.aliased || path.slice(0, entry.first.path.length) !== entry.first.path) refuse('unsafe-destination')
+      if (path.startsWith(`${entry.first.path}/`) && entry.unsafeAncestor) refuse('unsafe-destination')
+    }
+    const exact = entries.get(target)?.first
+    return exact?.path === path ? exact : undefined
+  }
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -309,10 +326,12 @@ export class CreatorFork extends TypertRemoteService {
         if (bytes > MAX_PREVIEW_BYTES) refuse('too-large')
         files.push(diff)
       }
+      const baseDestination = destinationIndex(baseTree)
+      const branchDestination = tree === baseTree ? baseDestination : destinationIndex(tree)
       for (const file of source.files) {
         const path = `${PREFIX}${file.path}`
-        const before = await this.text(repo.full_name, destination(baseTree, path), path, signal)
-        const branchBefore = tree === baseTree ? before : await this.text(repo.full_name, destination(tree, path), path, signal)
+        const before = await this.text(repo.full_name, baseDestination(path), path, signal)
+        const branchBefore = tree === baseTree ? before : await this.text(repo.full_name, branchDestination(path), path, signal)
         addFile(path, before, branchBefore, file.content)
       }
       if (prChanges === 0) refuse('no-changes')
