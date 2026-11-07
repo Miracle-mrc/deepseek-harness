@@ -13,4 +13,5 @@
   - alert: Enter a valid branch name other than main or master.
   - paragraph: Repository and branch are recorded in the download. Repository access is not checked.
   - button "Close"
+  - button "Save directly to GitHub"
   - button "Retry inspection"

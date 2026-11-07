@@ -1,0 +1,178 @@
+/** Explicitly authorized fork discovery, byte-exact before/after review, and receipt-only publication. */
+import { useId, type ReactNode } from 'react'
+import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
+import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
+import type { ForkFailure, ForkIssueCode, ForkPreviewId } from '@deepseek-ai/dsh-api-remotes/client'
+import {
+  Button, Checkbox, IconCheckOutlineRegular, IconWarningOutlineRegular, Input, Modal, StateDot, Toast,
+} from '@deepseek-ai/dsh-client-ui-primitives'
+import type { AgentPresetSettingsKey } from './locales.ts'
+import type { ForkPublishState } from './fork-publish-store.ts'
+import { ForkFilePreview } from './ForkFilePreview.tsx'
+import css from './ForkPublish.module.css'
+
+/** Read-only snapshots and explicit commands supplied by the owning registration. */
+export interface ForkPublishOverlayInjected {
+  hooks: { forkPublish: SnapshotStore<ForkPublishState> }
+  close: () => void
+  connect: () => Promise<void>
+  edit: (field: 'repository' | 'branch', value: string) => void
+  inspect: () => Promise<void>
+  extendReview: () => Promise<void>
+  selectFile: (id: ForkPreviewId, path: string | null) => void
+  reviewFile: (id: ForkPreviewId, path: string, reviewed: boolean) => void
+  review: (reviewed: boolean) => void
+  publish: () => Promise<void>
+  retry: () => Promise<void>
+  dismissNotice: () => void
+}
+
+type ForkPublishOverlayProps = PropsLocale<'settings.agentPreset'> & InjectFace<ForkPublishOverlayInjected>
+
+const ISSUE_KEYS = {
+  'invalid-repository': 'forkInvalidRepository', 'invalid-branch': 'forkInvalidBranch',
+  'profile-unavailable': 'forkProfileUnavailable', 'unsafe-path': 'forkUnsafePath',
+  'source-unavailable': 'forkSourceUnavailable', 'unsupported-source': 'forkUnsupportedSource',
+  'secret-suspected': 'forkSecretSuspected', 'source-changed': 'forkSourceChanged', 'too-large': 'forkPublishTooLarge',
+  'auth-required': 'forkPublishAuthRequired', 'permission-denied': 'forkPublishPermissionDenied',
+  'not-found': 'forkPublishNotFound', conflict: 'forkPublishConflict', timeout: 'forkPublishUnavailable',
+  unavailable: 'forkPublishUnavailable', 'invalid-response': 'forkPublishUnavailable', network: 'forkPublishUnavailable',
+  'wrong-fork': 'forkPublishWrongFork', 'mixed-account': 'forkPublishMixedAccount',
+  'default-branch': 'forkPublishDefaultBranch', 'stale-preview': 'forkPublishStalePreview',
+  'confirmation-required': 'forkPublishConfirmationRequired', 'no-changes': 'forkPublishNoChanges',
+  'unsafe-destination': 'forkPublishUnsafeDestination',
+  'pull-request-closed': 'forkPublishPullRequestClosed',
+} satisfies Record<ForkIssueCode, AgentPresetSettingsKey>
+const NOTICE_KEYS = {
+  saved: 'forkPublishSavedToast', failed: 'forkPublishFailedToast', 'review-extended': 'forkPublishReviewExtendedToast',
+} satisfies Record<NonNullable<ForkPublishState['notice']>['kind'], AgentPresetSettingsKey>
+
+function operationIssueKey(failure: ForkFailure): AgentPresetSettingsKey {
+  if (failure.effect !== 'none') {
+    if (failure.code === 'default-branch') return 'forkPublishConflict'
+    if (failure.code === 'stale-preview') return 'forkPublishLostReceipt'
+    if (['mixed-account', 'permission-denied', 'not-found', 'wrong-fork', 'auth-required'].includes(failure.code)) {
+      return 'forkPublishRetainedAccess'
+    }
+  }
+  return ISSUE_KEYS[failure.code]
+}
+function needsPolicyHint(failure: ForkFailure): boolean {
+  return failure.code === 'permission-denied' || failure.code === 'conflict'
+}
+
+/**
+ * Render authorized choices and on-demand exact file review before explicit commit and PR confirmation.
+ * @param props Publication view state, user-triggered commands, and localized copy.
+ * @returns The review dialog and outcome Toast, including after the dialog closes.
+ */
+export function ForkPublishOverlay({
+  useForkPublish, close, connect, edit, inspect, extendReview, selectFile, reviewFile, review, publish, retry, dismissNotice, t,
+}: ForkPublishOverlayProps): ReactNode {
+  const state = useForkPublish(value => value)
+  const id = useId()
+  const operation = state.operation
+  const publishing = operation?.status === 'publishing'
+  const uncertain = operation?.status === 'blocked' && (operation.failure.effect === 'unknown'
+    || (operation.failure.effect === 'committed' && operation.failure.code !== 'pull-request-closed'))
+  const busy = state.phase === 'discovering' || state.phase === 'previewing' || state.phase === 'extending' || publishing
+  const locked = busy || uncertain
+  const preview = state.preview ?? operation?.preview
+  const completeReview = state.preview !== null && state.preview.files.length > 0
+    && state.reviewedFiles.length === state.preview.files.length
+  const metadata = preview ?? state.repositories
+  const branchError = state.failure?.code === 'invalid-branch' || state.failure?.code === 'default-branch'
+  const repositoryError = state.failure?.code === 'invalid-repository'
+  const lostReceipt = operation?.status === 'blocked' && operation.failure.code === 'stale-preview'
+    && operation.failure.effect !== 'none'
+  const canRetry = operation?.status === 'blocked' && !lostReceipt && (operation.failure.effect !== 'none'
+    || ['network', 'timeout', 'unavailable'].includes(operation.failure.code))
+  const canExtend = state.preview !== null && (operation === null
+    || (operation.status === 'blocked' && operation.failure.effect === 'none'))
+  const progress = publishing ? 'forkPublishSaving' : state.phase === 'discovering' ? 'forkPublishDiscovering'
+    : state.phase === 'extending' ? 'forkPublishExtendingReview' : 'forkPublishPreviewing'
+  return <>
+    <Modal open={state.open} onClose={close} title={t('forkPublishTitle')} closeLabel={t('close')}
+      description={t('forkPublishIntro')} className={css.dialog as string} contentClassName={css.content as string}
+      footer={<div className={css.actions}>
+        <Button variant="outline" onClick={close}>{t('close')}</Button>
+        <Button variant="outline" disabled={locked} onClick={() => { void connect() }}>{t('forkPublishConnect')}</Button>
+        <Button variant={preview === undefined ? 'primary' : 'outline'}
+          disabled={locked || state.repositories === null || state.repository === '' || state.branch.trim() === ''}
+          onClick={() => { void inspect() }}>{t('forkPublishInspect')}</Button>
+        {canExtend ? <Button variant="outline" disabled={busy}
+          onClick={() => { void extendReview() }}>{t('forkPublishExtendReview')}</Button> : null}
+        {canRetry ? <Button variant="primary" disabled={busy} onClick={() => { void retry() }}>{t('forkPublishRetry')}</Button> : null}
+        {state.preview === null || operation !== null ? null : <Button variant="primary"
+          disabled={!state.reviewed || !completeReview || busy || state.phase !== 'ready'}
+          onClick={() => { void publish() }}>{t('forkPublishConfirm')}</Button>}
+      </div>}>
+      <div className={css.form}>
+        {state.repositories === null ? null : <>
+          <label className={css.field}>
+            <span>{t('forkRepository')}</span>
+            <select value={state.repository} disabled={locked} aria-required aria-invalid={repositoryError}
+              aria-describedby={repositoryError ? `${id}-failure` : undefined}
+              onChange={(event) => { edit('repository', event.target.value) }}>
+              <option value="">{t('forkPublishChooseRepository')}</option>
+              {state.repositories.repositories.map(item => (
+                <option key={item.repository} value={item.repository}>{item.repository}</option>
+              ))}
+            </select>
+          </label>
+          {state.repositories.repositories.length === 0 ? <p className={css.hint}>{t('forkPublishEmpty')}</p> : null}
+        </>}
+        <label className={css.field}>
+          <span>{t('forkBranch')}</span>
+          <Input value={state.branch} placeholder={t('forkBranchPlaceholder')} disabled={locked} aria-required
+            aria-invalid={branchError} aria-describedby={branchError ? `${id}-failure` : `${id}-branch-hint`}
+            onChange={(event) => { edit('branch', event.target.value) }} />
+        </label>
+        <p id={`${id}-branch-hint`} className={css.hint}>{t('forkPublishBranchHint')}</p>
+        {metadata === null ? null : <dl className={css.metadata}>
+          <dt>{t('forkPublishAccount')}</dt><dd>{metadata.account}</dd>
+          <dt>{t('forkPublishUpstream')}</dt><dd>{metadata.upstream}</dd>
+          {preview === undefined ? null : <>
+            <dt>{t('forkRepository')}</dt><dd>{preview.repository}</dd>
+            <dt>{t('forkBranch')}</dt><dd>{preview.branch}</dd>
+            <dt>{t('forkPublishBase')}</dt><dd>{`${preview.repository}:${preview.base}`}</dd>
+            <dt>{t('forkPublishHead')}</dt><dd>{preview.head ?? t('forkPublishNewBranch', { base: preview.base })}</dd>
+          </>}
+        </dl>}
+        {preview === undefined || preview.head === null ? null : <p className={css.hint}>{t('forkPublishBranchHistory')}</p>}
+        {busy ? <div className={css.loading} role="status"><StateDot state="ongoing" /><span>{t(progress)}</span></div> : null}
+        {publishing ? <p className={css.hint}>{t('forkPublishClosingHint')}</p> : null}
+        {state.failure === null ? null : <section id={`${id}-failure`} className={css.failure} role="alert">
+          <p className={css.error}>{t(ISSUE_KEYS[state.failure.code])}</p>
+          {needsPolicyHint(state.failure) ? <p className={css.hint}>{t('forkPublishPolicyHint')}</p> : null}
+        </section>}
+        {operation?.status !== 'blocked' ? null : <section className={css.failure} role="alert">
+          <p>{t(operationIssueKey(operation.failure))}</p>
+          {needsPolicyHint(operation.failure) ? <p className={css.hint}>{t('forkPublishPolicyHint')}</p> : null}
+          {operation.failure.code === 'pull-request-closed' ? null : <p>{t(lostReceipt
+            ? operation.failure.effect === 'committed' ? 'forkPublishLostCommitted' : 'forkPublishLostUnknown'
+            : operation.failure.effect === 'unknown' ? 'forkPublishUnknown'
+              : operation.failure.effect === 'committed' ? 'forkPublishCommitted' : 'forkPublishNoEffects')}</p>}
+          {operation.failure.pullRequestUrl === undefined ? null : <a href={operation.failure.pullRequestUrl}
+            target="_blank" rel="noopener noreferrer">{t('forkPublishOpenPr')}</a>}
+        </section>}
+        {preview === undefined ? null : <ForkFilePreview key={preview.id} preview={preview} t={t}
+          selectedPath={state.activeFile} reviewedFiles={state.reviewedFiles} canReview={operation === null}
+          onSelect={(path) => { selectFile(preview.id, path) }}
+          onReview={(path, checked) => { reviewFile(preview.id, path, checked) }} />}
+        {preview === undefined ? null : <p className={css.hint} role="note">{t('forkPublishPublicWarning')}</p>}
+        {state.preview === null || operation !== null ? null : <Checkbox checked={state.reviewed}
+          disabled={!completeReview || state.phase !== 'ready'} onChange={review} label={t('forkPublishReviewed')} />}
+        {operation?.status !== 'saved' ? null : <section className={css.success}>
+          <p role="status">{t('forkPublishSaved', { commit: operation.result.commit })}</p>
+          {operation.openFailed ? <p>{t('forkPublishOpenFailed')}</p> : null}
+          <a href={operation.result.pullRequestUrl} target="_blank" rel="noopener noreferrer">{t('forkPublishOpenPr')}</a>
+        </section>}
+      </div>
+    </Modal>
+    {state.notice === null ? null : <Toast key={state.notice.seq}
+      text={t(NOTICE_KEYS[state.notice.kind])}
+      icon={state.notice.kind === 'failed' ? <IconWarningOutlineRegular /> : <IconCheckOutlineRegular />}
+      onDone={dismissNotice} />}
+  </>
+}

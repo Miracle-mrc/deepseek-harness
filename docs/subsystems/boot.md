@@ -10,6 +10,12 @@ The [boot package group](../../packages/boot/README.md) owns launcher-provided p
 
 `SourceExportRequest` names a repository slug and a branch other than `main` or `master`; these are labels without Git or network effects. `SourceExportResult` is either a `ready` versioned UTF-8 file map with `reviewRequired: true`, or `blocked` issues without captured source. Each file has a portable relative `path` and `content`. The [source export reference](../../packages/boot/plugin-manager/README.md#source-export) owns capture restrictions and restoration.
 
+`ForkRepositoriesResult` lists writable account-owned forks and their default branches. `ForkPreviewResult` pairs an opaque `ForkPreviewId` with the account, destination branch head and reviewed default-branch name in `base`; the Host also retains that default commit's OID. `upstream` identifies the repository used to verify fork eligibility. `files` is the union of all resulting PR file changes and destination writes, without a claim to review historical commit contents.
+
+Each `ForkFileDiff.before` is exact text at the reviewed default commit, or `null` for absence; `after` is captured source. Optional `branchBefore` appears only for an actual write replacing branch text different from `before`, including `null` for absence on that branch. `ForkPublishResult` identifies the approved commit and open PR within the selected fork; confirmation may reuse an existing commit. `ForkFailure` carries a sanitized code and branch/PR effect (`none`, `unknown`, or `committed`); a matching closed PR can include a safe `pullRequestUrl`. The [direct publication reference](../../packages/boot/plugin-manager/README.md#direct-github-publication) owns ancestry checks, receipt lifetime, concurrency, signing and recovery.
+
+`ForkReviewResult` returns `ready` with the same `ForkPreviewId` when the Host revalidates and refreshes a retained receipt's configured lifetime; failure returns `ForkFailure`. It carries no source bytes or replacement preview.
+
 `PluginEntryId` identifies one Loader entry; callers obtain it from `listPlugins` rather than constructing a patch id.
 
 `PluginInfo` carries module identity, effective enablement, fiber phase and optional display `meta`, plus a unique `patchId` or a `readOnlyReason`.
@@ -146,6 +152,54 @@ async edit( entry: Entry, change: (current: Record<string, unknown>, inherited: 
 ```
 
 Source: [`packages/boot/config-editor/src/index.ts`](../../packages/boot/config-editor/src/index.ts)
+
+<a id="ctxcreatorfork--creatorfork"></a>
+
+### `ctx.creatorFork` — `CreatorFork`
+
+Owns bounded source receipts, GitHub identity checks, atomic branch writes, and PR reconciliation.
+
+```ts cordis-catalog
+/**
+ * Discover writable forks owned by the authenticated Host user. Only this explicit call contacts GitHub.
+ * @returns Account, upstream, and authorized fork choices, or a sanitized refusal.
+ */
+@Remote async repositories(): Promise<ForkRepositoriesResult>
+
+/**
+ * Capture the complete default-relative PR diff and additional destination writes, without uploading source or changing GitHub.
+ * A new preview releases successful and known-closed receipts; their IDs then become stale.
+ * Saved files absent from the current capture are refused; publication never deletes them automatically.
+ * Existing destinations must descend from the current default and preserve every non-captured leaf.
+ * @param request Authorized fork slug and a non-default branch; new branches start from the fork's reviewed default branch.
+ * @returns An expiring receipt for complete PR changes and destination writes, with exact UTF-8 text, or a refusal without source.
+ */
+@Remote async preview(request: SourceExportRequest): Promise<ForkPreviewResult>
+
+/**
+ * Extend an unsubmitted review after revalidating its account and unchanged GitHub destination.
+ * An expired receipt can be extended only while still retained. Captured text and the receipt ID never change.
+ * @param id Existing unsubmitted receipt; attempted publications retain their separate retry flow.
+ * @returns The same receipt ID with a fresh configured lifetime, or a sanitized refusal without writes.
+ */
+@Remote async extendReview(id: ForkPreviewId): Promise<ForkReviewResult>
+
+/**
+ * Apply only retained destination writes after explicit confirmation, reusing an existing commit when no write is needed.
+ * Create or reuse its PR to the reviewed default; detected default-name, base-commit or target-head changes stop new writes.
+ * Repeated calls share an in-flight operation and reconcile lost responses. A closed PR is reported without recreating it.
+ * An in-flight publication retains its receipt past the preview's expiry.
+ * A failed PR retains the approved commit; unknown writes remain unknown until reconciliation,
+ * with no forced rollback or branch deletion.
+ * @param id Receipt from preview; source text and destinations cannot be replaced by this call.
+ * @param confirmed Caller attestation of the person's authorization of these exact files and destinations;
+ * trusted Host code can supply it directly.
+ * @returns Confirmed commit and PR, or a sanitized refusal stating absent, unknown, or committed remote effects.
+ */
+@Remote async publish(id: ForkPreviewId, confirmed: boolean): Promise<ForkPublishResult>
+```
+
+Source: [`packages/boot/plugin-manager/src/creator-fork.ts`](../../packages/boot/plugin-manager/src/creator-fork.ts)
 
 <a id="ctxheadlessstartup--headlessstartupvalues"></a>
 

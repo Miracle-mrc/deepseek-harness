@@ -39,6 +39,7 @@ function menu(state: Partial<AgentPresetSettingsState> = {}, allowed = true) {
 
 function overlay(copy = en, prepare: (request: { repository: string; branch: string }) => Promise<SourceExportResult> = async () => READY) {
   const save = vi.fn()
+  const openPublish = vi.fn(() => { controller.close() })
   const controller = new ForkExportController(prepare, save)
   controller.open()
   controller.edit('repository', READY.repository)
@@ -48,9 +49,10 @@ function overlay(copy = en, prepare: (request: { repository: string; branch: str
     close: () => { controller.close() }, edit: (field, value) => { controller.edit(field, value) },
     inspect: () => controller.inspect(), review: (value) => { controller.review(value) },
     download: () => { controller.download() }, dismissNotice: () => { controller.dismissNotice() },
+    openPublish,
   }
   render(<ForkExportOverlay {...props} />)
-  return { controller, save }
+  return { controller, save, openPublish }
 }
 
 describe('Save to My Fork entry', () => {
@@ -87,6 +89,14 @@ describe('Save to My Fork entry', () => {
 })
 
 describe('source export dialog', () => {
+  it('opens direct GitHub publication through an explicit action while preserving local download', () => {
+    const { openPublish, save } = overlay()
+    fireEvent.click(screen.getByRole('button', { name: en.forkPublishLaunch }))
+    expect(openPublish).toHaveBeenCalledOnce()
+    expect(save).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
   it.each([['en', en], ['zh', zh]] as const)('presents accessible review and local-only copy in %s', async (_language, copy) => {
     const { controller, save } = overlay(copy)
     expect(screen.queryByRole('button', { name: copy.forkDownload })).toBeNull()

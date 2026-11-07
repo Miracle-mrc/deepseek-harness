@@ -2628,11 +2628,13 @@ export interface PlanModeConfig {
 
 - `inject`: `loader` · `profileContext`
 - `refs`: [`NpmFileSource`](subsystems/boot.zh.md)
-- `source`: [`packages/boot/plugin-manager/src/index.ts:56`](../packages/boot/plugin-manager/src/index.ts)
+- `source`: [`packages/boot/plugin-manager/src/index.ts:58`](../packages/boot/plugin-manager/src/index.ts)
 
 ```ts config-catalog
 /** The pnpm executable, registries, and limits for diagnostics, lookups and connection checks. */
 export interface Config {
+  /** Explicitly confirmed Creator publication; omitted fields use CreatorFork's validated defaults. */
+  fork?: CreatorForkConfig
   /** The pnpm executable name or path; resolved through `PATH` like the `dsh plugin` command. */
   pnpmCommand?: string
   /** Maximum retained package-operation diagnostic bytes. */
@@ -2667,6 +2669,24 @@ export interface Config {
   detailFetchTimeoutMs?: number
   /** npm file CDNs that offered bundles are read from, in order; a read's `npmFileSources` moves the CDNs it names first. */
   detailNpmFileSources?: NpmFileSource[]
+}
+
+/** Host executable, upstream, and bounds; credentials always remain in the existing gh store. */
+export interface CreatorForkConfig {
+  /** Host GitHub CLI executable. */
+  ghCommand?: string
+  /** Repository network that eligible personal forks must belong to; publication stays in the selected fork. */
+  upstreamRepository?: string
+  /** Deadline of each GitHub request, in milliseconds. */
+  timeoutMs?: number
+  /** Deadline of one complete discovery, preview, or publication attempt, in milliseconds. */
+  operationTimeoutMs?: number
+  /** Maximum bytes captured from each gh output stream. */
+  outputBytes?: number
+  /** Lifetime of an unsubmitted preview, in milliseconds; unresolved submissions remain until unload. */
+  previewLifetimeMs?: number
+  /** Maximum retained previews, including unresolved submissions. */
+  maxPreviews?: number
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-plugin-manager -->

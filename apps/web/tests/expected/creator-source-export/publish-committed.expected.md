@@ -1,0 +1,80 @@
+- dialog "Save to my GitHub fork":
+  - heading "Save to my GitHub fork" [level=2]
+  - button "Close"
+  - paragraph: Load your authorized forks, choose a branch, and review every file. Confirmation creates or reuses the reviewed commit and pull request to the selected fork’s default branch.
+  - text: Fork repository
+  - combobox "Fork repository" [disabled]:
+    - option "Choose an authorized fork"
+    - option "alice/harness" [selected]
+  - text: Branch
+  - textbox "Branch" [disabled]:
+    - /placeholder: my-customizations
+    - text: creator/saved
+  - paragraph: Choose a branch other than the fork’s default branch, main, or master.
+  - term: GitHub account
+  - definition: alice
+  - term: Upstream repository
+  - definition: deepseek-ai/deepseek-harness
+  - term: Fork repository
+  - definition: alice/harness
+  - term: Branch
+  - definition: creator/saved
+  - term: Pull request destination
+  - definition: alice/harness:main
+  - term: Destination head
+  - definition: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  - paragraph: Earlier commits remain outside this file review, and an existing branch could become the default during a save. For stricter protection, choose a new branch and avoid concurrent changes.
+  - alert:
+    - paragraph: Check that the GitHub CLI is installed on this host, signed in, and connected to the network, then retry.
+    - paragraph: The commit was saved, but the pull request could not be confirmed. Resolve the reported problem before retrying this same save.
+  - region "Files to review (11)":
+    - heading "Files to review (11)" [level=3]
+    - paragraph: Only the selected file’s exact text is shown. Open escaped text to inspect whitespace and line endings.
+    - paragraph: Before shows the reviewed default branch; After shows the proposed pull request. Additional branch text shows different content this save will replace.
+    - text: Search files
+    - searchbox "Search files"
+    - text: "Matching files: 11 1–11 of 11 Files"
+    - listbox "Files":
+      - option "Choose a file"
+      - option "Created · cordis.patch.yml — creator-exports/saved/bundles/0/cordis.patch.yml"
+      - option "Modified · index.ts — creator-exports/saved/bundles/0/index.ts" [selected]
+      - option "Created · package.json — creator-exports/saved/bundles/0/package.json"
+      - option "Created · pnpm-workspace.yaml — creator-exports/saved/bundles/0/pnpm-workspace.yaml"
+      - option "Created · cordis.patch.yml — creator-exports/saved/bundles/1/cordis.patch.yml"
+      - option "Created · package.json — creator-exports/saved/bundles/1/package.json"
+      - option "Created · pnpm-workspace.yaml — creator-exports/saved/bundles/1/pnpm-workspace.yaml"
+      - option "Created · package.json — creator-exports/saved/profiles/saved/package.json"
+      - option "Created · cordis.patch.yml — creator-exports/saved/profiles/saved/cordis.patch.yml"
+      - option "Created · pnpm-workspace.yaml — creator-exports/saved/profiles/saved/pnpm-workspace.yaml"
+      - option "Created · .gitignore — creator-exports/saved/.gitignore"
+    - button "Previous files" [disabled]
+    - button "Next files" [disabled]
+    - article:
+      - heading "creator-exports/saved/bundles/0/index.ts" [level=4]
+      - paragraph: Modified
+      - region "Before":
+        - heading "Before" [level=5]
+        - paragraph: 45 UTF-8 bytes · 0 LF characters
+        - paragraph: "Lines: 1"
+        - text: export const greeting = "Created for my fork"
+        - 'button "Before: exact text with escaped line endings" [expanded]': Exact text with escaped line endings
+        - text: "\"export const greeting = \\\"Created for my fork\\\"\""
+      - region "Current branch before this save":
+        - heading "Current branch before this save" [level=5]
+        - paragraph: 51 UTF-8 bytes · 1 LF characters
+        - paragraph: "Lines: 2"
+        - text: export const greeting = "Earlier branch work";
+        - 'button "Current branch before this save: exact text with escaped line endings" [expanded]': Exact text with escaped line endings
+        - text: "\" export const greeting = \\\"Earlier branch work\\\";\\r\\n\""
+      - region "After":
+        - heading "After" [level=5]
+        - paragraph: 46 UTF-8 bytes · 1 LF characters
+        - paragraph: "Lines: 2"
+        - text: export const greeting = "Created for my fork"
+        - 'button "After: exact text with escaped line endings" [expanded]': Exact text with escaped line endings
+        - text: "\"export const greeting = \\\"Created for my fork\\\"\\n\""
+  - note: If this fork is public, saved source and retained branch history will be publicly accessible. Check them for private information before confirming.
+  - button "Close"
+  - button "Load my GitHub forks" [disabled]
+  - button "Preview changes" [disabled]
+  - button "Retry this save"

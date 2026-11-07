@@ -140,6 +140,10 @@ export const VIEWER_ENDPOINT_CLASSES = {
   'workspaceFiles/stat': 'owner-only', // owner Workspace file access
   'pluginManager/cancelInstall': 'owner-only', // owner plugin management
   'pluginManager/exportSource': 'owner-only', // owner profile configuration and plugin source
+  'creatorFork/repositories': 'owner-only', // owner GitHub identity and repository permissions
+  'creatorFork/preview': 'owner-only', // owner source and remote destinations
+  'creatorFork/extendReview': 'owner-only', // owner retains the same source review after destination validation
+  'creatorFork/publish': 'owner-only', // owner explicitly confirms a GitHub write
   'pluginManager/inspect': 'owner-only', // owner plugin management
   'pluginManager/installBundle': 'owner-only', // owner plugin management
   'pluginManager/listBundles': 'owner-only', // owner plugin management
