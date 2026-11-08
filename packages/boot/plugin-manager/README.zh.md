@@ -89,6 +89,8 @@ pnpm 11 拦下依赖脚本时，失败的安装在 `pendingBuilds` 里报告 pro
 
 `CreatorFork` 拒绝非所有者的 Remote 调用。随产品提供的 Cordis 检查工具仅返回 API 文档，不能执行发布。已安装的 Host 插件与程序化动态 Host 包属于受信任代码，可直接传入 `confirmed`；[动态 Host 运行器](../../extensions/cordis-host-runner/README.zh.md)不是安全沙箱。内置 Client 强制逐文件检查与单独最终确认；Host 接受调用者的声明，而不证明人工已完成审查。这些控制不限制其他已能使用 GitHub 凭据的工具：[沙箱策略](../../sandbox/sandbox/README.zh.md#known-limitations-and-deferred-work)限制文件写入，并不普遍限制凭据读取或网络访问。
 
+使用[验收流程](../../../docs/cookbook/testing-creator-fork.zh.md)运行 fixture 检查及单独授权的一次性 fork 测试。[权限分离提案](../../../.agents/notes/proposed/architecture/2026-11-08-creator-publication-privilege-separation.zh.md)说明恶意模型执行所需但尚未实现的凭据与 owner 确认隔离；当前文件操作效果模式不提供这些保证。
+
 Host 在不透明回执中保留捕获的字节、所选 fork 身份、实际默认分支名称及提交 OID，以及目标分支头。写入限定在 `creator-exports/saved/` 下；PR（Pull Request）指向同一 fork 中已审查的默认分支。不安全路径、链接、子模块、大小写别名、疑似秘密、二进制文本、变化的分支头及超大结果均被拒绝。
 
 已有目标必须等于已审查的默认提交，或是其后代。两个完整文件树的比较会拒绝捕获范围之外非目录条目的任何差异，包括新增或删除路径、类型或模式变化，以及对象 OID 不同。每次预览只对远程路径建立一次索引，保留精确路径与规范化祖先路径检查，不为每个捕获文件重新扫描完整文件树。落后、分叉或无关的历史均被拒绝。
