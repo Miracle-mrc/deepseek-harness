@@ -6,12 +6,13 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect, it } from 'vitest'
 import { readProfileManifest } from '@deepseek-ai/dsh-app-boot'
-import type { SourceExportResult } from '@deepseek-ai/dsh-plugin-manager'
+import type { ForkPreviewResult, ForkPublishResult, SourceExportResult } from '@deepseek-ai/dsh-plugin-manager'
 import { startHttpMcpFixture } from '../../../../../../packages/mcp/mcp-client/tests/http-fixture.ts'
 import { prepareCreatorExport } from '../../../../../../scripts/prepare-creator-export.ts'
 import { pnpmInvocation } from '../../../../../../scripts/pnpm-invocation.ts'
 
 interface Observation {
+  forkRefusals: [ForkPreviewResult, ForkPublishResult]
   approvals: string[]
   permission: string
   before: string[]
@@ -29,6 +30,7 @@ interface Observation {
 }
 
 interface RestoredObservation {
+  forkRefusals: [ForkPreviewResult, ForkPublishResult]
   before: string[]
   result: { name: string }[]
   ping: unknown
@@ -37,6 +39,10 @@ interface RestoredObservation {
 
 const repo = fileURLToPath(new URL('../../../../../../', import.meta.url))
 const SAVED_WORKSPACE = 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n'
+const FORK_REFUSALS = [
+  { status: 'blocked', code: 'invalid-branch', effect: 'none' },
+  { status: 'blocked', code: 'confirmation-required', effect: 'none' },
+]
 
 it('configures MCP, exports its reviewed source, and restores it on restart and in a fresh home', async (test) => {
   const root = await mkdtemp(join(tmpdir(), 'creator-manager-'))
@@ -89,6 +95,7 @@ it('configures MCP, exports its reviewed source, and restores it on restart and 
   }
   const first = await start()
   const initial = await first.request('initial')
+  expect(initial.forkRefusals).toEqual(FORK_REFUSALS)
   expect(initial.before).toContain('plugin_manager')
   for (const retired of ['cordis_define', 'cordis_run', 'cordis_stop', 'cordis_undefine', 'cordis_inspect_self']) {
     expect(initial.before).not.toContain(retired)
@@ -129,6 +136,7 @@ it('configures MCP, exports its reviewed source, and restores it on restart and 
   await first.stop()
   const second = await start()
   const restarted = await second.request('restart')
+  expect(restarted.forkRefusals).toEqual(FORK_REFUSALS)
   expect(restarted.result).toEqual(expect.arrayContaining([expect.objectContaining({ name: '@test/creator-mcp' })]))
   expect(restarted.approvals).toEqual(['rejected', 'allowed-once'])
   expect(restarted.permission).toBe('workspace-write')
@@ -162,6 +170,7 @@ it('configures MCP, exports its reviewed source, and restores it on restart and 
   expect(await readFile(join(restoredHome, 'profiles/saved/pnpm-workspace.yaml'), 'utf8')).toBe(SAVED_WORKSPACE)
   const restored = await start(restoredHome, 'saved')
   const relocated = await restored.request<RestoredObservation>('restored')
+  expect(relocated.forkRefusals).toEqual(FORK_REFUSALS)
   expect(relocated.before).toContain('mcp__demo__ping')
   expect(relocated.result.map(bundle => bundle.name)).toContain('@test/creator-mcp')
   expect(relocated.restoredProbe).toBe('local source restored')

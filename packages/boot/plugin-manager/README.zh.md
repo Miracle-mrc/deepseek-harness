@@ -82,6 +82,43 @@ pnpm 11 拦下依赖脚本时，失败的安装在 `pendingBuilds` 里报告 pro
 
 浏览器下载的内容与显示的预览完全一致。仓库和分支值仅为目标标签；操作不检查访问权限，也不发布文件。拒绝保留名称 `HEAD`，以及任意大小写的 `main` 和 `master`。Liveshare 查看者无法访问源码导出。[Creator 指南](../../../docs/user/develop/practice/dynamic-cordis.zh.md#save-to-my-fork) 介绍如何提取到新目录、人工进行 Git 审查，以及通过常规 profile 启动器恢复。每台机器都必须单独配置凭据。
 
+<a id="direct-github-publication"></a>
+### 直接发布到 GitHub
+
+`ctx.creatorFork` 拥有用户触发的 `repositories`、`preview`、`extendReview` 和显式确认的 `publish` 调用；Plugin Manager 挂载此独立服务时不联系 GitHub。身份验证由 Host 现有的 `gh` 凭据存储提供。子进程使用经过清理且非交互的环境；token、请求正文和 CLI 诊断信息不会进入远程结果或日志。Liveshare 查看者不能调用这些方法。
+
+`CreatorFork` 拒绝非所有者的 Remote 调用。随产品提供的 Cordis 检查工具仅返回 API 文档，不能执行发布。已安装的 Host 插件与程序化动态 Host 包属于受信任代码，可直接传入 `confirmed`；[动态 Host 运行器](../../extensions/cordis-host-runner/README.zh.md)不是安全沙箱。内置 Client 强制逐文件检查与单独最终确认；Host 接受调用者的声明，而不证明人工已完成审查。这些控制不限制其他已能使用 GitHub 凭据的工具：[沙箱策略](../../sandbox/sandbox/README.zh.md#known-limitations-and-deferred-work)限制文件写入，并不普遍限制凭据读取或网络访问。
+
+使用[验收流程](../../../docs/cookbook/testing-creator-fork.zh.md)运行 fixture 检查及单独授权的一次性 fork 测试。[权限分离提案](../../../.agents/notes/proposed/architecture/2026-11-08-creator-publication-privilege-separation.zh.md)说明恶意模型执行所需但尚未实现的凭据与 owner 确认隔离；当前文件操作效果模式不提供这些保证。
+
+Host 在不透明回执中保留捕获的字节、所选 fork 身份、实际默认分支名称及提交 OID，以及目标分支头。写入限定在 `creator-exports/saved/` 下；PR（Pull Request）指向同一 fork 中已审查的默认分支。不安全路径、链接、子模块、大小写别名、疑似秘密、二进制文本、变化的分支头及超大结果均被拒绝。
+
+已有目标必须等于已审查的默认提交，或是其后代。两个完整文件树的比较会拒绝捕获范围之外非目录条目的任何差异，包括新增或删除路径、类型或模式变化，以及对象 OID 不同。每次预览只对远程路径建立一次索引，保留精确路径与规范化祖先路径检查，不为每个捕获文件重新扫描完整文件树。落后、分叉或无关的历史均被拒绝。
+
+已有提交仍保留在分支中。如果所选 fork 为公开仓库，上传的源码及可达的提交历史可能在 PR 创建或合并前公开，部分失败后也可能如此。文件审查覆盖最终 PR 差异及计划写入，不涵盖每个历史提交中的私人信息；请单独审查已有历史。
+
+预览包含最终 PR 文件改动与目标写入的全部路径并集。`before` 是已审查默认提交中的精确文本；`after` 是捕获的源码。仅当写入将替换与 `before` 不同的分支文本时，才提供可选的 `branchBefore`；`null` 表示该版本中不存在文件。这也包含恢复后与默认分支相同的写入。最终没有 PR 改动的保存会被拒绝。[管理记录](../../../docs/subsystems/boot.zh.md)定义响应字段；Client 要求逐一勾选每个显示的文件，再单独进行最终授权。
+
+保留子树 `creator-exports/saved/` 下的每个已有文件都必须属于本次捕获；额外文件会阻止预览，且不会被自动删除。新分支可能从默认分支继承过期文件。仅在目标分支删除这些文件，仍会产生被禁止的捕获范围外非目录条目差异，因此这种状态可能需要手动通过 GitHub 发布。
+
+发布要求 `confirmed: true` 和保留的回执。仅写入与目标分支不同的新增或更新内容。已有分支使用 `createCommitOnBranch.expectedHeadOid`；新分支从已审查的默认提交开始，其引用仅在完整提交准备好后独占创建。已有分支头已包含捕获结果时，确认会复用它，不创建空提交，并在处理 PR 前保留其回执。PR 不会被合并。
+
+每次准备对象、引用、提交或 PR 的修改请求前，服务都会重新核实账号与仓库 ID、fork 网络、访问权限、默认分支名称及 OID，以及目标分支头；处理 PR 后也会检查。并发调用共享同一操作。显式重试通过标记、唯一预期父提交及精确文件树核实响应丢失的新建提交，然后创建或复用匹配的 PR。提交已知时，即使默认分支头已推进，只读查询仍可报告其匹配的已关闭或已合并 PR；该查询不进行新写入，也不会创建替代 PR。
+
+`ForkFailure.effect` 以 `none`、`unknown` 或 `committed` 报告分支或 PR 的影响；已确认的准备过程可能留下不可达的 Git 对象。PR 失败保留已批准提交。重试失败不会抹去已知提交，回执丢失也不能证明先前没有写入。结果未知或仍待处理的已提交状态会锁定目标修改与新预览。先解决所示问题再重试同一回执，或在 GitHub 检查原分支及 PR 并手动完成。重试不会更改已批准目标；不会自动删除分支或强制回退。
+
+默认分支元数据检查与引用写入使用独立的 GitHub 请求。[`expectedHeadOid`](https://docs.github.com/en/graphql/reference/commits#createcommitonbranchinput) 仅原子核实分支头，不保护默认分支设置。所有者可以在最后一次检查后、提交写入前，将已有目标设为默认分支。检测到变化时保留 `committed` 或 `unknown` 影响；两次检查之间的短暂变化可能无法被发现。新分支的独占创建不会覆盖已有默认分支。
+
+[创建 PR](https://docs.github.com/en/rest/pulls/pulls#create-a-pull-request)使用分支名称，不会以分支头 OID 为条件固定提交。因此，并发改动可能在创建期间改变 PR，检查通过后 PR 仍可变化。选择新分支、避免并发改动并在 GitHub 审查最终 PR，可以降低风险；这些措施不会使元数据检查与发布成为原子操作。
+
+此流程未向准备新分支所用的 [REST 提交接口](https://docs.github.com/en/rest/git/commits#create-a-commit)提供 PGP 签名，也不保证创建已签名或已验证的提交。[GraphQL 提交操作](https://docs.github.com/en/graphql/reference/commits#createcommitonbranch)仅在支持时自动签名。这两条路径不保证具有相同的签名行为。
+
+[仓库规则](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets)、签名要求、创建限制、状态检查、路径限制或 PR 策略都可能拒绝写入或阻止合并。固定且经过清理的错误不会包含 GitHub 诊断信息；请检查分支规则及 PR 以确定实际原因，必要时使用已批准的手动签名 Git 流程。不要为完成此流程而削弱保护、申请更广权限或绕过策略。在没有已授权的一次性目标仓库时，经过身份验证的发布及特定签名或规则集的兼容性仍未验证。
+
+`extendReview(id)` 通过只读 GitHub 请求重新核实同一份仍保留且未提交回执的账号、fork 与网络身份、权限、固定的默认分支名称及 OID，以及目标分支头，再从完成时起授予新的配置有效期。已过期但仍保留的回执可以延长。延长保留回执 ID 与捕获文本，不重新捕获、上传或自动续期。Client 保留逐文件检查及选择，但撤销最终授权。正在提交或已尝试发布的回执不能延长；结果未知、已提交或已保存的状态保持原有恢复流程。
+
+Plugin Manager 的可选 `fork` 配置默认使用 `ghCommand: gh`、`upstreamRepository: deepseek-ai/deepseek-harness`、`timeoutMs: 20000`、`operationTimeoutMs: 120000`、`outputBytes: 16777216`、`previewLifetimeMs: 900000` 和 `maxPreviews: 4`。`upstreamRepository` 用于核实允许的 fork 网络；分支和 PR 的目标属于所选 fork。回执内存有界；准备其他预览时可能回收已过期的未提交回执，所有回执在卸载时丢弃。开始新预览时会移除已完成的回执，包括已确认关闭或合并的 PR；旧 ID 随后返回 `stale-preview`。正在进行的提交不会过期或被移除。结果未明的提交持续保留直到卸载，避免静默遗忘。回收或卸载后的回执不能延长；新预览须完整检查。用户流程及回执丢失后核实先前影响的方式见 [Creator 指南](../../../docs/user/develop/practice/dynamic-cordis.zh.md#save-to-my-fork)。
+
 <a id="version-compatibility-and-exemptions"></a>
 ### 版本兼容性与豁免
 
@@ -190,7 +227,7 @@ service 运行若在 `idleTimeoutMs` 内没有任何捕获输出即被终止，�
 - 失败的删除可能留下部分依赖改动，失败或被取消的安装可能在 `node_modules` 或 pnpm 缓存中留下已下载文件。文件缺失的未启用依赖仍可删除。诊断日志保留在 profile 的 `.plugin-manager/logs` 目录中。
 - 管理结果描述 Host 激活状态。浏览器同步失败会在设置的插件列表中单独显示。
 - Desktop 包管理操作仍由 Desktop shell 负责。
-- 源码导出支持 UTF-8 本地包文件和 semver 注册表依赖。Git、tarball、workspace 依赖声明、二进制资源、隐藏的源文件、`cordis:include` 条目及捕获文件中缺少的包入口会被拒绝或排除。导出不保留依赖锁文件，也不保证传递依赖版本完全相同；本地包构建仍是显式恢复步骤。运行时 GitHub 发布留待后续阶段。
+- 源码导出支持 UTF-8 本地包文件和 semver 注册表依赖。Git、tarball、workspace 依赖声明、二进制资源、隐藏的源文件、`cordis:include` 条目及捕获文件中缺少的包入口会被拒绝或排除。导出不保留依赖锁文件，也不保证传递依赖版本完全相同；本地包构建仍是显式恢复步骤。直接发布要求 Host 已通过 GitHub CLI 登录；不提供浏览器 token 输入或新的 OAuth 流程。
 
 <a id="failure-behavior"></a>
 ### 失败行为

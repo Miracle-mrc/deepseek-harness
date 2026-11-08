@@ -13,6 +13,10 @@ exports[`source export dialog > presents accessible review and local-only copy i
     },
     {
       "disabled": false,
+      "label": "Save directly to GitHub",
+    },
+    {
+      "disabled": false,
       "label": "Inspect files",
     },
     {
@@ -35,7 +39,7 @@ exports[`source export dialog > presents accessible review and local-only copy i
   ],
   "review": false,
   "text": "Save to My ForkThis action downloads a local source export. Apply the files to your fork and commit them yourself.Fork repositoryBranchRepository and branch are recorded in the download. Repository access is not checked.Files to download (1)The export includes this profile’s patch and supported local plugin sources. Review every file for private information before sharing.Credentials, Sessions, home and command-line overlays, and transient dynamic plugins are excluded.profiles/saved/cordis.patch.ymlentries: []
-I reviewed every file for private informationCloseInspect filesDownload source export",
+I reviewed every file for private informationCloseSave directly to GitHubInspect filesDownload source export",
 }
 `;
 
@@ -49,6 +53,10 @@ exports[`source export dialog > presents accessible review and local-only copy i
     {
       "disabled": false,
       "label": "关闭",
+    },
+    {
+      "disabled": false,
+      "label": "直接保存到 GitHub",
     },
     {
       "disabled": false,
@@ -74,6 +82,6 @@ exports[`source export dialog > presents accessible review and local-only copy i
   ],
   "review": false,
   "text": "保存到我的 Fork此操作下载本地源码导出文件。请自行将文件应用到你的 Fork 并提交。Fork 仓库分支仓库和分支会记录在下载文件中，不会检查仓库访问权限待下载文件（1）导出包含此 profile 的补丁和支持的本地插件源码。分享前请检查每个文件是否含有私人信息不包含凭据、Session、主目录和命令行覆盖配置，以及临时动态插件profiles/saved/cordis.patch.ymlentries: []
-我已检查每个文件是否含有私人信息关闭检查文件下载源码导出文件",
+我已检查每个文件是否含有私人信息关闭直接保存到 GitHub检查文件下载源码导出文件",
 }
 `;

@@ -1,0 +1,31 @@
+# Bilingual-pair consistency record for 2026-11-08-creator-publication-privilege-separation.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-11-08-creator-publication-privilege-separation.md
+/agent-note-creator-publication-privilege-separation:
+  en: 5a95981b37c7f745
+  zh: 4cf9df71e7441441
+/agent-note-creator-publication-privilege-separation/problem:
+  en: 587c383319e1fae8
+  zh: bd126db822d53c23
+/agent-note-creator-publication-privilege-separation/proposal:
+  en: 7418860895bec69e
+  zh: f661d5fc03ab97f0
+/agent-note-creator-publication-privilege-separation/proposal/trusted-and-untrusted-code:
+  en: 186d48b836212ab5
+  zh: 4cf567d08d37fd97
+/agent-note-creator-publication-privilege-separation/proposal/receipt-bound-authorization:
+  en: 2cfdd47397774969
+  zh: bdb7ad089d47cc0e
+/agent-note-creator-publication-privilege-separation/proposal/required-implementation-changes:
+  en: cb8ff60197d49d18
+  zh: 8a03648ab7b6384f
+/agent-note-creator-publication-privilege-separation/alternatives-considered:
+  en: 5f39fa8610c82b8e
+  zh: 36157cbac6d830d2
+/agent-note-creator-publication-privilege-separation/acceptance-criteria:
+  en: e1010057804040a8
+  zh: e754da81857abc86
+/agent-note-creator-publication-privilege-separation/risks:
+  en: 7beba6519b2d0e1f
+  zh: 2e4862e2a0905396

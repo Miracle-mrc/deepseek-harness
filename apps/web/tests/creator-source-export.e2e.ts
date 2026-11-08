@@ -1,11 +1,12 @@
 /** Review and download Creator source through the assembled Web profile without a model request. */
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { chromium, webkit, type Browser } from 'playwright'
+import { setTimeout as delay } from 'node:timers/promises'
+import { chromium, webkit, type Browser, type Locator, type Page } from 'playwright'
 import { expect, it, onTestFailed } from 'vitest'
-import type { SourceExportResult } from '@deepseek-ai/dsh-plugin-manager'
+import type { ForkPreviewId, ForkPreviewResult, SourceExportResult } from '@deepseek-ai/dsh-plugin-manager'
 import {
   captureStableAria, compareOrRefreshGolden, launchWebScaffold, watchConsole, webSnapshotMode, type WebScaffold,
 } from './scaffold.ts'
@@ -14,6 +15,132 @@ import { connectFreshWorkspace, newEnglishPage, saveFailureShot } from './suppor
 const EXPECTED = fileURLToPath(new URL('./expected/creator-source-export', import.meta.url))
 const MODE = webSnapshotMode()
 const ORIGINAL_SOURCE = 'export const greeting = "Created for my fork"\n'
+const PUBLISH_SOURCE_PATH = 'creator-exports/saved/bundles/0/index.ts'
+const PUBLISH_EXISTING_PATH = 'creator-exports/saved/bundles/0/cordis.patch.yml'
+const GITHUB_BASE = 'a'.repeat(40)
+const GITHUB_BASE_TREE = 'b'.repeat(40)
+const GITHUB_COMMIT = 'c'.repeat(40)
+const GITHUB_COMMIT_TREE = 'd'.repeat(40)
+const GITHUB_PREVIOUS = 'e'.repeat(40)
+const GITHUB_PREVIOUS_TREE = 'f'.repeat(40)
+const PRESERVED_FILE = { path: 'README.md', content: 'Public repository file preserved by the save.\n' }
+const BRANCH_BEFORE_SOURCE = '\uFEFFexport const greeting = "Earlier branch work";\r\n'
+const FILE_REVIEW_LABEL = 'I checked this file for private information'
+const PUBLICATION_REVIEW_LABEL = 'I checked every file for private information and authorize this commit and pull request'
+const PUBLIC_FORK_WARNING = 'If this fork is public, saved source and retained branch history will be publicly accessible. Check them for private information before confirming.'
+const REVIEW_LIFETIME_MS = 10_000
+type PublicationFile = Extract<ForkPreviewResult, { status: 'ready' }>['files'][number]
+type GithubCall = { method: string; path: string; body?: Record<string, unknown> }
+type GithubFixtureFile = { path: string; content: string }
+type GithubFixtureCommit = { tree: string; message: string; parents: string[] }
+type GithubFixtureState = {
+  head: string | null
+  branch: string
+  commits: Record<string, GithubFixtureCommit>
+  trees: Record<string, GithubFixtureFile[]>
+  failPr: boolean
+  pr: boolean
+}
+
+async function preparePublicationGithub(
+  transport: string, before: string, failPr: boolean,
+  destination: { kind: 'base' | 'new' } | { kind: 'descendant'; branchBefore: string } = { kind: 'base' },
+): Promise<string> {
+  const gh = join(transport, 'gh.mjs')
+  await copyFile(fileURLToPath(new URL('./fixtures/creator-fork-gh.mjs', import.meta.url)), gh)
+  await chmod(gh, 0o700)
+  await writeFile(join(transport, 'calls.jsonl'), '')
+  const baseFiles = [{ path: PUBLISH_SOURCE_PATH, content: before }, PRESERVED_FILE]
+  const state: GithubFixtureState = {
+    head: destination.kind === 'new' ? null : GITHUB_BASE, branch: 'creator/saved', failPr, pr: false,
+    commits: { [GITHUB_BASE]: { tree: GITHUB_BASE_TREE, message: 'Default branch work', parents: [] } },
+    trees: { [GITHUB_BASE_TREE]: baseFiles },
+  }
+  if (destination.kind === 'descendant') {
+    state.head = GITHUB_PREVIOUS
+    state.commits[GITHUB_PREVIOUS] = { tree: GITHUB_PREVIOUS_TREE, message: 'Earlier export work', parents: [GITHUB_BASE] }
+    state.trees[GITHUB_PREVIOUS_TREE] = [
+      { path: PUBLISH_SOURCE_PATH, content: destination.branchBefore }, PRESERVED_FILE,
+      { path: PUBLISH_EXISTING_PATH, content: '[]\n' },
+    ]
+  }
+  await writeFile(join(transport, 'state.json'), JSON.stringify(state))
+  return gh
+}
+
+async function readGithubCalls(transport: string): Promise<GithubCall[]> {
+  return (await readFile(join(transport, 'calls.jsonl'), 'utf8')).split('\n')
+    .filter(Boolean).map(line => JSON.parse(line) as GithubCall)
+}
+
+async function extendPublicationReview(page: Page, dialog: Locator, id: ForkPreviewId): Promise<number> {
+  const [response] = await Promise.all([
+    page.waitForResponse('**/api/creatorFork/extendReview'),
+    dialog.getByRole('button', { name: 'Extend review', exact: true }).click(),
+  ])
+  expect(response.ok()).toBe(true)
+  const result: unknown = await response.json()
+  expect(result).toMatchObject({ result: { ok: true, value: { status: 'ready', id } } })
+  await page.getByText('Review time extended. Your file checks are kept; confirm again before saving.', { exact: true }).waitFor()
+  return Date.now()
+}
+
+async function waitForReviewExpiry(observed: number): Promise<void> {
+  // The receipt deadline predates the acknowledged response; this tests real expiry with the shorter fixture lifetime.
+  await delay(Math.max(0, observed + REVIEW_LIFETIME_MS + 1000 - Date.now()))
+}
+
+async function expectSelectedPublicationText(dialog: Locator, file: PublicationFile): Promise<void> {
+  await dialog.getByRole('heading', { name: file.path, exact: true }).waitFor()
+  await expect.poll(() => dialog.locator('pre').allTextContents()).toEqual(publicationText(file))
+}
+
+function publicationText(file: PublicationFile, escaped = false): string[] {
+  const values = [file.before, ...file.branchBefore === undefined ? [] : [file.branchBefore], file.after]
+  return values.flatMap(value => value === null ? [] : escaped ? [value, JSON.stringify(value)] : [value])
+}
+
+async function showPublicationEscapedText(dialog: Locator, side: 'Before' | 'Current branch before this save' | 'After', content: string): Promise<string> {
+  const button = dialog.getByRole('button', { name: `${side}: exact text with escaped line endings`, exact: true })
+  expect(await button.getAttribute('aria-expanded')).toBe('false')
+  const controlledId = await button.getAttribute('aria-controls')
+  if (controlledId === null) throw new Error('The escaped source control has no controlled element')
+  expect(await dialog.evaluate((element, id) => element.ownerDocument.getElementById(id)?.textContent, controlledId)).toBe('')
+  await button.click()
+  expect(await button.getAttribute('aria-expanded')).toBe('true')
+  const escaped = await dialog.evaluate((element, id) => element.ownerDocument.getElementById(id)?.textContent, controlledId)
+  expect(escaped).toBe(JSON.stringify(content))
+  return controlledId
+}
+
+async function expectPublicationReviewProgress(dialog: Locator, count: number, total: number): Promise<void> {
+  await dialog.getByText(`Files reviewed: ${String(count)}/${String(total)}`, { exact: true }).waitFor()
+}
+
+async function reviewPublicationFiles(
+  dialog: Locator, captured: readonly PublicationFile[], reviewedPaths: readonly string[],
+): Promise<void> {
+  const reviewed = new Set(reviewedPaths)
+  const search = dialog.getByRole('searchbox', { name: 'Search files', exact: true })
+  const files = dialog.getByRole('listbox', { name: 'Files', exact: true })
+  const acknowledgement = dialog.getByRole('checkbox', { name: PUBLICATION_REVIEW_LABEL, exact: true })
+  const confirm = dialog.getByRole('button', { name: 'Confirm and open PR', exact: true })
+  for (const file of captured) {
+    await search.fill(file.path)
+    await files.selectOption(file.path)
+    await expectSelectedPublicationText(dialog, file)
+    const review = dialog.getByRole('checkbox', { name: FILE_REVIEW_LABEL, exact: true })
+    expect(await review.isChecked()).toBe(reviewed.has(file.path))
+    if (!reviewed.has(file.path)) {
+      await review.check()
+      reviewed.add(file.path)
+    }
+    await expectPublicationReviewProgress(dialog, reviewed.size, captured.length)
+    expect(await acknowledgement.isEnabled()).toBe(reviewed.size === captured.length)
+    expect(await acknowledgement.isChecked()).toBe(false)
+    expect(await confirm.isEnabled()).toBe(false)
+  }
+}
 
 it.each([
   { name: 'Chromium', engine: chromium },
@@ -130,6 +257,681 @@ it.each([
     await page.keyboard.press('Escape')
     await dialog.waitFor({ state: 'detached' })
     expect(await menuTrigger.evaluate(element => element === document.activeElement)).toBe(true)
+    expect(scaffold.ctx.agentPresets.defaultId).toBe('standard')
+    expect(tripwire.pageErrors).toEqual([])
+    expect(tripwire.warnings).toEqual([])
+  } finally {
+    await browser?.close()
+    await scaffold?.close()
+    await rm(fixture, { recursive: true, force: true })
+  }
+})
+
+it.each((['descendant', 'new'] as const).flatMap(kind => [
+  { name: 'Chromium', engine: chromium, kind },
+  { name: 'WebKit', engine: webkit, kind },
+]))('$name explicitly reviews and publishes Creator sources, then retries an incomplete PR on mobile ($kind branch)', async ({ engine, kind }) => {
+  const fixture = await mkdtemp(join(tmpdir(), 'dsh-source-publish-web-'))
+  const source = join(fixture, 'bundle')
+  const transport = join(fixture, 'github')
+  const evidence = await mkdtemp(join(tmpdir(), 'dsh-source-publish-evidence-'))
+  let scaffold: WebScaffold | undefined
+  let browser: Browser | undefined
+  try {
+    await mkdir(source)
+    await mkdir(transport)
+    await writeFile(join(source, 'package.json'), JSON.stringify({
+      name: '@fixture/creator-source-publish', version: '1.0.0', type: 'module', dsh: { bundle: { patch: 'cordis.patch.yml' } },
+    }) + '\n')
+    await writeFile(join(source, 'cordis.patch.yml'), '[]\n')
+    await writeFile(join(source, 'index.ts'), ORIGINAL_SOURCE)
+    const gh = await preparePublicationGithub(transport, ORIGINAL_SOURCE.slice(0, -1), true,
+      kind === 'descendant' ? { kind, branchBefore: BRANCH_BEFORE_SOURCE } : { kind })
+    const initialState = JSON.parse(await readFile(join(transport, 'state.json'), 'utf8')) as GithubFixtureState
+    const overlay = join(fixture, 'fork.patch.yml')
+    const fork = { ghCommand: gh, timeoutMs: 60_000, operationTimeoutMs: 120_000, previewLifetimeMs: REVIEW_LIFETIME_MS }
+    await writeFile(overlay, `- id: plugin-manager\n  config: ${JSON.stringify({ fork })}\n`)
+    scaffold = await launchWebScaffold({
+      extraOverlayPath: [fileURLToPath(new URL('./pin-browse-picker.overlay.yml', import.meta.url)), overlay],
+      profile: { packages: [{ dir: source, enabled: true }] }, agentPresets: { default: 'standard' },
+    })
+    browser = await engine.launch()
+    const page = await newEnglishPage(browser)
+    // The product opens the confirmed URL; browser traffic to that external page remains inside this fixture.
+    await page.context().route('https://github.com/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: '<title>Fixture pull request</title>' }))
+    const tripwire = watchConsole(page)
+    onTestFailed(() => saveFailureShot(page, `web-e2e-creator-source-publish-${kind}-${engine.name()}`))
+    const workspaceCwd = scaffold.workspaceCwd
+    const compareAria = async (filename: string): Promise<void> => {
+      if (engine !== chromium || kind === 'new') return
+      await compareOrRefreshGolden(join(EXPECTED, filename), await captureStableAria(page, '[role="dialog"]', workspaceCwd), MODE)
+    }
+    const calls = (): Promise<GithubCall[]> => readGithubCalls(transport)
+    const apiCalls: string[] = []
+    page.on('request', (request) => {
+      const path = new URL(request.url()).pathname
+      if (path.startsWith('/api/creatorFork/')) apiCalls.push(path)
+    })
+    await page.goto(scaffold.authenticatedUrl, { waitUntil: 'load' })
+    await connectFreshWorkspace(page, workspaceCwd)
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Plugins', exact: true }).click()
+    const menuTrigger = page.getByRole('button', { name: 'Choose how to add a plugin', exact: true })
+    await expect.poll(() => menuTrigger.isEnabled(), { timeout: 30_000 }).toBe(true)
+    await menuTrigger.click()
+    const entry = page.getByRole('menuitem', { name: /^Save to My Fork/ })
+    await expect.poll(() => entry.isEnabled(), { timeout: 30_000 }).toBe(true)
+    await entry.click()
+    const local = page.getByRole('dialog', { name: 'Save to My Fork', exact: true })
+    await local.getByRole('button', { name: 'Save directly to GitHub', exact: true }).click()
+    await local.waitFor({ state: 'detached' })
+    const dialog = page.getByRole('dialog', { name: 'Save to my GitHub fork', exact: true })
+    await dialog.waitFor()
+    expect(apiCalls).toEqual([])
+    expect(await calls()).toEqual([])
+    if (engine === chromium) await mkdir(EXPECTED, { recursive: true })
+    await compareAria('publish-before-connect.expected.md')
+    await dialog.getByRole('button', { name: 'Load my GitHub forks', exact: true }).click()
+    const repository = dialog.getByRole('combobox', { name: 'Fork repository', exact: true })
+    await repository.waitFor()
+    expect(await repository.locator('option').evaluateAll(options => options.map(option => option.getAttribute('value'))))
+      .toEqual(['', 'alice/harness'])
+    await repository.selectOption('alice/harness')
+    const branch = dialog.getByRole('textbox', { name: 'Branch', exact: true })
+    await branch.fill('creator/saved')
+    const responsePromise = page.waitForResponse('**/api/creatorFork/preview')
+    await dialog.getByRole('button', { name: 'Preview changes', exact: true }).click()
+    const envelope = await (await responsePromise).json() as { result: { ok: boolean; value: ForkPreviewResult } }
+    expect(envelope.result.ok).toBe(true)
+    const captured = envelope.result.value
+    if (captured.status !== 'ready') throw new Error(`Publication preview was blocked: ${captured.code}`)
+    expect(captured.files).toHaveLength(11)
+    expect(new Set(captured.files.map(file => file.path)).size).toBe(captured.files.length)
+    expect(captured.base).toBe('main')
+    expect(captured.head).toBe(kind === 'descendant' ? GITHUB_PREVIOUS : null)
+    expect(await dialog.getByText('alice/harness:main', { exact: true }).count()).toBe(1)
+    expect(await dialog.getByText('Before shows the reviewed default branch; After shows the proposed pull request. Additional branch text shows different content this save will replace.', { exact: true }).count()).toBe(1)
+    const sourcePath = PUBLISH_SOURCE_PATH
+    expect(captured.files.find(file => file.path === sourcePath)).toEqual({
+      path: sourcePath, before: ORIGINAL_SOURCE.slice(0, -1), after: ORIGINAL_SOURCE,
+      ...kind === 'descendant' ? { branchBefore: BRANCH_BEFORE_SOURCE } : {},
+    })
+    const previousExport = captured.files.find(file => file.path === PUBLISH_EXISTING_PATH)
+    if (previousExport === undefined) throw new Error('The full PR omitted the already-exported file')
+    expect(previousExport).toEqual({
+      path: PUBLISH_EXISTING_PATH, before: null, after: '[]\n',
+    })
+    expect((await calls()).filter(call => call.path.startsWith('repos/alice/harness/compare/'))).toEqual(kind === 'descendant'
+      ? [{ method: 'GET', path: `repos/alice/harness/compare/${GITHUB_BASE}...${GITHUB_PREVIOUS}?per_page=1` }] : [])
+    const initialTarget = initialState.head === null ? initialState.commits[GITHUB_BASE] : initialState.commits[initialState.head]
+    if (initialTarget === undefined) throw new Error('The fixture target commit is missing')
+    const initialFiles = initialState.trees[initialTarget.tree]
+    if (initialFiles === undefined) throw new Error('The fixture target tree is missing')
+    const targetFiles = new Map(initialFiles.map(file => [file.path, file.content]))
+    const initialBaseFiles = initialState.trees[GITHUB_BASE_TREE]
+    if (initialBaseFiles === undefined) throw new Error('The fixture default tree is missing')
+    const baseFiles = new Map(initialBaseFiles.map(file => [file.path, file.content]))
+    for (const file of captured.files) {
+      expect(file.before).toBe(baseFiles.get(file.path) ?? null)
+      const branchBefore = targetFiles.get(file.path) ?? null
+      expect(file.branchBefore).toBe(branchBefore !== file.after && branchBefore !== file.before ? branchBefore : undefined)
+    }
+    const plannedWrites = captured.files.filter(file => (targetFiles.get(file.path) ?? null) !== file.after)
+    expect(plannedWrites).toHaveLength(captured.files.length - (kind === 'descendant' ? 1 : 0))
+    const files = dialog.getByRole('listbox', { name: 'Files', exact: true })
+    const acknowledgement = dialog.getByRole('checkbox', { name: PUBLICATION_REVIEW_LABEL, exact: true })
+    expect(await dialog.getByText(PUBLIC_FORK_WARNING, { exact: true }).count()).toBe(1)
+    await files.waitFor()
+    await expectPublicationReviewProgress(dialog, 0, captured.files.length)
+    expect(await acknowledgement.isEnabled()).toBe(false)
+    expect(await files.inputValue()).toBe('')
+    expect(await dialog.locator('pre').count()).toBe(0)
+    expect(await dialog.textContent()).not.toContain(ORIGINAL_SOURCE)
+    expect(await dialog.textContent()).not.toContain(JSON.stringify(ORIGINAL_SOURCE))
+    for (const path of [sourcePath, 'creator-exports/saved/profiles/saved/cordis.patch.yml', 'creator-exports/saved/.gitignore']) {
+      const selected = captured.files.find(file => file.path === path)
+      if (selected === undefined) throw new Error('The publication fixture is missing a reviewed file')
+      await files.selectOption(path)
+      await expectSelectedPublicationText(dialog, selected)
+      if (selected.before !== null) await showPublicationEscapedText(dialog, 'Before', selected.before)
+      if (typeof selected.branchBefore === 'string') await showPublicationEscapedText(dialog, 'Current branch before this save', selected.branchBefore)
+      await showPublicationEscapedText(dialog, 'After', selected.after)
+      expect(await dialog.locator('pre').allTextContents()).toEqual(publicationText(selected, true))
+    }
+    const selectedSource = captured.files.find(file => file.path === sourcePath)
+    if (selectedSource === undefined || selectedSource.before === null) throw new Error('The source fixture is missing its Before text')
+    await files.selectOption(sourcePath)
+    await expectSelectedPublicationText(dialog, selectedSource)
+    await showPublicationEscapedText(dialog, 'Before', selectedSource.before)
+    if (typeof selectedSource.branchBefore === 'string') await showPublicationEscapedText(dialog, 'Current branch before this save', selectedSource.branchBefore)
+    await showPublicationEscapedText(dialog, 'After', selectedSource.after)
+    const confirm = dialog.getByRole('button', { name: 'Confirm and open PR', exact: true })
+    expect(await confirm.isEnabled()).toBe(false)
+    expect(apiCalls.filter(path => path.endsWith('/publish'))).toEqual([])
+    expect((await calls()).filter(call => call.method !== 'GET')).toEqual([])
+    await compareAria('publish-preview.expected.md')
+    await page.screenshot({ path: join(evidence, 'desktop.png') })
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await expect.poll(() => page.locator('body').evaluate(element => element.hasAttribute('data-ds-dark-theme'))).toBe(true)
+    await page.screenshot({ path: join(evidence, 'desktop-dark.png') })
+    await page.emulateMedia({ colorScheme: 'light' })
+    await expect.poll(() => page.locator('body').evaluate(element => element.hasAttribute('data-ds-dark-theme'))).toBe(false)
+    await page.setViewportSize({ width: 390, height: 844 })
+    const fits = await dialog.evaluate((element) => {
+      const bounds = element.getBoundingClientRect()
+      return bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight
+        && document.documentElement.scrollWidth <= innerWidth
+        && [...element.querySelectorAll('button, input, select')].every((control) => {
+          const rect = control.getBoundingClientRect()
+          return rect.left >= bounds.left && rect.right <= bounds.right
+        })
+    })
+    expect(fits).toBe(true)
+    await compareAria('publish-mobile.expected.md')
+    await page.screenshot({ path: join(evidence, 'mobile.png') })
+    const selectedReview = dialog.getByRole('checkbox', { name: FILE_REVIEW_LABEL, exact: true })
+    await selectedReview.focus()
+    await page.keyboard.press('Space')
+    expect(await selectedReview.isChecked()).toBe(true)
+    await expectPublicationReviewProgress(dialog, 1, captured.files.length)
+    const extendedAt = await extendPublicationReview(page, dialog, captured.id)
+    await expectPublicationReviewProgress(dialog, 1, captured.files.length)
+    expect(await dialog.locator('pre').allTextContents()).toEqual(publicationText(selectedSource, true))
+    expect(await selectedReview.isChecked()).toBe(true)
+    expect(await acknowledgement.isChecked()).toBe(false)
+    expect(apiCalls.filter(path => path.endsWith('/preview'))).toHaveLength(1)
+    expect((await calls()).filter(call => call.method !== 'GET')).toEqual([])
+    expect(await acknowledgement.isEnabled()).toBe(false)
+    expect(await confirm.isEnabled()).toBe(false)
+    const nextUnreviewed = dialog.getByRole('button', { name: 'Next unreviewed file', exact: true })
+    await nextUnreviewed.focus()
+    await page.keyboard.press('Enter')
+    const nextFile = captured.files[(captured.files.indexOf(selectedSource) + 1) % captured.files.length]
+    if (nextFile === undefined) throw new Error('The publication fixture has no next unreviewed file')
+    expect(await files.inputValue()).toBe(nextFile.path)
+    expect(await dialog.getByRole('checkbox', { name: FILE_REVIEW_LABEL, exact: true }).isChecked()).toBe(false)
+    await expectPublicationReviewProgress(dialog, 1, captured.files.length)
+    const reviewOrder = kind === 'descendant'
+      ? [...captured.files.filter(file => file.path !== previousExport.path), previousExport] : captured.files
+    await reviewPublicationFiles(dialog, reviewOrder, [selectedSource.path])
+    expect(await nextUnreviewed.isEnabled()).toBe(false)
+    await dialog.getByRole('searchbox', { name: 'Search files', exact: true }).fill('')
+    await files.selectOption(sourcePath)
+    await expectSelectedPublicationText(dialog, selectedSource)
+    await showPublicationEscapedText(dialog, 'Before', selectedSource.before)
+    if (typeof selectedSource.branchBefore === 'string') await showPublicationEscapedText(dialog, 'Current branch before this save', selectedSource.branchBefore)
+    await showPublicationEscapedText(dialog, 'After', selectedSource.after)
+    await waitForReviewExpiry(extendedAt)
+    const expiredResponse = page.waitForResponse('**/api/creatorFork/publish')
+    await acknowledgement.check()
+    await confirm.click()
+    const expiredEnvelope: unknown = await (await expiredResponse).json()
+    expect(expiredEnvelope).toMatchObject({ result: { ok: true, value: {
+      status: 'blocked', code: 'stale-preview', effect: 'none',
+    } } })
+    expect((await calls()).filter(call => call.method !== 'GET')).toEqual([])
+    await extendPublicationReview(page, dialog, captured.id)
+    await expectPublicationReviewProgress(dialog, captured.files.length, captured.files.length)
+    expect(await acknowledgement.isChecked()).toBe(false)
+    expect(await confirm.isEnabled()).toBe(false)
+    await writeFile(join(transport, 'hold-commit'), '')
+    await acknowledgement.check()
+    await confirm.click()
+    await dialog.getByText('Saving the reviewed files', { exact: true }).waitFor()
+    const mutationPath = kind === 'descendant' ? 'graphql' : 'repos/alice/harness/git/trees'
+    await expect.poll(async () => (await calls()).filter(call => call.path === mutationPath).length,
+      { timeout: fork.operationTimeoutMs }).toBe(1)
+    expect(await repository.isEnabled()).toBe(false)
+    expect(await branch.isEnabled()).toBe(false)
+    await compareAria('publish-pending.expected.md')
+    await rm(join(transport, 'hold-commit'))
+    await dialog.getByText('The commit was saved, but the pull request could not be confirmed. Resolve the reported problem before retrying this same save.', { exact: true }).waitFor()
+    await compareAria('publish-committed.expected.md')
+    await dialog.getByRole('button', { name: 'Retry this save', exact: true }).click()
+    const link = dialog.getByRole('link', { name: 'Open pull request', exact: true })
+    await link.waitFor()
+    expect(await link.getAttribute('href')).toBe('https://github.com/alice/harness/pull/17')
+    expect(await link.getAttribute('target')).toBe('_blank')
+    expect(await link.getAttribute('rel')).toBe('noopener noreferrer')
+    const recorded = await calls()
+    const writes = recorded.filter(call => call.method !== 'GET')
+    expect(writes.map(call => call.path)).toEqual(kind === 'descendant'
+      ? ['graphql', 'repos/alice/harness/pulls', 'repos/alice/harness/pulls']
+      : ['repos/alice/harness/git/trees', 'repos/alice/harness/git/commits', 'repos/alice/harness/git/refs',
+        'repos/alice/harness/pulls', 'repos/alice/harness/pulls'])
+    expect(writes.every(call => call.method === 'POST')).toBe(true)
+    expect(recorded.filter(call => call.path.startsWith('repos/deepseek-ai/deepseek-harness')))
+      .toEqual(recorded.filter(call => call.method === 'GET' && call.path === 'repos/deepseek-ai/deepseek-harness'))
+    if (kind === 'descendant') {
+      const committed = writes[0]?.body as { variables: { input: {
+        branch: { repositoryNameWithOwner: string; branchName: string }
+        expectedHeadOid: string
+        fileChanges: { additions: { path: string; contents: string }[] }
+      } } }
+      expect(committed.variables.input.branch).toEqual({ repositoryNameWithOwner: 'alice/harness', branchName: 'creator/saved' })
+      expect(committed.variables.input.expectedHeadOid).toBe(GITHUB_PREVIOUS)
+      expect(committed.variables.input.fileChanges.additions).toEqual(plannedWrites.map(file => ({ path: file.path, contents: Buffer.from(file.after).toString('base64') })))
+    } else {
+      expect(writes[0]?.body).toEqual({ base_tree: GITHUB_BASE_TREE,
+        tree: plannedWrites.map(file => ({ path: file.path, mode: '100644', type: 'blob', content: file.after })) })
+      expect(writes[1]?.body).toEqual({ message: `Save Creator source (${captured.id})`, tree: GITHUB_COMMIT_TREE, parents: [GITHUB_BASE] })
+      expect(writes[2]?.body).toEqual({ ref: 'refs/heads/creator/saved', sha: GITHUB_COMMIT })
+      expect(recorded.filter(call => call.path === 'graphql')).toEqual([])
+    }
+    const finalState = JSON.parse(await readFile(join(transport, 'state.json'), 'utf8')) as GithubFixtureState
+    expect(finalState.head).toBe(GITHUB_COMMIT)
+    expect(finalState.commits[GITHUB_BASE]).toEqual(initialState.commits[GITHUB_BASE])
+    expect(finalState.trees[GITHUB_BASE_TREE]).toEqual(initialState.trees[GITHUB_BASE_TREE])
+    if (kind === 'descendant') {
+      expect(finalState.commits[GITHUB_PREVIOUS]).toEqual(initialState.commits[GITHUB_PREVIOUS])
+      expect(finalState.trees[GITHUB_PREVIOUS_TREE]).toEqual(initialState.trees[GITHUB_PREVIOUS_TREE])
+    }
+    expect(finalState.commits[GITHUB_COMMIT]).toEqual({ tree: GITHUB_COMMIT_TREE,
+      message: `Save Creator source (${captured.id})`, parents: [kind === 'descendant' ? GITHUB_PREVIOUS : GITHUB_BASE] })
+    const finalTree = finalState.trees[GITHUB_COMMIT_TREE]
+    if (finalTree === undefined) throw new Error('The published fixture tree is missing')
+    const finalFiles = [...finalTree].sort((left, right) => left.path.localeCompare(right.path))
+    const expectedFiles = [...captured.files.map(file => ({ path: file.path, content: file.after })), PRESERVED_FILE]
+      .sort((left, right) => left.path.localeCompare(right.path))
+    expect(finalFiles).toEqual(expectedFiles)
+    await compareAria('publish-saved.expected.md')
+    expect(scaffold.ctx.agentPresets.defaultId).toBe('standard')
+    expect(tripwire.pageErrors).toEqual([])
+    expect(tripwire.warnings).toEqual([])
+  } finally {
+    await browser?.close()
+    await scaffold?.close()
+    await rm(fixture, { recursive: true, force: true })
+  }
+})
+
+it.each([
+  { name: 'Chromium', engine: chromium, fileCount: 51 },
+  { name: 'WebKit', engine: webkit, fileCount: 51 },
+  { name: 'Chromium', engine: chromium, fileCount: 2000 },
+  { name: 'WebKit', engine: webkit, fileCount: 2000 },
+])('$name reviews a real $fileCount-file Creator preview with bounded choices and explicit per-file review', async ({ engine, fileCount }) => {
+  const fixture = await mkdtemp(join(tmpdir(), 'dsh-source-publish-large-web-'))
+  const source = join(fixture, 'bundle')
+  const transport = join(fixture, 'github')
+  const evidence = await mkdtemp(join(tmpdir(), 'dsh-source-publish-large-evidence-'))
+  const before = '\uFEFF// 初始😀\r\n\t// cafe\u0301'
+  const after = '\uFEFF// 新的😀\r\n\t// cafe\u0301\nexport const greeting = "尾部";\r\n'
+  const longRelativePath = 'extensions/review-panel/custom-configuration/long-source-destination/仕様-😀-cafe\u0301.txt'
+  const longPath = `creator-exports/saved/bundles/0/${longRelativePath}`
+  const longContent = '\uFEFFLong-path fixture 🧭\r\n\t日本語 and cafe\u0301\n'
+  let scaffold: WebScaffold | undefined
+  let browser: Browser | undefined
+  try {
+    await mkdir(source)
+    await mkdir(transport)
+    await writeFile(join(source, 'package.json'), JSON.stringify({
+      name: '@fixture/creator-source-publish-large', version: '1.0.0', type: 'module', dsh: { bundle: { patch: 'cordis.patch.yml' } },
+    }) + '\n')
+    await writeFile(join(source, 'cordis.patch.yml'), '[]\n')
+    await writeFile(join(source, 'index.ts'), after)
+    await mkdir(dirname(join(source, longRelativePath)), { recursive: true })
+    await writeFile(join(source, longRelativePath), longContent)
+    const samples = join(source, 'samples')
+    await mkdir(samples)
+    // The eleven baseline capture files plus the long-path file precede the samples.
+    const sampleFiles = Array.from({ length: fileCount - 12 }, (_, index) => ({
+      name: `file-${String(index).padStart(4, '0')}.txt`, content: `Public source fixture ${String(index).padStart(4, '0')}\n`,
+    }))
+    for (let start = 0; start < sampleFiles.length; start += 32) {
+      await Promise.all(sampleFiles.slice(start, start + 32).map(file => writeFile(join(samples, file.name), file.content)))
+    }
+    const gh = await preparePublicationGithub(transport, before, false)
+    const overlay = join(fixture, 'fork.patch.yml')
+    await writeFile(overlay, `- id: plugin-manager\n  config: ${JSON.stringify({ fork: {
+      ghCommand: gh, timeoutMs: 60_000, previewLifetimeMs: REVIEW_LIFETIME_MS,
+    } })}\n`)
+    scaffold = await launchWebScaffold({
+      extraOverlayPath: [fileURLToPath(new URL('./pin-browse-picker.overlay.yml', import.meta.url)), overlay],
+      profile: { packages: [{ dir: source, enabled: true }] }, agentPresets: { default: 'standard' },
+    })
+    browser = await engine.launch()
+    const page = await newEnglishPage(browser)
+    await page.context().route('https://github.com/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: '<title>Fixture pull request</title>' }))
+    const tripwire = watchConsole(page)
+    onTestFailed(() => saveFailureShot(page, `web-e2e-creator-source-publish-large-${String(fileCount)}-${engine.name()}`))
+    const apiCalls: string[] = []
+    page.on('request', (request) => {
+      const path = new URL(request.url()).pathname
+      if (path.startsWith('/api/creatorFork/')) apiCalls.push(path)
+    })
+    await page.goto(scaffold.authenticatedUrl, { waitUntil: 'load' })
+    await connectFreshWorkspace(page, scaffold.workspaceCwd)
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Plugins', exact: true }).click()
+    const menuTrigger = page.getByRole('button', { name: 'Choose how to add a plugin', exact: true })
+    await expect.poll(() => menuTrigger.isEnabled(), { timeout: 30_000 }).toBe(true)
+    await menuTrigger.click()
+    const entry = page.getByRole('menuitem', { name: /^Save to My Fork/ })
+    await expect.poll(() => entry.isEnabled(), { timeout: 30_000 }).toBe(true)
+    await entry.click()
+    const local = page.getByRole('dialog', { name: 'Save to My Fork', exact: true })
+    await local.getByRole('button', { name: 'Save directly to GitHub', exact: true }).click()
+    await local.waitFor({ state: 'detached' })
+    const dialog = page.getByRole('dialog', { name: 'Save to my GitHub fork', exact: true })
+    await dialog.waitFor()
+    expect(apiCalls).toEqual([])
+    expect(await readGithubCalls(transport)).toEqual([])
+    await dialog.getByRole('button', { name: 'Load my GitHub forks', exact: true }).click()
+    const repository = dialog.getByRole('combobox', { name: 'Fork repository', exact: true })
+    await repository.selectOption('alice/harness')
+    const branch = dialog.getByRole('textbox', { name: 'Branch', exact: true })
+    await branch.fill('creator/saved')
+    const responsePromise = page.waitForResponse('**/api/creatorFork/preview')
+    await dialog.getByRole('button', { name: 'Preview changes', exact: true }).click()
+    const envelope = await (await responsePromise).json() as { result: { ok: boolean; value: ForkPreviewResult } }
+    expect(envelope.result.ok).toBe(true)
+    const captured = envelope.result.value
+    if (captured.status !== 'ready') throw new Error(`Large publication preview was blocked: ${captured.code}`)
+    const capturedAt = Date.now()
+    expect(captured.files).toHaveLength(fileCount)
+    expect(Buffer.byteLength(JSON.stringify(captured))).toBeLessThan(10 * 1024 * 1024)
+    expect(captured.files.every(file => Buffer.byteLength(file.after) <= 1024 * 1024)).toBe(true)
+    const unicodeFile = captured.files.find(file => file.path === PUBLISH_SOURCE_PATH)
+    if (unicodeFile === undefined) throw new Error('The Unicode source is absent from the real publication preview')
+    expect(unicodeFile).toEqual({ path: PUBLISH_SOURCE_PATH, before, after })
+    const longFile = captured.files.find(file => file.path === longPath)
+    if (longFile === undefined) throw new Error('The long-path source is absent from the real publication preview')
+    expect(longFile).toEqual({ path: longPath, before: null, after: longContent })
+    const capturedCalls = await readGithubCalls(transport)
+    const capturedApiCalls = [...apiCalls]
+    expect(capturedCalls.filter(call => call.path.includes('/git/blobs/'))).toHaveLength(1)
+    await writeFile(join(source, 'index.ts'), '// Edited locally after the retained preview\n')
+
+    const files = dialog.getByRole('listbox', { name: 'Files', exact: true })
+    await files.waitFor()
+    const search = dialog.getByRole('searchbox', { name: 'Search files', exact: true })
+    const previous = dialog.getByRole('button', { name: 'Previous files', exact: true })
+    const next = dialog.getByRole('button', { name: 'Next files', exact: true })
+    const acknowledgement = dialog.getByRole('checkbox', { name: PUBLICATION_REVIEW_LABEL, exact: true })
+    const confirm = dialog.getByRole('button', { name: 'Confirm and open PR', exact: true })
+    const fileValues = (): Promise<string[]> => files.locator('option').evaluateAll(options => options
+      .map(option => option.getAttribute('value') ?? '').filter(value => value !== ''))
+    expect(await files.evaluate(element => element.tagName)).toBe('SELECT')
+    expect(await files.getAttribute('size')).toBe('8')
+    expect(await files.locator('option').count()).toBeLessThanOrEqual(51)
+    expect(await fileValues()).toEqual(captured.files.slice(0, 50).map(file => file.path))
+    expect(await dialog.getByText(`Matching files: ${String(fileCount)}`, { exact: true }).count()).toBe(1)
+    expect(await files.inputValue()).toBe('')
+    expect(await files.getByRole('option', { name: 'Choose a file', exact: true }).isEnabled()).toBe(true)
+    expect(await dialog.locator('pre').count()).toBe(0)
+    expect(await dialog.textContent()).not.toContain(after)
+    expect(await dialog.textContent()).not.toContain(JSON.stringify(after))
+    expect(await acknowledgement.isChecked()).toBe(false)
+    expect(await acknowledgement.isEnabled()).toBe(false)
+    await expectPublicationReviewProgress(dialog, 0, fileCount)
+    expect(await confirm.isEnabled()).toBe(false)
+    await files.focus()
+    expect(await files.inputValue()).toBe('')
+    expect(await dialog.locator('pre').count()).toBe(0)
+    const first = captured.files[0]
+    const firstPageLast = captured.files[49]
+    const last = captured.files.at(-1)
+    if (first === undefined || firstPageLast === undefined || last === undefined) throw new Error('The large preview has incomplete page endpoints')
+    await page.keyboard.press('ArrowDown')
+    await expect.poll(() => files.inputValue()).toBe(first.path)
+    await expectSelectedPublicationText(dialog, first)
+    await expectPublicationReviewProgress(dialog, 0, fileCount)
+    const selectedReview = dialog.getByRole('checkbox', { name: FILE_REVIEW_LABEL, exact: true })
+    await selectedReview.focus()
+    await page.keyboard.press('Space')
+    expect(await selectedReview.isChecked()).toBe(true)
+    await expectPublicationReviewProgress(dialog, 1, fileCount)
+    expect(await acknowledgement.isEnabled()).toBe(false)
+    expect(await confirm.isEnabled()).toBe(false)
+    const nextUnreviewed = dialog.getByRole('button', { name: 'Next unreviewed file', exact: true })
+    await nextUnreviewed.focus()
+    await page.keyboard.press('Enter')
+    const following = captured.files[1]
+    if (following === undefined) throw new Error('The review fixture has no second file')
+    expect(await files.inputValue()).toBe(following.path)
+    await expectSelectedPublicationText(dialog, following)
+    expect(await selectedReview.isChecked()).toBe(false)
+    await expectPublicationReviewProgress(dialog, 1, fileCount)
+    await files.focus()
+    await page.keyboard.press('End')
+    await expect.poll(() => files.inputValue()).toBe(firstPageLast.path)
+    await expectSelectedPublicationText(dialog, firstPageLast)
+    await page.keyboard.press('Home')
+    await expect.poll(() => files.inputValue()).toBe('')
+    expect(await dialog.locator('pre').count()).toBe(0)
+    await page.keyboard.press('ArrowDown')
+    await expect.poll(() => files.inputValue()).toBe(first.path)
+    await expectSelectedPublicationText(dialog, first)
+    for (let pageIndex = 1; pageIndex < Math.ceil(captured.files.length / 50); pageIndex++) {
+      await next.click()
+      expect(await files.inputValue()).toBe('')
+      expect(await dialog.locator('pre').count()).toBe(0)
+      expect(await files.locator('option').count()).toBeLessThanOrEqual(51)
+      expect(await fileValues()).toEqual(captured.files.slice(pageIndex * 50, (pageIndex + 1) * 50).map(file => file.path))
+      await expectPublicationReviewProgress(dialog, 1, fileCount)
+      expect(await acknowledgement.isEnabled()).toBe(false)
+    }
+    expect(await next.isEnabled()).toBe(false)
+    expect(await previous.isEnabled()).toBe(true)
+    await files.selectOption(last.path)
+    await expectSelectedPublicationText(dialog, last)
+    const lastDisclosure = await showPublicationEscapedText(dialog, 'After', last.after)
+    await previous.click()
+    expect(await files.inputValue()).toBe('')
+    expect(await dialog.locator('pre').count()).toBe(0)
+    expect(await dialog.evaluate((element, id) => element.ownerDocument.getElementById(id) === null, lastDisclosure)).toBe(true)
+
+    await search.fill('INDEX.TS')
+    expect(await fileValues()).toEqual([PUBLISH_SOURCE_PATH])
+    expect(await previous.isEnabled()).toBe(false)
+    expect(await next.isEnabled()).toBe(false)
+    await files.focus()
+    await page.keyboard.press('ArrowDown')
+    await expect.poll(() => files.inputValue()).toBe(PUBLISH_SOURCE_PATH)
+    await expectSelectedPublicationText(dialog, unicodeFile)
+    await expectPublicationReviewProgress(dialog, 1, fileCount)
+    expect(await acknowledgement.isEnabled()).toBe(false)
+    const beforeDisclosure = await showPublicationEscapedText(dialog, 'Before', before)
+    expect(await dialog.locator('pre').allTextContents()).toEqual([before, JSON.stringify(before), after])
+    const afterDisclosure = await showPublicationEscapedText(dialog, 'After', after)
+    expect(await dialog.locator('pre').allTextContents()).toEqual([before, JSON.stringify(before), after, JSON.stringify(after)])
+    await search.fill('no-such-source-file')
+    expect(await fileValues()).toEqual([])
+    expect(await files.locator('option').count()).toBe(1)
+    expect(await files.inputValue()).toBe('')
+    expect(await dialog.locator('pre').count()).toBe(0)
+    expect(await dialog.getByText('Matching files: 0', { exact: true }).count()).toBe(1)
+    await dialog.getByRole('status').filter({ hasText: /no .*files|no .*matches|no .*results/i }).waitFor()
+    expect(await previous.isEnabled()).toBe(false)
+    expect(await next.isEnabled()).toBe(false)
+    for (const id of [beforeDisclosure, afterDisclosure]) {
+      expect(await dialog.evaluate((element, controlledId) => element.ownerDocument.getElementById(controlledId) === null, id)).toBe(true)
+    }
+    await search.fill('')
+    expect(await fileValues()).toEqual(captured.files.slice(0, 50).map(file => file.path))
+    expect(await previous.isEnabled()).toBe(false)
+    expect(await next.isEnabled()).toBe(true)
+    expect(await files.inputValue()).toBe('')
+    expect(await dialog.locator('pre').count()).toBe(0)
+    await search.fill('仕様-😀')
+    expect(await fileValues()).toEqual([longPath])
+    await files.selectOption(longPath)
+    await expectSelectedPublicationText(dialog, longFile)
+    expect(await dialog.getByRole('region', { name: 'Before', exact: true }).locator('pre').count()).toBe(0)
+    expect(await dialog.getByRole('button', { name: 'Before: exact text with escaped line endings', exact: true }).count()).toBe(0)
+    const longDisclosure = await showPublicationEscapedText(dialog, 'After', longContent)
+    await dialog.getByRole('button', { name: 'After: exact text with escaped line endings', exact: true }).click()
+    expect(await dialog.evaluate((element, id) => element.ownerDocument.getElementById(id)?.textContent, longDisclosure)).toBe('')
+    await expectSelectedPublicationText(dialog, longFile)
+
+    const selectedTitle = dialog.getByRole('heading', { name: longPath, exact: true })
+    const assertFits = async (): Promise<void> => {
+      await page.evaluate(() => document.fonts.ready)
+      await selectedTitle.scrollIntoViewIfNeeded()
+      expect(await dialog.evaluate((element) => {
+        const bounds = element.getBoundingClientRect()
+        return bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight
+          && document.documentElement.scrollWidth <= innerWidth
+          && [...element.querySelectorAll('button, input, select')].every((control) => {
+            const rect = control.getBoundingClientRect()
+            return rect.left >= bounds.left && rect.right <= bounds.right
+          })
+      })).toBe(true)
+      expect(await selectedTitle.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
+      expect(await confirm.evaluate((element) => {
+        const bounds = element.getBoundingClientRect()
+        return bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight
+      })).toBe(true)
+    }
+    const assertReviewControlsFit = async (): Promise<void> => {
+      await nextUnreviewed.scrollIntoViewIfNeeded()
+      await acknowledgement.locator('..').scrollIntoViewIfNeeded()
+      for (const control of [selectedReview, nextUnreviewed, acknowledgement]) {
+        expect(await control.evaluate((element) => {
+          const target = element.closest('label') ?? element
+          const bounds = target.getBoundingClientRect()
+          if (bounds.width <= 0 || bounds.height <= 0 || bounds.left < 0 || bounds.right > innerWidth
+            || bounds.top < 0 || bounds.bottom > innerHeight) return false
+          for (let ancestor = target.parentElement; ancestor !== null; ancestor = ancestor.parentElement) {
+            const style = getComputedStyle(ancestor)
+            const clip = ancestor.getBoundingClientRect()
+            if (['auto', 'scroll', 'hidden', 'clip'].includes(style.overflowY)
+              && (bounds.top < clip.top || bounds.bottom > clip.bottom)) return false
+            if (['auto', 'scroll', 'hidden', 'clip'].includes(style.overflowX)
+              && (bounds.left < clip.left || bounds.right > clip.right)) return false
+          }
+          return true
+        })).toBe(true)
+      }
+      expect(await selectedReview.isChecked()).toBe(false)
+      expect(await selectedReview.isEnabled()).toBe(true)
+      expect(await nextUnreviewed.isEnabled()).toBe(true)
+      expect(await acknowledgement.isChecked()).toBe(false)
+      expect(await acknowledgement.isEnabled()).toBe(false)
+      expect(await confirm.isEnabled()).toBe(false)
+      expect(await confirm.evaluate((element) => {
+        const bounds = element.getBoundingClientRect()
+        return bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight
+      })).toBe(true)
+    }
+    await assertFits()
+    if (fileCount === 2000) await page.screenshot({ path: join(evidence, 'desktop-light.png') })
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await expect.poll(() => page.locator('body').evaluate(element => element.hasAttribute('data-ds-dark-theme'))).toBe(true)
+    await assertFits()
+    if (fileCount === 2000) await page.screenshot({ path: join(evidence, 'desktop-dark.png') })
+    await page.setViewportSize({ width: 390, height: 844 })
+    await assertFits()
+    if (fileCount === 2000) await page.screenshot({ path: join(evidence, 'mobile-dark.png') })
+    await assertReviewControlsFit()
+    if (fileCount === 2000) await page.screenshot({ path: join(evidence, 'mobile-review-dark.png') })
+    await page.emulateMedia({ colorScheme: 'light' })
+    await expect.poll(() => page.locator('body').evaluate(element => element.hasAttribute('data-ds-dark-theme'))).toBe(false)
+    await assertFits()
+    if (fileCount === 2000) await page.screenshot({ path: join(evidence, 'mobile-light.png') })
+    await assertReviewControlsFit()
+    if (fileCount === 2000) await page.screenshot({ path: join(evidence, 'mobile-review-light.png') })
+    expect(await acknowledgement.isChecked()).toBe(false)
+    expect(await acknowledgement.isEnabled()).toBe(false)
+    expect(await confirm.isEnabled()).toBe(false)
+    await expectPublicationReviewProgress(dialog, 1, fileCount)
+    const longIndex = captured.files.indexOf(longFile)
+    const nextUnreviewedFile = [...captured.files.slice(longIndex + 1), ...captured.files.slice(0, longIndex + 1)]
+      .find(file => file.path !== first.path)
+    if (nextUnreviewedFile === undefined) throw new Error('The partial review has no unchecked file')
+    await nextUnreviewed.focus()
+    await page.keyboard.press('Enter')
+    expect(await search.inputValue()).toBe('')
+    expect(await files.inputValue()).toBe(nextUnreviewedFile.path)
+    await expectSelectedPublicationText(dialog, nextUnreviewedFile)
+    expect(await selectedReview.isChecked()).toBe(false)
+    await expectPublicationReviewProgress(dialog, 1, fileCount)
+    expect(await acknowledgement.isEnabled()).toBe(false)
+    expect(await confirm.isEnabled()).toBe(false)
+    if (fileCount === 51) {
+      await reviewPublicationFiles(dialog, captured.files, [first.path])
+      expect(await nextUnreviewed.isEnabled()).toBe(false)
+      await acknowledgement.check()
+      expect(await confirm.isEnabled()).toBe(true)
+      await search.fill('')
+      expect(await files.inputValue()).toBe('')
+      expect(await dialog.locator('pre').count()).toBe(0)
+      await next.click()
+      await expectPublicationReviewProgress(dialog, fileCount, fileCount)
+      expect(await acknowledgement.isChecked()).toBe(true)
+      expect(await confirm.isEnabled()).toBe(true)
+      await previous.click()
+      await files.selectOption(first.path)
+      await selectedReview.uncheck()
+      await expectPublicationReviewProgress(dialog, fileCount - 1, fileCount)
+      expect(await acknowledgement.isChecked()).toBe(false)
+      expect(await acknowledgement.isEnabled()).toBe(false)
+      expect(await confirm.isEnabled()).toBe(false)
+      await selectedReview.check()
+      await expectPublicationReviewProgress(dialog, fileCount, fileCount)
+      expect(await acknowledgement.isChecked()).toBe(false)
+      expect(await acknowledgement.isEnabled()).toBe(true)
+      expect(await confirm.isEnabled()).toBe(false)
+      await acknowledgement.check()
+      expect(await confirm.isEnabled()).toBe(true)
+    }
+    expect(await readGithubCalls(transport)).toEqual(capturedCalls)
+    expect(apiCalls).toEqual(capturedApiCalls)
+    expect(apiCalls.filter(path => path.endsWith('/publish'))).toEqual([])
+    expect((await readGithubCalls(transport)).filter(call => call.method !== 'GET')).toEqual([])
+    await search.fill(last.path)
+    await files.selectOption(last.path)
+    await expectSelectedPublicationText(dialog, last)
+    await dialog.getByRole('button', { name: 'Close', exact: true }).last().click()
+    await dialog.waitFor({ state: 'detached' })
+    await menuTrigger.click()
+    await entry.click()
+    const resumedLocal = page.getByRole('dialog', { name: 'Save to My Fork', exact: true })
+    await resumedLocal.getByRole('button', { name: 'Save directly to GitHub', exact: true }).click()
+    await dialog.waitFor()
+    expect(await search.inputValue()).toBe('')
+    expect(await files.inputValue()).toBe(last.path)
+    expect(await files.locator('option').count()).toBeLessThanOrEqual(51)
+    await expectSelectedPublicationText(dialog, last)
+    await expectPublicationReviewProgress(dialog, fileCount === 51 ? fileCount : 1, fileCount)
+    expect(await selectedReview.isChecked()).toBe(fileCount === 51)
+    expect(await acknowledgement.isChecked()).toBe(false)
+    expect(await confirm.isEnabled()).toBe(false)
+    expect(apiCalls).toEqual(capturedApiCalls)
+    await waitForReviewExpiry(capturedAt)
+    await extendPublicationReview(page, dialog, captured.id)
+    await expectPublicationReviewProgress(dialog, fileCount === 51 ? fileCount : 1, fileCount)
+    expect(await selectedReview.isChecked()).toBe(fileCount === 51)
+    await expectSelectedPublicationText(dialog, last)
+    expect(await acknowledgement.isChecked()).toBe(false)
+    expect(await confirm.isEnabled()).toBe(false)
+    expect((await readGithubCalls(transport)).slice(capturedCalls.length).every(call => call.method === 'GET')).toBe(true)
+    if (fileCount === 51) {
+      const refreshResponse = page.waitForResponse('**/api/creatorFork/preview')
+      await dialog.getByRole('button', { name: 'Preview changes', exact: true }).click()
+      const refreshedEnvelope = await (await refreshResponse).json() as { result: { ok: boolean; value: ForkPreviewResult } }
+      expect(refreshedEnvelope.result.ok).toBe(true)
+      const refreshed = refreshedEnvelope.result.value
+      if (refreshed.status !== 'ready') throw new Error(`Refreshed publication preview was blocked: ${refreshed.code}`)
+      expect(refreshed.id).not.toBe(captured.id)
+      expect(refreshed.files).toHaveLength(fileCount)
+      await expectPublicationReviewProgress(dialog, 0, fileCount)
+      expect(await files.inputValue()).toBe('')
+      expect(await dialog.locator('pre').count()).toBe(0)
+      expect(await acknowledgement.isChecked()).toBe(false)
+      expect(await acknowledgement.isEnabled()).toBe(false)
+      expect(await confirm.isEnabled()).toBe(false)
+    }
+    const settledApiCalls = [...capturedApiCalls, '/api/creatorFork/extendReview',
+      ...fileCount === 51 ? ['/api/creatorFork/preview'] : []]
+    expect(apiCalls).toEqual(settledApiCalls)
+    expect(apiCalls.filter(path => path.endsWith('/publish'))).toEqual([])
+    expect((await readGithubCalls(transport)).filter(call => call.method !== 'GET')).toEqual([])
+    await branch.fill('creator/changed-target')
+    expect(await dialog.getByRole('listbox', { name: 'Files', exact: true }).count()).toBe(0)
+    expect(await dialog.locator('pre').count()).toBe(0)
+    expect(await acknowledgement.count()).toBe(0)
+    expect(await confirm.count()).toBe(0)
+    expect(apiCalls).toEqual(settledApiCalls)
     expect(scaffold.ctx.agentPresets.defaultId).toBe('standard')
     expect(tripwire.pageErrors).toEqual([])
     expect(tripwire.warnings).toEqual([])

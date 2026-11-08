@@ -3,7 +3,7 @@ import { executeModelToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-export const inject = ['agents', 'agentPresets', 'tools', 'pluginManager', 'permissionPresets', 'profileContext']
+export const inject = ['agents', 'agentPresets', 'tools', 'pluginManager', 'creatorFork', 'permissionPresets', 'profileContext']
 
 export function apply(ctx, config) {
   const receive = message => {
@@ -15,6 +15,10 @@ export function apply(ctx, config) {
     return () => process.off('message', receive)
   })
   async function inspect(phase) {
+    const forkRefusals = [
+      await ctx.creatorFork.preview({ repository: 'example/source-export-fixture', branch: 'master' }),
+      await ctx.creatorFork.publish('unreviewed-fixture-receipt', false),
+    ]
     const handles = []
     let activeSession
     let answer = 'rejected'
@@ -37,7 +41,7 @@ export function apply(ctx, config) {
       if (phase === 'restored') {
         const ping = await executeModelToolFixture(ctx, { name: 'mcp__demo__ping', arguments: {}, agent: first,
           callId: `${phase}-ping`, signal: new AbortController().signal })
-        return { before, result: await ctx.pluginManager.listBundles(), ping, restoredProbe: ctx.get('creatorExportSourceProbe') }
+        return { before, result: await ctx.pluginManager.listBundles(), ping, restoredProbe: ctx.get('creatorExportSourceProbe'), forkRefusals }
       }
       const manage = args => executeModelToolFixture(ctx, { name: 'plugin_manager', arguments: args, agent: first,
         callId: `${phase}-manage`, signal: new AbortController().signal })
@@ -64,7 +68,7 @@ export function apply(ctx, config) {
       const exportUnchanged = beforeExport.every((content, index) => content === afterExport[index])
       const removed = phase === 'restart'
         ? JSON.parse((await manage({ action: 'remove_bundle', target: '@test/creator-mcp' })).value) : undefined
-      return { approvals, permission: ctx.permissionPresets.current(first.session), before, denied, afterDenied, bundlesAfterDenied, result, after, other, ping, sourceExport, exportUnchanged, removed, remaining: names(first) }
+      return { approvals, permission: ctx.permissionPresets.current(first.session), before, denied, afterDenied, bundlesAfterDenied, result, after, other, ping, sourceExport, exportUnchanged, removed, remaining: names(first), forkRefusals }
     } finally {
       disposeApproval()
       activeSession?.append('turn/end', { turn: 1, reason: { kind: 'completed' } })

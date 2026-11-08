@@ -1,0 +1,46 @@
+# Bilingual-pair consistency record for testing-creator-fork.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/cookbook/testing-creator-fork.md
+/:
+  en: 40a0ef6cba2e06b0
+  zh: e3e55824b95e972e
+/cookbook-testing-creator-fork-publication:
+  en: c5ddff35f109bc83
+  zh: 5aea718d2435668c
+/cookbook-testing-creator-fork-publication/summary:
+  en: 5e7c87892f9f95b2
+  zh: 1f08980dc79f6228
+/cookbook-testing-creator-fork-publication/table-of-contents:
+  en: d8cf05ecacca7028
+  zh: 755b73e83b4ff1be
+/cookbook-testing-creator-fork-publication/1-record-the-authorization:
+  en: d4587653d7263975
+  zh: d3e0751cf5473850
+/cookbook-testing-creator-fork-publication/2-run-deterministic-fixtures:
+  en: b8d9cef4eff6ef02
+  zh: 60d8d3d53a7394cb
+/cookbook-testing-creator-fork-publication/3-prepare-the-dedicated-host-and-baseline:
+  en: 1d66220d07bcf87d
+  zh: 096d2a335d2df9e0
+/cookbook-testing-creator-fork-publication/4-review-without-publishing:
+  en: dea89c3e731e56ac
+  zh: 9a2fab697a4b5e46
+/cookbook-testing-creator-fork-publication/5-publish-and-update-the-approved-branch:
+  en: 2d50086d162e0956
+  zh: 8fd269e481b70b04
+/cookbook-testing-creator-fork-publication/6-check-conflicts-and-recovery:
+  en: dde12604baf18224
+  zh: 75735c6c59b2d203
+/cookbook-testing-creator-fork-publication/7-check-auth-rules-and-signatures:
+  en: 2119ca29c0debfb6
+  zh: 7fa862959f630dee
+/cookbook-testing-creator-fork-publication/8-review-merge-safeguards-separately:
+  en: 924ce495a0383f08
+  zh: 6b7b1a595b5ffdcc
+/cookbook-testing-creator-fork-publication/9-record-the-result:
+  en: ac427860f201d3a8
+  zh: d1ad16c9725293ea
+/cookbook-testing-creator-fork-publication/dev-note:
+  en: b75c8458928b72b9
+  zh: b75c8458928b72b9

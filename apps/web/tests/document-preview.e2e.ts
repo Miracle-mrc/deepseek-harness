@@ -1812,8 +1812,16 @@ describe.skipIf(MODE === 'record')('web e2e: Host Office preview', () => {
       expect(convert).toHaveBeenCalledTimes(4)
       await openPreviewFile(column, filesTab, preview, 'chinese.docx')
       await preview.getByRole('img', { name: 'PDF page 1', exact: true }).waitFor({ state: 'visible' })
-      await preview.getByRole('button', { name: 'Read the file again', exact: true }).click()
-      await expect.poll(() => convert.mock.calls.length).toBe(5)
+      // A retained page does not acknowledge the reread's authorization and conversion.
+      const [reread] = await Promise.all([
+        page.waitForResponse(response => new URL(response.url()).pathname === '/api/officeToPdf/render', { timeout: 60_000 }),
+        preview.getByRole('button', { name: 'Read the file again', exact: true }).click(),
+      ])
+      expect(reread.ok()).toBe(true)
+      expect(reread.headers()['content-type']).toMatch(/^multipart\/form-data;/)
+      expect(await reread.finished()).toBeNull()
+      expect(convert).toHaveBeenCalledTimes(5)
+      expect(convert.mock.calls[4]?.[0].source.key).toBe(convert.mock.calls[0]?.[0].source.key)
       await preview.getByRole('img', { name: 'PDF page 1', exact: true }).waitFor({ state: 'visible' })
       await openPreviewFile(column, filesTab, preview, 'renamed.docx')
       await preview.getByText('Read failed: This Office file cannot be previewed. It may be damaged, password protected, or have the wrong extension.', { exact: true }).waitFor({ timeout: 30_000 })
